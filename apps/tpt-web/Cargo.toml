@@ -1,0 +1,26 @@
+[package]
+name = "tpt-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "WASM-based browser player for .tpt files (drag-and-drop playback via Canvas / WebAudio)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+wasm = ["dep:wasm-bindgen"]
+
+[dependencies]
+tpt-core = { workspace = true }
+tpt-audio-pulse = { workspace = true }
+tpt-audio-aura = { workspace = true }
+tpt-audio-vox = { workspace = true }
+tpt-video-livelink = { workspace = true }
+tpt-video-vault = { workspace = true }
+tpt-video-whisper = { workspace = true }
+wasm-bindgen = { version = "0.2", optional = true }

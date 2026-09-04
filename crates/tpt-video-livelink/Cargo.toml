@@ -1,0 +1,13 @@
+[package]
+name = "tpt-video-livelink"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "tpt-media Tier-1 video codec: low-latency I/P-frame pipeline with intra-refresh and a 3x3 deblocking filter (video conferencing, cloud gaming)."
+
+[dependencies]
+tpt-core = { workspace = true }
+thiserror = { workspace = true }

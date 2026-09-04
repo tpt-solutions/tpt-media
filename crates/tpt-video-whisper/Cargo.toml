@@ -1,0 +1,13 @@
+[package]
+name = "tpt-video-whisper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "tpt-media Tier-3 edge / IoT video codec: 8x8 dictionary VQ with 4096-entry codebook and client-side Lanczos upscale (<50 kbps at 480p)."
+
+[dependencies]
+tpt-core = { workspace = true }
+thiserror = { workspace = true }

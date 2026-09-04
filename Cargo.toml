@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tpt-core",
+    "crates/tpt-audio-pulse",
+    "crates/tpt-audio-aura",
+    "crates/tpt-audio-vox",
+    "crates/tpt-video-livelink",
+    "crates/tpt-video-vault",
+    "crates/tpt-video-whisper",
+    "crates/tpt-media-sys",
+    "apps/tpt-cli",
+    "apps/tpt-web",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+authors = ["TPT Solutions"]
+repository = "https://github.com/tpt-solutions/tpt-media"
+
+[workspace.dependencies]
+# Internal
+tpt-core = { path = "crates/tpt-core" }
+tpt-audio-pulse = { path = "crates/tpt-audio-pulse" }
+tpt-audio-aura = { path = "crates/tpt-audio-aura" }
+tpt-audio-vox = { path = "crates/tpt-audio-vox" }
+tpt-video-livelink = { path = "crates/tpt-video-livelink" }
+tpt-video-vault = { path = "crates/tpt-video-vault" }
+tpt-video-whisper = { path = "crates/tpt-video-whisper" }
+tpt-media-sys = { path = "crates/tpt-media-sys" }
+
+# External
+clap = { version = "4.5", features = ["derive"] }
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

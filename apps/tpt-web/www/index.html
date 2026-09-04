@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>tpt-media player</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    #drop {
+      border: 2px dashed #888; border-radius: 12px; padding: 3rem; text-align: center;
+      color: #555; transition: background .2s;
+    }
+    #drop.over { background: #eef; border-color: #448; }
+    canvas { display: block; max-width: 100%; margin-top: 1rem; background: #000; }
+    footer { color: #777; font-size: .85rem; margin-top: 2rem; }
+  </style>
+</head>
+<body>
+  <h1>tpt-media player</h1>
+  <p>Drop a <code>.tpt</code> file below to play it. Decoding runs entirely in your browser via WebAssembly.</p>
+  <div id="drop">Drop a .tpt file here…</div>
+  <canvas id="video" width="640" height="480" hidden></canvas>
+  <footer>
+    tpt-media is dual-licensed MIT OR Apache-2.0. &copy; TPT Solutions.
+  </footer>
+  <script type="module" src="./tpt-web.js"></script>
+</body>
+</html>
