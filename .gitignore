@@ -1,0 +1,19 @@
+# Rust / Cargo
+/target/
+**/target/
+
+# WASM build output
+apps/tpt-web/pkg/
+apps/tpt-web/dist/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / misc
+*.log

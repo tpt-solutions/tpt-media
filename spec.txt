@@ -1,0 +1,130 @@
+tpt-media Technical Design Specification (v1.0)
+1. Core Philosophy & Constraints
+The 3-Niche Paradigm: No general-purpose "Swiss Army Knife" codecs. We build three distinct tiers for Audio and Video: Real-Time, High-Fidelity/Archival, and Extreme Edge/IoT.
+100% Patent-Free: We strictly use public-domain mathematics. No CABAC, no complex fractional-pixel interpolation, no Spectral Band Replication (SBR).
+Rust-First: Written in 100% safe Rust where possible, with unsafe strictly isolated in SIMD and FFI boundaries. Zero-allocation hot paths.
+Clean Room Design: Contributors must not read the source code of x264, libvpx, Opus, or FFmpeg. We read academic papers and public-domain specs only.
+2. Repository & Workspace Architecture
+The project is a single Git repository (tpt-media) utilizing a Cargo Workspace.
+
+tpt-media/
+├── Cargo.toml                 # Workspace root
+├── README.md
+├── crates/
+│   ├── tpt-core/              # Shared foundation (Bitstream, Math, Container)
+│   ├── tpt-audio-pulse/       # Audio Tier 1: Real-time
+│   ├── tpt-audio-aura/        # Audio Tier 2: High-Fi / Archival
+│   ├── tpt-audio-vox/         # Audio Tier 3: Edge / Speech
+│   ├── tpt-video-livelink/    # Video Tier 1: Real-time
+│   ├── tpt-video-vault/       # Video Tier 2: Archival
+│   └── tpt-video-whisper/     # Video Tier 3: Edge / IoT
+├── apps/
+│   ├── tpt-cli/               # Command-line encoder/decoder
+│   └── tpt-web/               # WASM-based browser player
+└── tests/                     # Cross-crate integration tests
+
+3. The .tpt Container Specification
+To distribute the files, we need a container format. We will not use EBML (Matroska) as it is overly complex. We will use a modernized, simple Chunk-Based (TLV) format.
+Binary Layout
+All integers are Little-Endian.
+1. File Header (16 bytes)
+Magic (4 bytes): 0x54, 0x50, 0x54, 0x4D ("TPTM")
+Version (2 bytes): 0x01, 0x00
+HeaderSize (2 bytes): Size of this header (16)
+TimebaseNum (4 bytes): Timebase numerator (e.g., 1)
+TimebaseDen (4 bytes): Timebase denominator (e.g., 1000 for milliseconds)
+2. Track Headers (Variable)
+ChunkID (4 bytes): TRAK
+ChunkSize (4 bytes): Size of this chunk
+TrackID (1 byte): 0 for Video, 1 for Audio
+CodecID (1 byte): e.g., 0x11 (Aura), 0x22 (Vault)
+CodecPrivate (Variable): Opaque bytes for codec-specific initialization data (e.g., LPC coefficients, VQ codebooks).
+3. Data Clusters (Variable)
+ChunkID (4 bytes): CLUS
+ChunkSize (4 bytes): Total size of the cluster
+Timestamp (8 bytes): Presentation timestamp in Timebase units
+Flags (1 byte): Bit 0 = IsKeyframe
+TrackID (1 byte): Which track this belongs to
+Payload (Variable): The raw compressed bitstream for this frame/audio block.
+Seeking is handled by scanning for CLUS chunks where IsKeyframe == 1.
+4. tpt-core (The Shared Foundation)
+4.1 Bitstream Engine
+BitWriter: Wraps a &mut [u8]. Uses a u64 as an internal accumulator. Writes bits by shifting the accumulator and flushing to the byte slice when >= 8 bits are buffered. Zero heap allocation.
+BitReader: Wraps a &[u8]. Uses a u64 accumulator. Reads bytes on demand.
+Entropy Coding: A basic, public-domain Range Coder (based on the expired patents of the 1990s). No context-adaptive models (CABAC). Just a static probability model or simple Huffman.
+4.2 Math Primitives
+dct.rs: 1D and 2D Type-II DCT and inverse DCT (up to 8x8).
+mdct.rs: Modified DCT with overlapping windows (256, 1024, 2048, 4096 points).
+lpc.rs: Autocorrelation and Levinson-Durbin recursion for Linear Predictive Coding.
+5. The Audio Codecs
+5.1 tpt-audio-pulse (Real-Time)
+Target: WebRTC, Gaming, Live Streaming.
+Algorithm: Pure Transform Coding.
+Window Size: 128 or 256 samples (approx 2.5ms to 5ms at 48kHz) for ultra-low algorithmic latency.
+Math: MDCT with a sine window.
+Packet Loss Concealment (PLC): If a packet is lost, the decoder extracts the pitch period of the previous frame and repeats/stretches the waveform to fill the gap.
+Features: No LPC, no speech/music detection. Treats all audio as raw waveform.
+5.2 tpt-audio-aura (High-Fidelity / Archival)
+Target: Music streaming, Archival, Audiophile.
+Mode A (Lossless): High-order LPC (up to order 32) to predict the signal. The residual is compressed using Rice Coding (public domain). Bit-perfect reconstruction.
+Mode B (Lossy): Large MDCT (2048 or 4096 points).
+Psychoacoustics: Calculates Bark-scale critical bands. Applies simultaneous frequency masking and temporal masking. Quantization noise is shaped to fall below the masking threshold.
+Precision: Internal math uses f64 to prevent rounding artifacts in high frequencies.
+5.3 tpt-audio-vox (Edge / IoT)
+Target: Smart devices, Walkie-talkies, $2 microcontrollers.
+Algorithm: Code-Excited Linear Prediction (CELP) / Pure LPC.
+Constraints: Hardcoded to 8kHz or 16kHz sample rate. Mono only.
+Vector Quantization (VQ): Instead of sending raw LPC residuals, the encoder matches the residual to a pre-generated, public-domain codebook (dictionary) of 1024 speech shapes. Sends only a 10-bit index.
+Rust Implementation: #![no_std]. Uses fixed-point i16/i32 math. No floating-point unit (FPU) required.
+6. The Video Codecs
+6.1 tpt-video-livelink (Real-Time)
+Target: Video conferencing, Cloud gaming.
+Frame Types: I-frames and P-frames ONLY. No B-frames.
+Intra-Refresh: Instead of massive keyframes, 5% of macroblocks are forced to Intra-mode every frame to recover from packet loss without bandwidth spikes.
+Motion Estimation: Full-pixel block matching using Sum of Absolute Differences (SAD).
+Transform: 4x4 and 8x8 DCT.
+Filtering: Simple 3x3 deblocking filter on block edges (no complex boundary strength calculations).
+6.2 tpt-video-vault (Archival)
+Target: VOD, Digital Archival, Master files.
+Block Structure: Superblocks up to 64x64, recursively partitioned down to 8x8.
+Motion Estimation: Full-pixel and half-pixel (using a simple, unpatented 2-tap bilinear filter, avoiding 6/8-tap FIR patents).
+Encoding Strategy: Brute-force Rate-Distortion Optimization (RDO). The encoder tests all valid partition sizes and prediction modes, calculating the exact Lagrangian cost (
+J
+=
+D
++
+λ
+R
+J=D+λR) to find the absolute minimum file size.
+Reference Frames: Up to 16 previous frames.
+6.3 tpt-video-whisper (Edge / IoT)
+Target: Security cameras, Drones, Low-bandwidth telemetry.
+Algorithm: Dictionary Coding / Vector Quantization.
+How it works: The encoder and decoder share a pre-trained dictionary of 4096 common 8x8 pixel patches (e.g., grass, sky, brick walls).
+Compression: The encoder splits the frame into 8x8 blocks, finds the closest matching patch in the dictionary, and sends a 12-bit index.
+Resolution: Hardcoded to max 480p. Upscaled on the client via Lanczos filtering.
+Bitrate: Achieves < 50kbps for video.
+7. Phase 1 & 2 Distribution & Tooling
+7.1 tpt-cli (The Command Line Interface)
+Located in apps/tpt-cli. Built using the clap crate.
+tpt-cli encode -i input.wav -o output.tpt -c aura --lossless
+tpt-cli decode -i input.tpt -o output.wav
+tpt-cli probe -i input.tpt (Prints container and track metadata).
+Distribution: Compiled via GitHub Actions for Windows, macOS, and Linux, and attached to GitHub Releases.
+7.2 tpt-web (The WASM Viral Player)
+Located in apps/tpt-web.
+Uses wasm-bindgen to expose the decoders to JavaScript.
+A simple HTML5/Canvas/WebAudio frontend.
+Hosted on GitHub Pages. Allows users to drag-and-drop a .tpt file into their browser to play it, proving the codec works without installing anything.
+7.3 tpt-media-sys (The FFI Bridge)
+Located in crates/tpt-media-sys.
+Wraps the safe Rust APIs in extern "C" functions.
+Uses cbindgen to auto-generate tpt_media.h.
+Allows C, C++, Python (via cffi), and Node.js (via napi-rs) to use the codecs.
+8. Patent & Legal Compliance Rules
+To ensure the project remains legally bulletproof, the CONTRIBUTING.md will enforce these rules:
+No looking at proprietary code: Contributors must not read the source code of x264, x265, rav1e, libvpx, Opus, or AAC reference implementations.
+No CABAC / Context-Adaptive Coding: We use static Range coding or Huffman only.
+No Fractional Interpolation Patents: We do not use 1/4-pixel precision with 6-tap or 8-tap filters. We use full-pixel, or simple bilinear half-pixel.
+No SBR / Parametric Stereo: We do not fake high frequencies or stereo width.
+Clean Room Math: All DSP algorithms must be derived from public textbooks (e.g., Oppenheim & Schafer for DSP, Sayood for Data Compression) or expired patents.
