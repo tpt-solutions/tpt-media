@@ -18,10 +18,10 @@ use tpt_dsp_core::{imdct, mdct, mdct_sine_window};
 use tpt_media_bitstream::{BitReader, BitWriter};
 use tpt_media_codec::{
     Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, Decoder, DynDecoder,
-    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder,
+    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder, SupportedFormat,
 };
 use tpt_media_core::{
-    AudioFrame, ChannelLayout, Frame, Packet, PacketFlags, SampleFormat, Timestamp, Timebase,
+    AudioFrame, ChannelLayout, Frame, Packet, PacketFlags, SampleFormat, Timebase, Timestamp,
 };
 
 /// Supported frame size.
@@ -41,6 +41,18 @@ fn static_info(caps: Capabilities) -> CodecInfo {
         codec_id: CODEC_ID,
         version: VERSION,
         capabilities: caps,
+        supported_formats: alloc::vec![
+            SupportedFormat::Audio {
+                sample_format: SampleFormat::S16,
+                channel_layout: ChannelLayout::Mono,
+                sample_rate: 48_000,
+            },
+            SupportedFormat::Audio {
+                sample_format: SampleFormat::S16,
+                channel_layout: ChannelLayout::Mono,
+                sample_rate: 44_100,
+            },
+        ],
     }
 }
 
@@ -55,7 +67,9 @@ fn sine_window(len: usize) -> Vec<f32> {
 
 #[inline]
 fn quantize(v: f32, step: f32) -> i32 {
-    if step <= 0.0 { return 0; }
+    if step <= 0.0 {
+        return 0;
+    }
     (v / step).round() as i32
 }
 
@@ -100,7 +114,9 @@ impl PulseEncoder {
             return Err(CodecError::InvalidConfig("frame_size must be 128 or 256"));
         }
         if enc.band_steps.len() != enc.n_bands as usize {
-            return Err(CodecError::InvalidConfig("band_steps length must equal n_bands"));
+            return Err(CodecError::InvalidConfig(
+                "band_steps length must equal n_bands",
+            ));
         }
         Ok(PulseEncoder {
             info: static_info(Capabilities {
@@ -116,21 +132,28 @@ impl PulseEncoder {
 
 impl Encoder for PulseEncoder {
     type Frame = AudioFrame;
-    fn info(&self) -> &CodecInfo { &self.info }
+    fn info(&self) -> &CodecInfo {
+        &self.info
+    }
     fn encode(&mut self, frame: &AudioFrame) -> CodecResult<Vec<Packet>> {
         self.cfg.limits.check_packet(4 * 1024)?;
         let fs = self.enc.frame_size as usize;
         let two_n = 2 * fs;
         if frame.samples.len() < two_n * 2 {
-            return Err(CodecError::InvalidConfig("not enough samples for one frame"));
+            return Err(CodecError::InvalidConfig(
+                "not enough samples for one frame",
+            ));
         }
         let mut x = vec![0f32; two_n];
         for i in 0..two_n {
-            let v = i16::from_le_bytes([frame.samples[2 * i], frame.samples[2 * i + 1]]) as f32 / i16::MAX as f32;
+            let v = i16::from_le_bytes([frame.samples[2 * i], frame.samples[2 * i + 1]]) as f32
+                / i16::MAX as f32;
             x[i] = v;
         }
         let w = sine_window(two_n);
-        for i in 0..two_n { x[i] *= w[i]; }
+        for i in 0..two_n {
+            x[i] *= w[i];
+        }
         let mut spec = vec![0f32; fs];
         mdct(&x, &mut spec);
         self.last_spectrum = spec.clone();
@@ -138,21 +161,23 @@ impl Encoder for PulseEncoder {
         // Upper bound: 2-byte header + per band (2-byte step + 1-byte
         // count + up to `bits_per_coef` bits per coefficient), plus the
         // trailing keyframe bit, rounded up to whole bytes.
-        let max_bits = 16
-            + self.enc.n_bands as usize
-                * (24 + self.enc.bits_per_coef as usize * band_size)
-            + 8;
+        let max_bits =
+            16 + self.enc.n_bands as usize * (24 + self.enc.bits_per_coef as usize * band_size) + 8;
         let mut buf = vec![0u8; max_bits.div_ceil(8)];
         let written = {
             let mut w = BitWriter::new(&mut buf);
-            w.write(8, self.enc.frame_size as u64).map_err(|_| CodecError::Internal)?;
-            w.write(8, self.enc.n_bands as u64).map_err(|_| CodecError::Internal)?;
+            w.write(8, self.enc.frame_size as u64)
+                .map_err(|_| CodecError::Internal)?;
+            w.write(8, self.enc.n_bands as u64)
+                .map_err(|_| CodecError::Internal)?;
             for band in 0..self.enc.n_bands as usize {
                 let step_bits = self.enc.band_steps[band].clamp(0.0, 65535.0) as u16;
-                w.write(16, step_bits as u64).map_err(|_| CodecError::Internal)?;
+                w.write(16, step_bits as u64)
+                    .map_err(|_| CodecError::Internal)?;
                 let start = band * band_size;
                 let end = ((band + 1) * band_size).min(spec.len());
-                w.write(8, (end - start) as u64).map_err(|_| CodecError::Internal)?;
+                w.write(8, (end - start) as u64)
+                    .map_err(|_| CodecError::Internal)?;
                 for i in start..end {
                     let q = quantize(spec[i], self.enc.band_steps[band].max(1e-9)).clamp(-127, 127);
                     w.write(self.enc.bits_per_coef as u32, (q + 128) as u64)
@@ -219,14 +244,20 @@ impl PulseDecoder {
         let mut x = vec![0f32; two_n];
         imdct(&spec, &mut x);
         let w = sine_window(two_n);
-        for i in 0..two_n { x[i] *= w[i]; }
+        for i in 0..two_n {
+            x[i] *= w[i];
+        }
         let mut samples = vec![0u8; two_n * 2];
         for i in 0..two_n {
             let v = (x[i].clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             samples[2 * i..2 * i + 2].copy_from_slice(&v.to_le_bytes());
         }
         Ok(AudioFrame {
-            frame: Frame { pts, duration: None, side_data: Vec::new() },
+            frame: Frame {
+                pts,
+                duration: None,
+                side_data: Vec::new(),
+            },
             samples,
             sample_count: two_n as u32,
             format: SampleFormat::S16,
@@ -238,7 +269,9 @@ impl PulseDecoder {
 
 impl Decoder for PulseDecoder {
     type Frame = AudioFrame;
-    fn info(&self) -> &CodecInfo { &self.info }
+    fn info(&self) -> &CodecInfo {
+        &self.info
+    }
 
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
         self.cfg.limits.check_packet(packet.data.len())?;
@@ -262,7 +295,8 @@ impl PulseDecoder {
             let n_coeffs = r.read(8).map_err(|_| CodecError::MalformedPacket)? as usize;
             let start = band * band_size;
             for i in 0..n_coeffs {
-                let q = r.read(self.enc.bits_per_coef as u32)
+                let q = r
+                    .read(self.enc.bits_per_coef as u32)
                     .map_err(|_| CodecError::MalformedPacket)? as i32;
                 spec[start + i] = dequantize(q - 128, step.max(1e-9));
             }
@@ -273,7 +307,9 @@ impl PulseDecoder {
         let mut x = vec![0f32; two_n];
         imdct(&spec, &mut x);
         let w = sine_window(two_n);
-        for i in 0..two_n { x[i] *= w[i]; }
+        for i in 0..two_n {
+            x[i] *= w[i];
+        }
         let mut samples = vec![0u8; two_n * 2];
         for i in 0..two_n {
             let v = (x[i].clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
@@ -297,9 +333,14 @@ impl PulseDecoder {
 /// Type-erased decoder factory.
 pub struct PulseDecoderFactory;
 impl DynDecoderFactory for PulseDecoderFactory {
-    fn codec_id(&self) -> &[u8; 4] { &CODEC_ID }
+    fn codec_id(&self) -> &[u8; 4] {
+        &CODEC_ID
+    }
     fn info(&self) -> CodecInfo {
-        static_info(Capabilities { real_time_decoder: true, ..Capabilities::default() })
+        static_info(Capabilities {
+            real_time_decoder: true,
+            ..Capabilities::default()
+        })
     }
     fn build(&self, cfg: &CodecConfig) -> CodecResult<alloc::boxed::Box<dyn DynDecoder>> {
         let cfg2 = PulseEncoderConfig::default();
@@ -314,24 +355,39 @@ pub struct PulseDynDecoder {
 impl DynDecoder for PulseDynDecoder {
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
         let frames = Decoder::decode(&mut self.inner, packet)?;
-        Ok(frames.into_iter().map(|f| tpt_media_codec::DynFrame::Audio {
-            sample_format: f.format,
-            channel_layout: f.channel_layout,
-            sample_rate: f.sample_rate,
-            sample_count: f.sample_count,
-            samples: f.samples,
-        }).collect())
+        Ok(frames
+            .into_iter()
+            .map(|f| tpt_media_codec::DynFrame::Audio {
+                sample_format: f.format,
+                channel_layout: f.channel_layout,
+                sample_rate: f.sample_rate,
+                sample_count: f.sample_count,
+                samples: f.samples,
+            })
+            .collect())
     }
-    fn flush(&mut self) -> CodecResult<Vec<tpt_media_codec::DynFrame>> { Ok(Vec::new()) }
-    fn info(&self) -> CodecInfo { self.inner.info().clone() }
+    fn flush(&mut self) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
+        Ok(Vec::new())
+    }
+    fn drain(&mut self) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
+        Ok(Vec::new())
+    }
+    fn info(&self) -> CodecInfo {
+        self.inner.info().clone()
+    }
 }
 
 /// Type-erased encoder factory.
 pub struct PulseEncoderFactory;
 impl DynEncoderFactory for PulseEncoderFactory {
-    fn codec_id(&self) -> &[u8; 4] { &CODEC_ID }
+    fn codec_id(&self) -> &[u8; 4] {
+        &CODEC_ID
+    }
     fn info(&self) -> CodecInfo {
-        static_info(Capabilities { real_time_encoder: true, ..Capabilities::default() })
+        static_info(Capabilities {
+            real_time_encoder: true,
+            ..Capabilities::default()
+        })
     }
     fn build(&self, cfg: &CodecConfig) -> CodecResult<alloc::boxed::Box<dyn DynEncoder>> {
         let cfg2 = PulseEncoderConfig::default();
@@ -346,7 +402,13 @@ pub struct PulseDynEncoder {
 impl DynEncoder for PulseDynEncoder {
     fn encode(&mut self, frame: &tpt_media_codec::DynFrame) -> CodecResult<Vec<Packet>> {
         let audio = match frame {
-            tpt_media_codec::DynFrame::Audio { samples, sample_format, channel_layout, sample_rate, sample_count } => AudioFrame {
+            tpt_media_codec::DynFrame::Audio {
+                samples,
+                sample_format,
+                channel_layout,
+                sample_rate,
+                sample_count,
+            } => AudioFrame {
                 frame: Frame {
                     pts: Timestamp::zero(Timebase::new(1, *sample_rate)),
                     duration: None,
@@ -362,8 +424,15 @@ impl DynEncoder for PulseDynEncoder {
         };
         Encoder::encode(&mut self.inner, &audio)
     }
-    fn flush(&mut self) -> CodecResult<Vec<Packet>> { Encoder::flush(&mut self.inner) }
-    fn info(&self) -> CodecInfo { self.inner.info().clone() }
+    fn flush(&mut self) -> CodecResult<Vec<Packet>> {
+        Encoder::flush(&mut self.inner)
+    }
+    fn drain(&mut self) -> CodecResult<Vec<Packet>> {
+        Encoder::drain(&mut self.inner)
+    }
+    fn info(&self) -> CodecInfo {
+        self.inner.info().clone()
+    }
 }
 
 #[cfg(test)]
@@ -426,7 +495,10 @@ mod tests {
         frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
 
         let packets = enc.encode(&frame).unwrap();
-        assert!(!packets[0].data.is_empty(), "encoded packet must not be empty");
+        assert!(
+            !packets[0].data.is_empty(),
+            "encoded packet must not be empty"
+        );
 
         let decoded = dec.decode(&packets[0]).unwrap();
         let out = &decoded[0];
@@ -452,7 +524,10 @@ mod tests {
     #[test]
     fn rejects_bad_frame_size() {
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig { frame_size: 333, ..Default::default() };
+        let enc_cfg = PulseEncoderConfig {
+            frame_size: 333,
+            ..Default::default()
+        };
         assert!(PulseEncoder::new(cfg.clone(), enc_cfg.clone()).is_err());
     }
 

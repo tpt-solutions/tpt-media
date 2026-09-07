@@ -107,7 +107,12 @@ mod tests {
     #[test]
     fn add_track_assigns_id() {
         let mut s = Stream::empty(Timebase::MILLISECONDS);
-        let t = Track::new(0, MediaType::Audio, CodecId::new(*b"PULS"), Timebase::MILLISECONDS);
+        let t = Track::new(
+            0,
+            MediaType::Audio,
+            CodecId::new(*b"PULS"),
+            Timebase::MILLISECONDS,
+        );
         let id = s.add_track(t);
         assert_eq!(id, 0);
         assert_eq!(s.track_count(), 1);
@@ -116,7 +121,12 @@ mod tests {
     #[test]
     fn find_track() {
         let mut s = Stream::empty(Timebase::MILLISECONDS);
-        s.add_track(Track::new(0, MediaType::Audio, CodecId::new(*b"PULS"), Timebase::MILLISECONDS));
+        s.add_track(Track::new(
+            0,
+            MediaType::Audio,
+            CodecId::new(*b"PULS"),
+            Timebase::MILLISECONDS,
+        ));
         assert!(s.track(0).is_some());
         assert!(s.track(7).is_none());
     }

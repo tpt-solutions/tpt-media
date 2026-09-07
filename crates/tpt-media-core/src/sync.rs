@@ -43,7 +43,7 @@ use crate::timebase::{Timebase, Timestamp};
 /// `timebase` field should match too — but equality is decided
 /// strictly by name so that callers can't accidentally equate two
 /// accidentally-similar-but-distinct domains.)
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug)]
 pub struct ClockDomain {
     /// Opaque identifier. Compared by `==`.
     pub name: String,
@@ -60,6 +60,16 @@ impl PartialEq for ClockDomain {
 }
 
 impl Eq for ClockDomain {}
+
+impl core::hash::Hash for ClockDomain {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        // Hash only `name`, to stay consistent with `PartialEq` (which
+        // also ignores `timebase`). Hashing `timebase` too would violate
+        // the `Hash`/`Eq` contract: two domains that compare equal could
+        // hash differently.
+        self.name.hash(state);
+    }
+}
 
 impl ClockDomain {
     /// Build a new clock domain. The name is stored as-is; the
@@ -133,7 +143,9 @@ impl SyncMap {
     /// Empty map. Translating through an empty map returns `None`
     /// for every input.
     pub fn new() -> Self {
-        SyncMap { pins: alloc::vec::Vec::new() }
+        SyncMap {
+            pins: alloc::vec::Vec::new(),
+        }
     }
 
     /// Add a pin to the map. Pins are appended in insertion order;
@@ -172,10 +184,7 @@ impl SyncMap {
     ///   timestamp's timebase doesn't match any pin's `from`
     ///   timebase (or any `from` domain at all).
     /// - `None` if the map is empty.
-    pub fn translate(
-        &self,
-        ts: Timestamp,
-    ) -> Option<core::result::Result<Timestamp, SyncError>> {
+    pub fn translate(&self, ts: Timestamp) -> Option<core::result::Result<Timestamp, SyncError>> {
         let first = self.pins.first()?;
         if ts.timebase != first.from.timebase {
             return Some(Err(SyncError::DomainMismatch));
@@ -284,7 +293,10 @@ mod tests {
     #[test]
     fn translate_empty_map_returns_none() {
         let m = SyncMap::new();
-        let ts = Timestamp { ticks: 1000, timebase: audio().timebase };
+        let ts = Timestamp {
+            ticks: 1000,
+            timebase: audio().timebase,
+        };
         assert!(m.translate(ts).is_none());
     }
 
@@ -299,7 +311,10 @@ mod tests {
             to: video(),
             to_ticks: 90_000,
         });
-        let ts = Timestamp { ticks: 48_000, timebase: audio().timebase };
+        let ts = Timestamp {
+            ticks: 48_000,
+            timebase: audio().timebase,
+        };
         let r = m.translate(ts).unwrap().unwrap();
         assert_eq!(r.ticks, 90_000);
         assert_eq!(r.timebase, video().timebase);
@@ -309,14 +324,21 @@ mod tests {
     fn translate_interpolates_between_two_pins() {
         let mut m = SyncMap::new();
         m.add(SyncPoint {
-            from: audio(), from_ticks: 0,
-            to: video(), to_ticks: 0,
+            from: audio(),
+            from_ticks: 0,
+            to: video(),
+            to_ticks: 0,
         });
         m.add(SyncPoint {
-            from: audio(), from_ticks: 96_000, // 2 s at 48 kHz
-            to: video(), to_ticks: 180_000,    // 2 s at 90 kHz
+            from: audio(),
+            from_ticks: 96_000, // 2 s at 48 kHz
+            to: video(),
+            to_ticks: 180_000, // 2 s at 90 kHz
         });
-        let ts = Timestamp { ticks: 48_000, timebase: audio().timebase };
+        let ts = Timestamp {
+            ticks: 48_000,
+            timebase: audio().timebase,
+        };
         let r = m.translate(ts).unwrap().unwrap();
         assert_eq!(r.ticks, 90_000);
         assert_eq!(r.timebase, video().timebase);
@@ -326,10 +348,15 @@ mod tests {
     fn translate_rejects_before_first_pin() {
         let mut m = SyncMap::new();
         m.add(SyncPoint {
-            from: audio(), from_ticks: 48_000,
-            to: video(), to_ticks: 90_000,
+            from: audio(),
+            from_ticks: 48_000,
+            to: video(),
+            to_ticks: 90_000,
         });
-        let ts = Timestamp { ticks: 0, timebase: audio().timebase };
+        let ts = Timestamp {
+            ticks: 0,
+            timebase: audio().timebase,
+        };
         let r = m.translate(ts).unwrap();
         assert_eq!(r, Err(SyncError::OutOfRange));
     }
@@ -339,12 +366,16 @@ mod tests {
         // No extrapolation — A/V-drift-prevention guarantee.
         let mut m = SyncMap::new();
         m.add(SyncPoint {
-            from: audio(), from_ticks: 0,
-            to: video(), to_ticks: 0,
+            from: audio(),
+            from_ticks: 0,
+            to: video(),
+            to_ticks: 0,
         });
         m.add(SyncPoint {
-            from: audio(), from_ticks: 96_000,
-            to: video(), to_ticks: 180_000,
+            from: audio(),
+            from_ticks: 96_000,
+            to: video(),
+            to_ticks: 180_000,
         });
         let ts = Timestamp {
             ticks: 1_000_000, // past the last pin
@@ -358,10 +389,15 @@ mod tests {
     fn translate_rejects_wrong_timebase() {
         let mut m = SyncMap::new();
         m.add(SyncPoint {
-            from: audio(), from_ticks: 48_000,
-            to: video(), to_ticks: 90_000,
+            from: audio(),
+            from_ticks: 48_000,
+            to: video(),
+            to_ticks: 90_000,
         });
-        let ts = Timestamp { ticks: 1000, timebase: Timebase::MILLISECONDS };
+        let ts = Timestamp {
+            ticks: 1000,
+            timebase: Timebase::MILLISECONDS,
+        };
         let r = m.translate(ts).unwrap();
         assert_eq!(r, Err(SyncError::DomainMismatch));
     }
@@ -372,20 +408,29 @@ mod tests {
         // must use *that* pair, not (1,2) or backtrack.
         let mut m = SyncMap::new();
         m.add(SyncPoint {
-            from: audio(), from_ticks: 0,
-            to: video(), to_ticks: 0,
+            from: audio(),
+            from_ticks: 0,
+            to: video(),
+            to_ticks: 0,
         });
         m.add(SyncPoint {
-            from: audio(), from_ticks: 48_000,
-            to: video(), to_ticks: 90_000,
+            from: audio(),
+            from_ticks: 48_000,
+            to: video(),
+            to_ticks: 90_000,
         });
         m.add(SyncPoint {
-            from: audio(), from_ticks: 96_000,
-            to: video(), to_ticks: 200_000, // non-linear offset
+            from: audio(),
+            from_ticks: 96_000,
+            to: video(),
+            to_ticks: 200_000, // non-linear offset
         });
         // 72 000 = 1.5 s at 48 kHz, halfway between pins 2 and 3
         // → halfway between 90 000 and 200 000 = 145 000.
-        let ts = Timestamp { ticks: 72_000, timebase: audio().timebase };
+        let ts = Timestamp {
+            ticks: 72_000,
+            timebase: audio().timebase,
+        };
         let r = m.translate(ts).unwrap().unwrap();
         assert_eq!(r.ticks, 145_000);
     }
@@ -394,14 +439,21 @@ mod tests {
     fn translate_zero_length_interval_does_not_divide_by_zero() {
         let mut m = SyncMap::new();
         m.add(SyncPoint {
-            from: audio(), from_ticks: 48_000,
-            to: video(), to_ticks: 90_000,
+            from: audio(),
+            from_ticks: 48_000,
+            to: video(),
+            to_ticks: 90_000,
         });
         m.add(SyncPoint {
-            from: audio(), from_ticks: 48_000,
-            to: video(), to_ticks: 90_000,
+            from: audio(),
+            from_ticks: 48_000,
+            to: video(),
+            to_ticks: 90_000,
         });
-        let ts = Timestamp { ticks: 48_000, timebase: audio().timebase };
+        let ts = Timestamp {
+            ticks: 48_000,
+            timebase: audio().timebase,
+        };
         let r = m.translate(ts).unwrap().unwrap();
         assert_eq!(r.ticks, 90_000);
     }
@@ -410,12 +462,16 @@ mod tests {
     fn translate_negative_timestamps_in_signed_time() {
         let mut m = SyncMap::new();
         m.add(SyncPoint {
-            from: audio(), from_ticks: -48_000,
-            to: video(), to_ticks: -90_000,
+            from: audio(),
+            from_ticks: -48_000,
+            to: video(),
+            to_ticks: -90_000,
         });
         m.add(SyncPoint {
-            from: audio(), from_ticks: 0,
-            to: video(), to_ticks: 0,
+            from: audio(),
+            from_ticks: 0,
+            to: video(),
+            to_ticks: 0,
         });
         let ts = Timestamp {
             ticks: -24_000, // -0.5 s
@@ -429,14 +485,21 @@ mod tests {
     fn translate_wallclock_to_video_with_two_pins() {
         let mut m = SyncMap::new();
         m.add(SyncPoint {
-            from: wallclock(), from_ticks: 0,
-            to: video(), to_ticks: 0,
+            from: wallclock(),
+            from_ticks: 0,
+            to: video(),
+            to_ticks: 0,
         });
         m.add(SyncPoint {
-            from: wallclock(), from_ticks: 10, // 10 s
-            to: video(), to_ticks: 900_000,    // 10 s at 90 kHz
+            from: wallclock(),
+            from_ticks: 10, // 10 s
+            to: video(),
+            to_ticks: 900_000, // 10 s at 90 kHz
         });
-        let ts = Timestamp { ticks: 5, timebase: wallclock().timebase };
+        let ts = Timestamp {
+            ticks: 5,
+            timebase: wallclock().timebase,
+        };
         let r = m.translate(ts).unwrap().unwrap();
         assert_eq!(r.ticks, 450_000);
     }
@@ -444,8 +507,10 @@ mod tests {
     #[test]
     fn sync_point_accessors_return_timestamps_in_correct_timebase() {
         let p = SyncPoint {
-            from: audio(), from_ticks: 123,
-            to: video(), to_ticks: 456,
+            from: audio(),
+            from_ticks: 123,
+            to: video(),
+            to_ticks: 456,
         };
         let f = p.from_timestamp();
         assert_eq!(f.ticks, 123);
@@ -471,16 +536,23 @@ mod tests {
         // interpolation branches).
         let mut m = SyncMap::new();
         m.add(SyncPoint {
-            from: audio(), from_ticks: 0,
-            to: video(), to_ticks: 0,
+            from: audio(),
+            from_ticks: 0,
+            to: video(),
+            to_ticks: 0,
         });
         m.add(SyncPoint {
-            from: audio(), from_ticks: 60 * 48_000,
-            to: video(), to_ticks: 60 * 90_000,
+            from: audio(),
+            from_ticks: 60 * 48_000,
+            to: video(),
+            to_ticks: 60 * 90_000,
         });
 
         // (a) t = 0 in audio → 0 in video (exact pin match).
-        let a0 = Timestamp { ticks: 0, timebase: audio().timebase };
+        let a0 = Timestamp {
+            ticks: 0,
+            timebase: audio().timebase,
+        };
         let v0 = m.translate(a0).unwrap().unwrap();
         assert_eq!(v0.ticks, 0);
 

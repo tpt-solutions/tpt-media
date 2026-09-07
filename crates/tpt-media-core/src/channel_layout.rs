@@ -81,7 +81,7 @@ impl ChannelLayout {
     /// Underlying channel mask.
     pub fn mask(self) -> ChannelMask {
         match self {
-            ChannelLayout::Mono => ChannelMask(0x0004),             // FC
+            ChannelLayout::Mono => ChannelMask(0x0004), // FC
             ChannelLayout::Stereo => ChannelMask::FRONT_LEFT | ChannelMask::FRONT_RIGHT,
             ChannelLayout::Surround51 => {
                 ChannelMask::FRONT_LEFT
@@ -107,6 +107,11 @@ impl ChannelLayout {
 }
 
 impl Default for ChannelLayout {
+    /// Default to `Stereo`, *not* `Mono` — `#[derive(Default)]` would
+    /// select the first variant (`Mono`), which is the wrong default for
+    /// a media framework where a freshly-constructed track with no
+    /// explicit layout is more likely to be stereo than mono.
+    #[allow(clippy::derivable_impls)]
     fn default() -> Self {
         ChannelLayout::Stereo
     }

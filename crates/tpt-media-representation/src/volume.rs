@@ -38,7 +38,11 @@ impl<'a> SignalView<'a> {
     ///
     /// Panics if `data.len() != dims.samples()`.
     pub fn new(dims: SignalDims, data: &'a [f32]) -> Self {
-        assert_eq!(data.len(), dims.samples(), "signal data length must equal width*height*frames");
+        assert_eq!(
+            data.len(),
+            dims.samples(),
+            "signal data length must equal width*height*frames"
+        );
         SignalView { dims, data }
     }
 
@@ -72,7 +76,11 @@ impl<'a> SignalViewMut<'a> {
     ///
     /// Panics if `data.len() != dims.samples()`.
     pub fn new(dims: SignalDims, data: &'a mut [f32]) -> Self {
-        assert_eq!(data.len(), dims.samples(), "signal data length must equal width*height*frames");
+        assert_eq!(
+            data.len(),
+            dims.samples(),
+            "signal data length must equal width*height*frames"
+        );
         SignalViewMut { dims, data }
     }
 
@@ -97,7 +105,10 @@ impl<'a> SignalViewMut<'a> {
 
     /// Borrow this mutable view as a read-only [`SignalView`].
     pub fn as_view(&self) -> SignalView<'_> {
-        SignalView { dims: self.dims, data: self.data }
+        SignalView {
+            dims: self.dims,
+            data: self.data,
+        }
     }
 }
 
@@ -114,12 +125,18 @@ pub struct SignalBuffer {
 impl SignalBuffer {
     /// A buffer of `dims.samples()` zeros.
     pub fn zeroed(dims: SignalDims) -> Self {
-        SignalBuffer { dims, data: vec![0.0; dims.samples()] }
+        SignalBuffer {
+            dims,
+            data: vec![0.0; dims.samples()],
+        }
     }
 
     /// A buffer filled with `value`.
     pub fn filled(dims: SignalDims, value: f32) -> Self {
-        SignalBuffer { dims, data: vec![value; dims.samples()] }
+        SignalBuffer {
+            dims,
+            data: vec![value; dims.samples()],
+        }
     }
 
     /// Wrap caller-owned data directly.
@@ -128,7 +145,11 @@ impl SignalBuffer {
     ///
     /// Panics if `data.len() != dims.samples()`.
     pub fn from_vec(dims: SignalDims, data: Vec<f32>) -> Self {
-        assert_eq!(data.len(), dims.samples(), "signal data length must equal width*height*frames");
+        assert_eq!(
+            data.len(),
+            dims.samples(),
+            "signal data length must equal width*height*frames"
+        );
         SignalBuffer { dims, data }
     }
 
@@ -185,7 +206,11 @@ mod tests {
 
     #[test]
     fn set_and_get_sample_round_trips() {
-        let dims = SignalDims { width: 4, height: 3, frames: 2 };
+        let dims = SignalDims {
+            width: 4,
+            height: 3,
+            frames: 2,
+        };
         let mut buf = SignalBuffer::zeroed(dims);
         buf.view_mut().set_sample(2, 1, 1, 7.5);
         assert_eq!(buf.view().sample(2, 1, 1), 7.5);
@@ -194,7 +219,11 @@ mod tests {
 
     #[test]
     fn frame_slices_are_contiguous_and_ordered() {
-        let dims = SignalDims { width: 2, height: 2, frames: 2 };
+        let dims = SignalDims {
+            width: 2,
+            height: 2,
+            frames: 2,
+        };
         let data: Vec<f32> = (0..8).map(|i| i as f32).collect();
         let buf = SignalBuffer::from_vec(dims, data);
         assert_eq!(buf.view().frame(0), &[0.0, 1.0, 2.0, 3.0]);
@@ -203,7 +232,11 @@ mod tests {
 
     #[test]
     fn bilinear_sample_at_integer_coords_matches_exact_sample() {
-        let dims = SignalDims { width: 4, height: 4, frames: 1 };
+        let dims = SignalDims {
+            width: 4,
+            height: 4,
+            frames: 1,
+        };
         let data: Vec<f32> = (0..16).map(|i| i as f32).collect();
         let buf = SignalBuffer::from_vec(dims, data);
         for y in 0..4 {
@@ -217,7 +250,11 @@ mod tests {
 
     #[test]
     fn bilinear_sample_wraps_toroidally() {
-        let dims = SignalDims { width: 4, height: 1, frames: 1 };
+        let dims = SignalDims {
+            width: 4,
+            height: 1,
+            frames: 1,
+        };
         let buf = SignalBuffer::from_vec(dims, vec![10.0, 20.0, 30.0, 40.0]);
         // x = -0.5 wraps to halfway between sample 3 (40.0) and sample 0 (10.0).
         let v = buf.sample_bilinear_toroidal(-0.5, 0.0, 0);

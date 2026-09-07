@@ -163,9 +163,7 @@ mod tests {
         // combination, e.g. a stream segment that begins with an
         // IDR after a splice).
         let mut p = Packet::empty(0, Timestamp::zero(Timebase::MILLISECONDS));
-        p.flags |= PacketFlags::KEYFRAME
-            | PacketFlags::END_OF_FRAME
-            | PacketFlags::DISCONTINUITY;
+        p.flags |= PacketFlags::KEYFRAME | PacketFlags::END_OF_FRAME | PacketFlags::DISCONTINUITY;
         assert!(p.is_keyframe());
         assert!(p.is_end_of_frame());
         assert!(p.is_discontinuity());

@@ -56,7 +56,12 @@ pub struct AudioFrame {
 
 impl AudioFrame {
     /// Allocate an empty audio frame for the given sample count.
-    pub fn alloc(sample_count: u32, format: SampleFormat, channel_layout: ChannelLayout, sample_rate: u32) -> Self {
+    pub fn alloc(
+        sample_count: u32,
+        format: SampleFormat,
+        channel_layout: ChannelLayout,
+        sample_rate: u32,
+    ) -> Self {
         let bytes_per_sample = format.bytes_per_sample();
         let channels = channel_layout.channels() as usize;
         let samples = vec![0u8; sample_count as usize * channels * bytes_per_sample];

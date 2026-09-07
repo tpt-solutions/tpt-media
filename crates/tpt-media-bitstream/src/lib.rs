@@ -22,10 +22,10 @@ extern crate alloc;
 
 mod bit_reader;
 mod bit_writer;
-pub mod huffman;
-pub mod rice;
-pub mod range;
 pub mod entropy;
+pub mod huffman;
+pub mod range;
+pub mod rice;
 
 pub use bit_reader::{BitReader, BitstreamError};
 pub use bit_writer::{BitWriter, WriteError};

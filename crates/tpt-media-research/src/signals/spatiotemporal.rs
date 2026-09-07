@@ -21,7 +21,11 @@ fn translate(
     displacement: impl Fn(usize) -> (f32, f32),
     pattern: impl Fn(f32, f32) -> f32,
 ) -> SignalBuffer {
-    let dims = SignalDims { width, height, frames };
+    let dims = SignalDims {
+        width,
+        height,
+        frames,
+    };
     let mut buf = SignalBuffer::zeroed(dims);
     for t in 0..frames {
         let (dx, dy) = displacement(t);
@@ -53,8 +57,16 @@ fn triangle_wave(phase: f32) -> f32 {
 ///
 /// Panics if `pattern.dims().frames != 1`.
 pub fn stationary(pattern: &SignalBuffer, frames: usize) -> SignalBuffer {
-    assert_eq!(pattern.dims().frames, 1, "stationary() takes a single-frame spatial pattern");
-    let dims = SignalDims { width: pattern.dims().width, height: pattern.dims().height, frames };
+    assert_eq!(
+        pattern.dims().frames,
+        1,
+        "stationary() takes a single-frame spatial pattern"
+    );
+    let dims = SignalDims {
+        width: pattern.dims().width,
+        height: pattern.dims().height,
+        frames,
+    };
     let mut buf = SignalBuffer::zeroed(dims);
     for t in 0..frames {
         buf.view_mut().frame_mut(t).copy_from_slice(pattern.data());
@@ -65,51 +77,102 @@ pub fn stationary(pattern: &SignalBuffer, frames: usize) -> SignalBuffer {
 /// A vertical step edge translating at constant velocity `(vx, vy)`:
 /// `I(x,y,t) = edge(x - vx·t, y - vy·t)`. Returns the signal alongside the
 /// exact velocity it was generated with.
-pub fn moving_edge(width: usize, height: usize, frames: usize, vx: f32, vy: f32) -> (SignalBuffer, [f32; 2]) {
+pub fn moving_edge(
+    width: usize,
+    height: usize,
+    frames: usize,
+    vx: f32,
+    vy: f32,
+) -> (SignalBuffer, [f32; 2]) {
     let half = width as f32 / 2.0;
-    let buf = translate(width, height, frames, move |t| (vx * t as f32, vy * t as f32), move |x, _y| {
-        if x >= half {
-            1.0
-        } else {
-            0.0
-        }
-    });
+    let buf = translate(
+        width,
+        height,
+        frames,
+        move |t| (vx * t as f32, vy * t as f32),
+        move |x, _y| {
+            if x >= half {
+                1.0
+            } else {
+                0.0
+            }
+        },
+    );
     (buf, [vx, vy])
 }
 
 /// A deterministic texture pattern translating at constant velocity
 /// `(vx, vy)`. Returns the signal alongside the exact velocity.
-pub fn moving_texture(width: usize, height: usize, frames: usize, vx: f32, vy: f32, seed: u64) -> (SignalBuffer, [f32; 2]) {
+pub fn moving_texture(
+    width: usize,
+    height: usize,
+    frames: usize,
+    vx: f32,
+    vy: f32,
+    seed: u64,
+) -> (SignalBuffer, [f32; 2]) {
     let tex = spatial::texture(width, height, seed);
-    let buf = translate(width, height, frames, move |t| (vx * t as f32, vy * t as f32), move |x, y| {
-        tex.sample_bilinear_toroidal(x, y, 0)
-    });
+    let buf = translate(
+        width,
+        height,
+        frames,
+        move |t| (vx * t as f32, vy * t as f32),
+        move |x, y| tex.sample_bilinear_toroidal(x, y, 0),
+    );
     (buf, [vx, vy])
 }
 
 /// A texture pattern oscillating sinusoidally in `x`:
 /// `displacement(t) = amplitude·sin(angular_freq·t)`.
-pub fn sinusoidal_motion(width: usize, height: usize, frames: usize, amplitude: f32, angular_freq: f32, seed: u64) -> SignalBuffer {
+pub fn sinusoidal_motion(
+    width: usize,
+    height: usize,
+    frames: usize,
+    amplitude: f32,
+    angular_freq: f32,
+    seed: u64,
+) -> SignalBuffer {
     let tex = spatial::texture(width, height, seed);
-    translate(width, height, frames, move |t| (amplitude * (angular_freq * t as f32).sin(), 0.0), move |x, y| {
-        tex.sample_bilinear_toroidal(x, y, 0)
-    })
+    translate(
+        width,
+        height,
+        frames,
+        move |t| (amplitude * (angular_freq * t as f32).sin(), 0.0),
+        move |x, y| tex.sample_bilinear_toroidal(x, y, 0),
+    )
 }
 
 /// A texture pattern oscillating on a triangle wave (deliberately distinct
 /// from [`sinusoidal_motion`]'s smooth motion): `displacement(t) =
 /// amplitude·triangle_wave(t/period)`.
-pub fn periodic_motion(width: usize, height: usize, frames: usize, amplitude: f32, period: f32, seed: u64) -> SignalBuffer {
+pub fn periodic_motion(
+    width: usize,
+    height: usize,
+    frames: usize,
+    amplitude: f32,
+    period: f32,
+    seed: u64,
+) -> SignalBuffer {
     let tex = spatial::texture(width, height, seed);
-    translate(width, height, frames, move |t| (amplitude * triangle_wave(t as f32 / period), 0.0), move |x, y| {
-        tex.sample_bilinear_toroidal(x, y, 0)
-    })
+    translate(
+        width,
+        height,
+        frames,
+        move |t| (amplitude * triangle_wave(t as f32 / period), 0.0),
+        move |x, y| tex.sample_bilinear_toroidal(x, y, 0),
+    )
 }
 
 /// A vertical step edge under constant acceleration `(ax, ay)`:
 /// `displacement(t) = ½·a·t²`. Returns the signal alongside the exact
 /// acceleration it was generated with.
-pub fn acceleration(width: usize, height: usize, frames: usize, ax: f32, ay: f32) -> (SignalBuffer, [f32; 2]) {
+pub fn acceleration(
+    width: usize,
+    height: usize,
+    frames: usize,
+    ax: f32,
+    ay: f32,
+) -> (SignalBuffer, [f32; 2]) {
     let half = width as f32 / 2.0;
     let buf = translate(
         width,
@@ -132,14 +195,39 @@ pub fn acceleration(width: usize, height: usize, frames: usize, ax: f32, ay: f32
 ///
 /// Panics if `before`/`after` aren't single-frame or don't share dimensions,
 /// or if `change_at > frames`.
-pub fn abrupt_change(before: &SignalBuffer, after: &SignalBuffer, frames: usize, change_at: usize) -> SignalBuffer {
-    assert_eq!(before.dims().frames, 1, "abrupt_change() takes single-frame patterns");
-    assert_eq!(after.dims().frames, 1, "abrupt_change() takes single-frame patterns");
-    assert_eq!(before.dims().width, after.dims().width, "before/after must share dimensions");
-    assert_eq!(before.dims().height, after.dims().height, "before/after must share dimensions");
+pub fn abrupt_change(
+    before: &SignalBuffer,
+    after: &SignalBuffer,
+    frames: usize,
+    change_at: usize,
+) -> SignalBuffer {
+    assert_eq!(
+        before.dims().frames,
+        1,
+        "abrupt_change() takes single-frame patterns"
+    );
+    assert_eq!(
+        after.dims().frames,
+        1,
+        "abrupt_change() takes single-frame patterns"
+    );
+    assert_eq!(
+        before.dims().width,
+        after.dims().width,
+        "before/after must share dimensions"
+    );
+    assert_eq!(
+        before.dims().height,
+        after.dims().height,
+        "before/after must share dimensions"
+    );
     assert!(change_at <= frames, "change_at must not exceed frame count");
 
-    let dims = SignalDims { width: before.dims().width, height: before.dims().height, frames };
+    let dims = SignalDims {
+        width: before.dims().width,
+        height: before.dims().height,
+        frames,
+    };
     let mut buf = SignalBuffer::zeroed(dims);
     for t in 0..frames {
         let src = if t < change_at { before } else { after };
@@ -150,9 +238,19 @@ pub fn abrupt_change(before: &SignalBuffer, after: &SignalBuffer, frames: usize,
 
 /// A deterministic texture pattern rotating about the frame centre at
 /// constant angular velocity `angular_velocity` (radians/frame).
-pub fn rotating_pattern(width: usize, height: usize, frames: usize, angular_velocity: f32, seed: u64) -> SignalBuffer {
+pub fn rotating_pattern(
+    width: usize,
+    height: usize,
+    frames: usize,
+    angular_velocity: f32,
+    seed: u64,
+) -> SignalBuffer {
     let tex = spatial::texture(width, height, seed);
-    let dims = SignalDims { width, height, frames };
+    let dims = SignalDims {
+        width,
+        height,
+        frames,
+    };
     let mut buf = SignalBuffer::zeroed(dims);
     let cx = width as f32 / 2.0;
     let cy = height as f32 / 2.0;
@@ -175,8 +273,18 @@ pub fn rotating_pattern(width: usize, height: usize, frames: usize, angular_velo
 
 /// A filled disk centred in the frame, growing at constant rate:
 /// `radius(t) = initial_radius + growth_rate·t`.
-pub fn expanding_pattern(width: usize, height: usize, frames: usize, initial_radius: f32, growth_rate: f32) -> SignalBuffer {
-    let dims = SignalDims { width, height, frames };
+pub fn expanding_pattern(
+    width: usize,
+    height: usize,
+    frames: usize,
+    initial_radius: f32,
+    growth_rate: f32,
+) -> SignalBuffer {
+    let dims = SignalDims {
+        width,
+        height,
+        frames,
+    };
     let mut buf = SignalBuffer::zeroed(dims);
     let cx = width as f32 / 2.0;
     let cy = height as f32 / 2.0;
@@ -187,7 +295,8 @@ pub fn expanding_pattern(width: usize, height: usize, frames: usize, initial_rad
                 let dx = x as f32 - cx;
                 let dy = y as f32 - cy;
                 let d = (dx * dx + dy * dy).sqrt();
-                buf.view_mut().set_sample(x, y, t, if d <= r { 1.0 } else { 0.0 });
+                buf.view_mut()
+                    .set_sample(x, y, t, if d <= r { 1.0 } else { 0.0 });
             }
         }
     }
@@ -197,11 +306,22 @@ pub fn expanding_pattern(width: usize, height: usize, frames: usize, initial_rad
 /// Two independently translating step edges (velocities `v1`, `v2`),
 /// combined by taking the brighter of the two at each sample — "multiple
 /// independently moving structures" from `todo.md` §56/§9.
-pub fn multiple_moving_edges(width: usize, height: usize, frames: usize, v1: [f32; 2], v2: [f32; 2]) -> (SignalBuffer, [[f32; 2]; 2]) {
+pub fn multiple_moving_edges(
+    width: usize,
+    height: usize,
+    frames: usize,
+    v1: [f32; 2],
+    v2: [f32; 2],
+) -> (SignalBuffer, [[f32; 2]; 2]) {
     let (a, _) = moving_edge(width, height, frames, v1[0], v1[1]);
     let (b, _) = moving_edge(width, height, frames, v2[0], v2[1]);
     let dims = a.dims();
-    let combined: Vec<f32> = a.data().iter().zip(b.data().iter()).map(|(&x, &y)| x.max(y)).collect();
+    let combined: Vec<f32> = a
+        .data()
+        .iter()
+        .zip(b.data().iter())
+        .map(|(&x, &y)| x.max(y))
+        .collect();
     (SignalBuffer::from_vec(dims, combined), [v1, v2])
 }
 

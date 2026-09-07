@@ -35,7 +35,10 @@ impl Timebase {
     };
 
     /// 90_000 ticks per second (MPEG-class).
-    pub const NINETY_KHZ: Timebase = Timebase { num: 1, den: 90_000 };
+    pub const NINETY_KHZ: Timebase = Timebase {
+        num: 1,
+        den: 90_000,
+    };
 
     /// Build a new timebase, panicking in debug if either component is
     /// zero. In release, returns `1/1` instead.
@@ -103,10 +106,7 @@ impl Timestamp {
     /// The zero timestamp for a given timebase.
     #[inline]
     pub const fn zero(timebase: Timebase) -> Self {
-        Timestamp {
-            ticks: 0,
-            timebase,
-        }
+        Timestamp { ticks: 0, timebase }
     }
 
     /// Convert this timestamp to another timebase.
@@ -163,7 +163,10 @@ impl Ord for Timestamp {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.rescale(other.timebase) {
             Some(t) => t.ticks.cmp(&other.ticks),
-            None => self.to_seconds().partial_cmp(&other.to_seconds()).unwrap_or(Ordering::Equal),
+            None => self
+                .to_seconds()
+                .partial_cmp(&other.to_seconds())
+                .unwrap_or(Ordering::Equal),
         }
     }
 }

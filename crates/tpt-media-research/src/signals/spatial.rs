@@ -7,7 +7,11 @@ use tpt_media_representation::{SignalBuffer, SignalDims};
 use crate::det_rng::SplitMix64;
 
 fn dims1(width: usize, height: usize) -> SignalDims {
-    SignalDims { width, height, frames: 1 }
+    SignalDims {
+        width,
+        height,
+        frames: 1,
+    }
 }
 
 /// A uniform field.
@@ -79,7 +83,11 @@ pub fn checkerboard(width: usize, height: usize, cell: usize) -> SignalBuffer {
     let mut buf = SignalBuffer::zeroed(dims);
     for y in 0..height {
         for x in 0..width {
-            let v = if ((x / cell) + (y / cell)) % 2 == 0 { 0.0 } else { 1.0 };
+            let v = if ((x / cell) + (y / cell)) % 2 == 0 {
+                0.0
+            } else {
+                1.0
+            };
             buf.view_mut().set_sample(x, y, 0, v);
         }
     }

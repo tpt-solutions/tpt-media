@@ -54,7 +54,11 @@ impl SparsityReport {
             vec![0.0; total]
         };
 
-        SparsityReport { total, nonzero, energy_compaction }
+        SparsityReport {
+            total,
+            nonzero,
+            energy_compaction,
+        }
     }
 
     /// Fewest top coefficients (by magnitude) needed to capture at least

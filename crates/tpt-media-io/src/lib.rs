@@ -9,7 +9,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
-use tpt_media_core::{AudioFrame, ChannelLayout, SampleFormat, Timestamp, Timebase};
+use tpt_media_core::{AudioFrame, ChannelLayout, SampleFormat, Timebase, Timestamp};
 
 /// I/O error type.
 #[derive(Debug)]
@@ -68,7 +68,12 @@ pub fn parse_wav(bytes: &[u8]) -> IoResult<(WavFormat, Vec<u8>)> {
 
     while pos + 8 <= bytes.len() {
         let id = &bytes[pos..pos + 4];
-        let size = u32::from_le_bytes([bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]]) as usize;
+        let size = u32::from_le_bytes([
+            bytes[pos + 4],
+            bytes[pos + 5],
+            bytes[pos + 6],
+            bytes[pos + 7],
+        ]) as usize;
         pos += 8;
         if pos + size > bytes.len() {
             return Err(IoError::UnexpectedEof);
@@ -166,7 +171,9 @@ pub fn write_wav(frames: &[AudioFrame]) -> IoResult<Vec<u8>> {
     };
 
     let data_size: usize = frames.iter().map(|f| f.samples.len()).sum();
-    let total_size: u32 = (4 + 8 + 16 + 8 + data_size).try_into().map_err(|_| IoError::Overflow)?;
+    let total_size: u32 = (4 + 8 + 16 + 8 + data_size)
+        .try_into()
+        .map_err(|_| IoError::Overflow)?;
 
     let mut out = Vec::with_capacity(total_size as usize + 8);
     out.extend_from_slice(b"RIFF");
@@ -189,7 +196,12 @@ pub fn write_wav(frames: &[AudioFrame]) -> IoResult<Vec<u8>> {
 }
 
 /// Generate a 16-bit PCM mono sine-wave frame — useful for testing.
-pub fn sine_wave(freq_hz: f64, sample_rate: u32, duration_seconds: f64, amplitude: f64) -> AudioFrame {
+pub fn sine_wave(
+    freq_hz: f64,
+    sample_rate: u32,
+    duration_seconds: f64,
+    amplitude: f64,
+) -> AudioFrame {
     let sample_count = (sample_rate as f64 * duration_seconds) as u32;
     let mut samples = vec![0i16; sample_count as usize];
     for (i, s) in samples.iter_mut().enumerate() {
@@ -219,7 +231,7 @@ mod tests {
     #[test]
     fn sine_wave_then_wav_round_trip() {
         let f = sine_wave(440.0, 48_000, 0.01, 0.5);
-        let bytes = write_wav(&[f.clone()]).unwrap();
+        let bytes = write_wav(std::slice::from_ref(&f)).unwrap();
         assert_eq!(&bytes[0..4], b"RIFF");
         assert_eq!(&bytes[8..12], b"WAVE");
         let decoded = decode_wav(&bytes).unwrap();

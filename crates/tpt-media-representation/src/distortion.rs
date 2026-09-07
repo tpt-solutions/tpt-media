@@ -13,7 +13,11 @@ pub struct Mse;
 
 impl DistortionMetric for Mse {
     fn distortion(&self, original: SignalView<'_>, reconstructed: SignalView<'_>) -> f64 {
-        assert_eq!(original.dims(), reconstructed.dims(), "distortion requires matching dimensions");
+        assert_eq!(
+            original.dims(),
+            reconstructed.dims(),
+            "distortion requires matching dimensions"
+        );
         let n = original.data().len() as f64;
         if n == 0.0 {
             return 0.0;
@@ -61,14 +65,22 @@ mod tests {
 
     #[test]
     fn mse_of_identical_signals_is_zero() {
-        let dims = SignalDims { width: 4, height: 4, frames: 1 };
+        let dims = SignalDims {
+            width: 4,
+            height: 4,
+            frames: 1,
+        };
         let buf = SignalBuffer::filled(dims, 0.5);
         assert_eq!(Mse.distortion(buf.view(), buf.view()), 0.0);
     }
 
     #[test]
     fn mse_matches_hand_computed_value() {
-        let dims = SignalDims { width: 2, height: 2, frames: 1 };
+        let dims = SignalDims {
+            width: 2,
+            height: 2,
+            frames: 1,
+        };
         let a = SignalBuffer::from_vec(dims, vec![0.0, 0.0, 0.0, 0.0]);
         let b = SignalBuffer::from_vec(dims, vec![1.0, 1.0, 1.0, 1.0]);
         assert_eq!(Mse.distortion(a.view(), b.view()), 1.0);

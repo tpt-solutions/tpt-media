@@ -54,9 +54,15 @@ pub struct ProbeReport {
 }
 
 impl ProbeReport {
-    pub fn new() -> Self { ProbeReport::default() }
-    pub fn is_unknown(&self) -> bool { self.container == ContainerKind::Unknown }
-    pub fn track_count(&self) -> usize { self.audio.len() + self.video.len() }
+    pub fn new() -> Self {
+        ProbeReport::default()
+    }
+    pub fn is_unknown(&self) -> bool {
+        self.container == ContainerKind::Unknown
+    }
+    pub fn track_count(&self) -> usize {
+        self.audio.len() + self.video.len()
+    }
 }
 
 impl fmt::Display for ProbeReport {
@@ -78,8 +84,10 @@ impl fmt::Display for ProbeReport {
                 f,
                 "  Video: {} {}x{} @ {}.{:03} fps",
                 String::from_utf8_lossy(&v.codec_id),
-                v.width, v.height,
-                v.framerate_x1000 / 1000, v.framerate_x1000 % 1000,
+                v.width,
+                v.height,
+                v.framerate_x1000 / 1000,
+                v.framerate_x1000 % 1000,
             )?;
         }
         for c in &self.corruption {
@@ -122,7 +130,9 @@ pub fn probe(bytes: &[u8]) -> ProbeReport {
 fn probe_wav(bytes: &[u8]) -> Option<AudioTrackInfo> {
     let header = parse_wav_header(bytes).ok()?;
     let sample_count = wav_sample_count(bytes);
-    let bitrate = (header.sample_rate as u64) * u64::from(header.channels) * u64::from(header.bits_per_sample);
+    let bitrate = (header.sample_rate as u64)
+        * u64::from(header.channels)
+        * u64::from(header.bits_per_sample);
     Some(AudioTrackInfo {
         codec_id: *b"WAV ",
         sample_format: header.sample_format,
@@ -148,7 +158,12 @@ fn probe_tpt_into(bytes: &[u8], report: &mut ProbeReport) {
     let mut pos = 16;
     while pos + 8 <= bytes.len() {
         let id = &bytes[pos..pos + 4];
-        let size = u32::from_le_bytes([bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]]) as usize;
+        let size = u32::from_le_bytes([
+            bytes[pos + 4],
+            bytes[pos + 5],
+            bytes[pos + 6],
+            bytes[pos + 7],
+        ]) as usize;
         pos += 8;
         if pos + size > bytes.len() {
             report.corruption.push("truncated chunk".into());
@@ -167,7 +182,9 @@ fn probe_tpt_into(bytes: &[u8], report: &mut ProbeReport) {
             });
         }
         pos += size;
-        if size & 1 == 1 && pos < bytes.len() { pos += 1; }
+        if size & 1 == 1 && pos < bytes.len() {
+            pos += 1;
+        }
     }
 }
 
@@ -179,9 +196,15 @@ struct WavHeader {
 }
 
 fn parse_wav_header(bytes: &[u8]) -> Result<WavHeader, ()> {
-    if bytes.len() < 44 { return Err(()); }
-    if &bytes[0..4] != b"RIFF" { return Err(()); }
-    if &bytes[8..12] != b"WAVE" { return Err(()); }
+    if bytes.len() < 44 {
+        return Err(());
+    }
+    if &bytes[0..4] != b"RIFF" {
+        return Err(());
+    }
+    if &bytes[8..12] != b"WAVE" {
+        return Err(());
+    }
     let format_tag = u16::from_le_bytes([bytes[20], bytes[21]]);
     let channels = u16::from_le_bytes([bytes[22], bytes[23]]);
     let sample_rate = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
@@ -195,24 +218,42 @@ fn parse_wav_header(bytes: &[u8]) -> Result<WavHeader, ()> {
         (3, 64) => SampleFormat::F64,
         _ => return Err(()),
     };
-    Ok(WavHeader { sample_format, channels, sample_rate, bits_per_sample })
+    Ok(WavHeader {
+        sample_format,
+        channels,
+        sample_rate,
+        bits_per_sample,
+    })
 }
 
 fn wav_sample_count(bytes: &[u8]) -> Option<u64> {
-    if bytes.len() < 44 { return None; }
+    if bytes.len() < 44 {
+        return None;
+    }
     let mut pos = 12;
     while pos + 8 <= bytes.len() {
         let id = &bytes[pos..pos + 4];
-        let size = u32::from_le_bytes([bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]]) as u64;
+        let size = u32::from_le_bytes([
+            bytes[pos + 4],
+            bytes[pos + 5],
+            bytes[pos + 6],
+            bytes[pos + 7],
+        ]) as u64;
         pos += 8;
         if id == b"data" {
             let hdr = parse_wav_header(bytes).ok()?;
             let bps = (hdr.bits_per_sample / 8) as u64;
             let frame_size = bps * hdr.channels as u64;
-            return if frame_size == 0 { None } else { Some(size / frame_size) };
+            return if frame_size == 0 {
+                None
+            } else {
+                Some(size.checked_div(frame_size)?)
+            };
         }
         pos += size as usize;
-        if size & 1 == 1 && pos < bytes.len() { pos += 1; }
+        if size & 1 == 1 && pos < bytes.len() {
+            pos += 1;
+        }
     }
     None
 }

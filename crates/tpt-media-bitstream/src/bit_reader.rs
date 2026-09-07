@@ -76,7 +76,7 @@ impl<'a> BitReader<'a> {
 
     fn refill(&mut self) -> Result<(), BitstreamError> {
         let want_bits = 56u32.saturating_sub(self.bits_in_acc);
-        let want_bytes = ((want_bits + 7) / 8) as usize;
+        let want_bytes = want_bits.div_ceil(8) as usize;
         let available = self.remaining_bytes();
         if available == 0 {
             return Err(BitstreamError::EndOfInput);
@@ -126,7 +126,7 @@ impl<'a> BitReader<'a> {
             return Ok(());
         }
         let extra = n - self.bits_in_acc;
-        let bytes_to_skip = (extra + 7) / 8;
+        let bytes_to_skip = extra.div_ceil(8);
         if bytes_to_skip as usize > self.remaining_bytes() {
             return Err(BitstreamError::EndOfInput);
         }

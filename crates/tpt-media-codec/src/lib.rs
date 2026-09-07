@@ -128,7 +128,9 @@ impl ResourceLimits {
     /// Check that a frame byte count is within the configured maximum.
     pub fn check_frame_bytes(&self, bytes: usize) -> CodecResult<()> {
         if bytes > self.max_frame_bytes as usize {
-            return Err(CodecError::ResourceLimit(ResourceLimitKind::FrameDimensions));
+            return Err(CodecError::ResourceLimit(
+                ResourceLimitKind::FrameDimensions,
+            ));
         }
         Ok(())
     }
@@ -136,7 +138,9 @@ impl ResourceLimits {
     /// Check that a reference-frame count is within the configured maximum.
     pub fn check_reference_frames(&self, n: u8) -> CodecResult<()> {
         if n > self.max_reference_frames {
-            return Err(CodecError::ResourceLimit(ResourceLimitKind::ReferenceFrames));
+            return Err(CodecError::ResourceLimit(
+                ResourceLimitKind::ReferenceFrames,
+            ));
         }
         Ok(())
     }
@@ -224,12 +228,28 @@ impl SupportedFormat {
     pub fn matches(&self, other: &SupportedFormat) -> bool {
         match (self, other) {
             (
-                SupportedFormat::Audio { sample_format: a, channel_layout: b, sample_rate: c },
-                SupportedFormat::Audio { sample_format: d, channel_layout: e, sample_rate: f },
+                SupportedFormat::Audio {
+                    sample_format: a,
+                    channel_layout: b,
+                    sample_rate: c,
+                },
+                SupportedFormat::Audio {
+                    sample_format: d,
+                    channel_layout: e,
+                    sample_rate: f,
+                },
             ) => a == d && b == e && c == f,
             (
-                SupportedFormat::Video { pixel_format: a, width: b, height: c },
-                SupportedFormat::Video { pixel_format: d, width: e, height: f },
+                SupportedFormat::Video {
+                    pixel_format: a,
+                    width: b,
+                    height: c,
+                },
+                SupportedFormat::Video {
+                    pixel_format: d,
+                    width: e,
+                    height: f,
+                },
             ) => a == d && b == e && c == f,
             _ => false,
         }
@@ -414,7 +434,9 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn new() -> Self { Registry::default() }
+    pub fn new() -> Self {
+        Registry::default()
+    }
     pub fn register_decoder<F: 'static + DynDecoderFactory>(&mut self, f: F) {
         self.decoders.push(Box::new(f));
     }
@@ -422,10 +444,16 @@ impl Registry {
         self.encoders.push(Box::new(f));
     }
     pub fn find_decoder(&self, codec_id: &[u8; 4]) -> Option<&dyn DynDecoderFactory> {
-        self.decoders.iter().find(|f| f.codec_id() == codec_id).map(|f| f.as_ref())
+        self.decoders
+            .iter()
+            .find(|f| f.codec_id() == codec_id)
+            .map(|f| f.as_ref())
     }
     pub fn find_encoder(&self, codec_id: &[u8; 4]) -> Option<&dyn DynEncoderFactory> {
-        self.encoders.iter().find(|f| f.codec_id() == codec_id).map(|f| f.as_ref())
+        self.encoders
+            .iter()
+            .find(|f| f.codec_id() == codec_id)
+            .map(|f| f.as_ref())
     }
     pub fn decoder_ids<'a>(&'a self) -> impl Iterator<Item = &'a [u8; 4]> + 'a {
         self.decoders.iter().map(|f| f.codec_id())
@@ -451,7 +479,9 @@ pub struct PacketGuard<'a> {
 }
 
 impl<'a> PacketGuard<'a> {
-    pub fn new(limits: &'a ResourceLimits) -> Self { PacketGuard { limits } }
+    pub fn new(limits: &'a ResourceLimits) -> Self {
+        PacketGuard { limits }
+    }
     pub fn check<F, R>(&self, packet: &Packet, f: F) -> CodecResult<R>
     where
         F: FnOnce() -> CodecResult<R>,
@@ -467,31 +497,42 @@ mod tests {
 
     #[test]
     fn strict_is_stricter_than_permissive() {
-        assert!(ResourceLimits::strict().max_packet_bytes
-            < ResourceLimits::permissive().max_packet_bytes);
+        assert!(
+            ResourceLimits::strict().max_packet_bytes
+                < ResourceLimits::permissive().max_packet_bytes
+        );
     }
 
     #[test]
     fn packet_guard_rejects_oversized() {
         let limits = ResourceLimits::strict();
         let guard = PacketGuard::new(&limits);
-        let mut p = Packet::empty(0, tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::MILLISECONDS));
+        let mut p = Packet::empty(
+            0,
+            tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::MILLISECONDS),
+        );
         p.data = alloc::vec![0u8; (limits.max_packet_bytes as usize) + 1];
         let result: CodecResult<()> = guard.check(&p, || Ok(()));
-        assert!(matches!(result, Err(CodecError::ResourceLimit(ResourceLimitKind::PacketSize))));
+        assert!(matches!(
+            result,
+            Err(CodecError::ResourceLimit(ResourceLimitKind::PacketSize))
+        ));
     }
 
     #[test]
     fn registry_register_and_find() {
         struct DummyFactory;
         impl DynDecoderFactory for DummyFactory {
-            fn codec_id(&self) -> &[u8; 4] { b"DUM1" }
+            fn codec_id(&self) -> &[u8; 4] {
+                b"DUM1"
+            }
             fn info(&self) -> CodecInfo {
                 CodecInfo {
                     name: "Dummy",
                     codec_id: *b"DUM1",
                     version: 1,
                     capabilities: Capabilities::default(),
+                    supported_formats: Vec::new(),
                 }
             }
             fn build(&self, _cfg: &CodecConfig) -> CodecResult<Box<dyn DynDecoder>> {

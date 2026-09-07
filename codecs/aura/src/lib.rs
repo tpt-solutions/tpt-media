@@ -29,10 +29,10 @@ use tpt_dsp_core::{autocorrelation, imdct, levinson_durbin, mdct};
 use tpt_media_bitstream::{BitReader, BitWriter};
 use tpt_media_codec::{
     Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, Decoder, DynDecoder,
-    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder,
+    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder, SupportedFormat,
 };
 use tpt_media_core::{
-    AudioFrame, ChannelLayout, Frame, Packet, PacketFlags, SampleFormat, Timestamp, Timebase,
+    AudioFrame, ChannelLayout, Frame, Packet, PacketFlags, SampleFormat, Timebase, Timestamp,
 };
 
 /// Codec id for Aura.
@@ -47,6 +47,18 @@ fn static_info(caps: Capabilities) -> CodecInfo {
         codec_id: CODEC_ID,
         version: VERSION,
         capabilities: caps,
+        supported_formats: alloc::vec![
+            SupportedFormat::Audio {
+                sample_format: SampleFormat::S16,
+                channel_layout: ChannelLayout::Mono,
+                sample_rate: 48_000,
+            },
+            SupportedFormat::Audio {
+                sample_format: SampleFormat::S16,
+                channel_layout: ChannelLayout::Mono,
+                sample_rate: 44_100,
+            },
+        ],
     }
 }
 
@@ -108,20 +120,27 @@ impl AuraEncoder {
 
 impl Encoder for AuraEncoder {
     type Frame = AudioFrame;
-    fn info(&self) -> &CodecInfo { &self.info }
+    fn info(&self) -> &CodecInfo {
+        &self.info
+    }
     fn encode(&mut self, frame: &AudioFrame) -> CodecResult<Vec<Packet>> {
         self.cfg.limits.check_packet(64 * 1024)?;
         let fs = self.enc.block_size as usize;
         if self.enc.mode == AuraMode::Lossy && fs % 2 != 0 {
-            return Err(CodecError::InvalidConfig("aura lossy block_size must be even"));
+            return Err(CodecError::InvalidConfig(
+                "aura lossy block_size must be even",
+            ));
         }
         let n_samples = frame.samples.len() / 2;
         if n_samples < fs {
-            return Err(CodecError::InvalidConfig("not enough samples for one block"));
+            return Err(CodecError::InvalidConfig(
+                "not enough samples for one block",
+            ));
         }
         let mut x = vec![0f64; fs];
         for i in 0..fs {
-            x[i] = i16::from_le_bytes([frame.samples[2 * i], frame.samples[2 * i + 1]]) as f64 / i16::MAX as f64;
+            x[i] = i16::from_le_bytes([frame.samples[2 * i], frame.samples[2 * i + 1]]) as f64
+                / i16::MAX as f64;
         }
         let order = self.enc.lpc_order as usize;
         // Upper bound: ~64 bits of header slack, `order` 16-bit LPC
@@ -133,10 +152,16 @@ impl Encoder for AuraEncoder {
         let mut buf = vec![0u8; max_bits.div_ceil(8)];
         let written = {
             let mut w = BitWriter::new(&mut buf);
-            let mode_bit = if self.enc.mode == AuraMode::Lossless { 1u64 } else { 0 };
+            let mode_bit = if self.enc.mode == AuraMode::Lossless {
+                1u64
+            } else {
+                0
+            };
             w.write(1, mode_bit).map_err(|_| CodecError::Internal)?;
-            w.write(5, self.enc.lpc_order as u64).map_err(|_| CodecError::Internal)?;
-            w.write(8, (self.enc.mdct_size / 256 - 1) as u64).map_err(|_| CodecError::Internal)?;
+            w.write(5, self.enc.lpc_order as u64)
+                .map_err(|_| CodecError::Internal)?;
+            w.write(8, (self.enc.mdct_size / 256 - 1) as u64)
+                .map_err(|_| CodecError::Internal)?;
             match self.enc.mode {
                 AuraMode::Lossless => {
                     let mut r = vec![0f64; order + 1];
@@ -146,10 +171,14 @@ impl Encoder for AuraEncoder {
                     levinson_durbin(&r, &mut a, &mut scratch);
                     let coeffs_q = quantize_coeffs(&a);
                     let samples_i32: Vec<i32> = (0..fs)
-                        .map(|i| i16::from_le_bytes([frame.samples[2 * i], frame.samples[2 * i + 1]]) as i32)
+                        .map(|i| {
+                            i16::from_le_bytes([frame.samples[2 * i], frame.samples[2 * i + 1]])
+                                as i32
+                        })
                         .collect();
                     for c in &coeffs_q {
-                        w.write(16, (*c as i16 as u16) as u64).map_err(|_| CodecError::Internal)?;
+                        w.write(16, (*c as i16 as u16) as u64)
+                            .map_err(|_| CodecError::Internal)?;
                     }
                     for i in 0..fs {
                         let take = order.min(i);
@@ -159,7 +188,8 @@ impl Encoder for AuraEncoder {
                             integer_predict(&samples_i32[..i], &coeffs_q[..take])
                         };
                         let residual = samples_i32[i] as i64 - predicted;
-                        write_exp_golomb(&mut w, zigzag_encode(residual)).map_err(|_| CodecError::Internal)?;
+                        write_exp_golomb(&mut w, zigzag_encode(residual))
+                            .map_err(|_| CodecError::Internal)?;
                     }
                 }
                 AuraMode::Lossy => {
@@ -286,7 +316,9 @@ impl AuraDecoder {
 
 impl Decoder for AuraDecoder {
     type Frame = AudioFrame;
-    fn info(&self) -> &CodecInfo { &self.info }
+    fn info(&self) -> &CodecInfo {
+        &self.info
+    }
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
         self.cfg.limits.check_packet(packet.data.len())?;
         self.decode_inner(packet)
@@ -297,7 +329,11 @@ impl AuraDecoder {
     fn decode_inner(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
         let mut r = BitReader::new(&packet.data);
         let mode_bit = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
-        let mode = if mode_bit == 1 { AuraMode::Lossless } else { AuraMode::Lossy };
+        let mode = if mode_bit == 1 {
+            AuraMode::Lossless
+        } else {
+            AuraMode::Lossy
+        };
         let lpc_order = r.read(5).map_err(|_| CodecError::MalformedPacket)? as u8;
         let _mdct_size_bits = r.read(8).map_err(|_| CodecError::MalformedPacket)?;
         let fs = self.enc.block_size as usize;
@@ -372,9 +408,15 @@ impl AuraDecoder {
 /// Type-erased decoder factory.
 pub struct AuraDecoderFactory;
 impl DynDecoderFactory for AuraDecoderFactory {
-    fn codec_id(&self) -> &[u8; 4] { &CODEC_ID }
+    fn codec_id(&self) -> &[u8; 4] {
+        &CODEC_ID
+    }
     fn info(&self) -> CodecInfo {
-        static_info(Capabilities { lossless: true, lossy: true, ..Capabilities::default() })
+        static_info(Capabilities {
+            lossless: true,
+            lossy: true,
+            ..Capabilities::default()
+        })
     }
     fn build(&self, cfg: &CodecConfig) -> CodecResult<alloc::boxed::Box<dyn DynDecoder>> {
         let enc = AuraConfig::default();
@@ -382,27 +424,45 @@ impl DynDecoderFactory for AuraDecoderFactory {
         Ok(alloc::boxed::Box::new(AuraDynDecoder { inner: d }))
     }
 }
-pub struct AuraDynDecoder { inner: AuraDecoder }
+pub struct AuraDynDecoder {
+    inner: AuraDecoder,
+}
 impl DynDecoder for AuraDynDecoder {
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
         let frames = Decoder::decode(&mut self.inner, packet)?;
-        Ok(frames.into_iter().map(|f| tpt_media_codec::DynFrame::Audio {
-            sample_format: f.format,
-            channel_layout: f.channel_layout,
-            sample_rate: f.sample_rate,
-            sample_count: f.sample_count,
-            samples: f.samples,
-        }).collect())
+        Ok(frames
+            .into_iter()
+            .map(|f| tpt_media_codec::DynFrame::Audio {
+                sample_format: f.format,
+                channel_layout: f.channel_layout,
+                sample_rate: f.sample_rate,
+                sample_count: f.sample_count,
+                samples: f.samples,
+            })
+            .collect())
     }
-    fn flush(&mut self) -> CodecResult<Vec<tpt_media_codec::DynFrame>> { Ok(Vec::new()) }
-    fn info(&self) -> CodecInfo { self.inner.info().clone() }
+    fn flush(&mut self) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
+        Ok(Vec::new())
+    }
+    fn drain(&mut self) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
+        Ok(Vec::new())
+    }
+    fn info(&self) -> CodecInfo {
+        self.inner.info().clone()
+    }
 }
 
 pub struct AuraEncoderFactory;
 impl DynEncoderFactory for AuraEncoderFactory {
-    fn codec_id(&self) -> &[u8; 4] { &CODEC_ID }
+    fn codec_id(&self) -> &[u8; 4] {
+        &CODEC_ID
+    }
     fn info(&self) -> CodecInfo {
-        static_info(Capabilities { lossless: true, lossy: true, ..Capabilities::default() })
+        static_info(Capabilities {
+            lossless: true,
+            lossy: true,
+            ..Capabilities::default()
+        })
     }
     fn build(&self, cfg: &CodecConfig) -> CodecResult<alloc::boxed::Box<dyn DynEncoder>> {
         let enc = AuraConfig::default();
@@ -410,11 +470,19 @@ impl DynEncoderFactory for AuraEncoderFactory {
         Ok(alloc::boxed::Box::new(AuraDynEncoder { inner: e }))
     }
 }
-pub struct AuraDynEncoder { inner: AuraEncoder }
+pub struct AuraDynEncoder {
+    inner: AuraEncoder,
+}
 impl DynEncoder for AuraDynEncoder {
     fn encode(&mut self, frame: &tpt_media_codec::DynFrame) -> CodecResult<Vec<Packet>> {
         let audio = match frame {
-            tpt_media_codec::DynFrame::Audio { samples, sample_format, channel_layout, sample_rate, sample_count } => AudioFrame {
+            tpt_media_codec::DynFrame::Audio {
+                samples,
+                sample_format,
+                channel_layout,
+                sample_rate,
+                sample_count,
+            } => AudioFrame {
                 frame: Frame {
                     pts: Timestamp::zero(Timebase::new(1, *sample_rate)),
                     duration: None,
@@ -430,8 +498,15 @@ impl DynEncoder for AuraDynEncoder {
         };
         Encoder::encode(&mut self.inner, &audio)
     }
-    fn flush(&mut self) -> CodecResult<Vec<Packet>> { Encoder::flush(&mut self.inner) }
-    fn info(&self) -> CodecInfo { self.inner.info().clone() }
+    fn flush(&mut self) -> CodecResult<Vec<Packet>> {
+        Encoder::flush(&mut self.inner)
+    }
+    fn drain(&mut self) -> CodecResult<Vec<Packet>> {
+        Encoder::drain(&mut self.inner)
+    }
+    fn info(&self) -> CodecInfo {
+        self.inner.info().clone()
+    }
 }
 
 #[cfg(test)]
@@ -467,7 +542,11 @@ mod tests {
     #[test]
     fn encode_decode_lossless_silence() {
         let cfg = CodecConfig::default();
-        let enc_cfg = AuraConfig { mode: AuraMode::Lossless, block_size: 256, ..Default::default() };
+        let enc_cfg = AuraConfig {
+            mode: AuraMode::Lossless,
+            block_size: 256,
+            ..Default::default()
+        };
         let mut enc = AuraEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
         let mut dec = AuraDecoder::new(cfg, enc_cfg).unwrap();
         let mut frame = silence_frame(256, 48_000);
@@ -480,7 +559,11 @@ mod tests {
     #[test]
     fn encode_decode_lossy() {
         let cfg = CodecConfig::default();
-        let enc_cfg = AuraConfig { mode: AuraMode::Lossy, block_size: 256, ..Default::default() };
+        let enc_cfg = AuraConfig {
+            mode: AuraMode::Lossy,
+            block_size: 256,
+            ..Default::default()
+        };
         let mut enc = AuraEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
         let mut dec = AuraDecoder::new(cfg, enc_cfg).unwrap();
         let mut frame = silence_frame(256, 48_000);
@@ -498,13 +581,21 @@ mod tests {
         // decoded back to silence regardless of input. Lossless mode is
         // documented as bit-exact, so a real tone must round-trip exactly.
         let cfg = CodecConfig::default();
-        let enc_cfg = AuraConfig { mode: AuraMode::Lossless, block_size: 256, lpc_order: 8, ..Default::default() };
+        let enc_cfg = AuraConfig {
+            mode: AuraMode::Lossless,
+            block_size: 256,
+            lpc_order: 8,
+            ..Default::default()
+        };
         let mut enc = AuraEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
         let mut dec = AuraDecoder::new(cfg, enc_cfg).unwrap();
         let mut frame = tone_frame(256, 48_000);
         frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
         let packets = enc.encode(&frame).unwrap();
-        assert!(!packets[0].data.is_empty(), "encoded packet must not be empty");
+        assert!(
+            !packets[0].data.is_empty(),
+            "encoded packet must not be empty"
+        );
         let decoded = dec.decode(&packets[0]).unwrap();
         for i in 0..256 {
             assert_eq!(
@@ -518,13 +609,20 @@ mod tests {
     #[test]
     fn encode_decode_lossy_tone_carries_signal() {
         let cfg = CodecConfig::default();
-        let enc_cfg = AuraConfig { mode: AuraMode::Lossy, block_size: 256, ..Default::default() };
+        let enc_cfg = AuraConfig {
+            mode: AuraMode::Lossy,
+            block_size: 256,
+            ..Default::default()
+        };
         let mut enc = AuraEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
         let mut dec = AuraDecoder::new(cfg, enc_cfg).unwrap();
         let mut frame = tone_frame(256, 48_000);
         frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
         let packets = enc.encode(&frame).unwrap();
-        assert!(!packets[0].data.is_empty(), "encoded packet must not be empty");
+        assert!(
+            !packets[0].data.is_empty(),
+            "encoded packet must not be empty"
+        );
         let decoded = dec.decode(&packets[0]).unwrap();
         assert!(energy(&decoded[0]) > 0, "decoded tone must not be silent");
     }
@@ -532,7 +630,10 @@ mod tests {
     #[test]
     fn rejects_oversized_lpc_order() {
         let cfg = CodecConfig::default();
-        let enc_cfg = AuraConfig { lpc_order: 64, ..Default::default() };
+        let enc_cfg = AuraConfig {
+            lpc_order: 64,
+            ..Default::default()
+        };
         assert!(AuraEncoder::new(cfg, enc_cfg).is_err());
     }
 }

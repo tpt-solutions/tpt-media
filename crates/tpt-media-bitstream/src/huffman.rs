@@ -28,7 +28,9 @@ pub struct HuffmanTable {
 impl HuffmanTable {
     /// Empty table.
     pub fn empty() -> Self {
-        HuffmanTable { entries: Vec::new() }
+        HuffmanTable {
+            entries: Vec::new(),
+        }
     }
 
     /// Number of symbols in the table.
@@ -47,25 +49,22 @@ impl HuffmanTable {
     }
 
     /// Encode a symbol into the bit writer.
-    pub fn encode<W: BitWriterLike>(
-        &self,
-        writer: &mut W,
-        symbol: u16,
-    ) -> Result<(), WriteError> {
+    pub fn encode<W: BitWriterLike>(&self, writer: &mut W, symbol: u16) -> Result<(), WriteError> {
         let entry = self.get(symbol).ok_or(WriteError::BufferFull)?;
         writer.write_bits(entry.length as u32, entry.code as u64)
     }
 
     /// Decode one symbol from the bit reader.
-    pub fn decode<R: BitReaderLike>(
-        &self,
-        reader: &mut R,
-    ) -> Result<u16, BitstreamError> {
+    pub fn decode<R: BitReaderLike>(&self, reader: &mut R) -> Result<u16, BitstreamError> {
         let mut code: u32 = 0;
         for len in 1..=32 {
             let bit = reader.read(1)?;
             code = (code << 1) | bit as u32;
-            if let Some(entry) = self.entries.iter().find(|e| e.code == code && e.length as u32 == len) {
+            if let Some(entry) = self
+                .entries
+                .iter()
+                .find(|e| e.code == code && e.length as u32 == len)
+            {
                 return Ok(entry.symbol);
             }
         }
@@ -75,7 +74,7 @@ impl HuffmanTable {
 
 /// Build a canonical Huffman table from symbol frequencies.
 pub fn build_table(freqs: &[u64]) -> HuffmanTable {
-    let mut entries: Vec<(u16, u64)> = freqs
+    let entries: Vec<(u16, u64)> = freqs
         .iter()
         .enumerate()
         .filter_map(|(i, &f)| {
@@ -105,8 +104,16 @@ pub fn build_table(freqs: &[u64]) -> HuffmanTable {
         let (s1, _) = entries[1];
         return HuffmanTable {
             entries: vec![
-                HuffmanEntry { symbol: s0, code: 0, length: 1 },
-                HuffmanEntry { symbol: s1, code: 1, length: 1 },
+                HuffmanEntry {
+                    symbol: s0,
+                    code: 0,
+                    length: 1,
+                },
+                HuffmanEntry {
+                    symbol: s1,
+                    code: 1,
+                    length: 1,
+                },
             ],
         };
     }
@@ -123,7 +130,7 @@ pub fn build_table(freqs: &[u64]) -> HuffmanTable {
             let l = if f == 0 {
                 max_len
             } else {
-                let l = (total / f).max(1).ilog2() as u8;
+                let l = total.checked_div(f).unwrap_or(0).max(1).ilog2() as u8;
                 l.clamp(1, max_len)
             };
             (s, l)
@@ -168,7 +175,11 @@ pub fn build_table(freqs: &[u64]) -> HuffmanTable {
     HuffmanTable {
         entries: codes
             .into_iter()
-            .map(|(sym, code, length)| HuffmanEntry { symbol: sym, code, length })
+            .map(|(sym, code, length)| HuffmanEntry {
+                symbol: sym,
+                code,
+                length,
+            })
             .collect(),
     }
 }

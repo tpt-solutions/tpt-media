@@ -27,16 +27,6 @@ impl SplitMix64 {
     pub(crate) fn next_unit_f32(&mut self) -> f32 {
         (self.next_u64() >> 40) as f32 / (1u32 << 24) as f32
     }
-
-    /// A deterministic index in `[0, bound)`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `bound == 0`.
-    pub(crate) fn next_index(&mut self, bound: usize) -> usize {
-        assert!(bound > 0, "bound must be positive");
-        (self.next_u64() as usize) % bound
-    }
 }
 
 #[cfg(test)]

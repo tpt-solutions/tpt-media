@@ -240,6 +240,9 @@ mod tests {
 
     #[test]
     fn decode_rejects_short_input() {
-        assert!(matches!(RangeDecoder::new(&[0u8; 4]), Err(BitstreamError::EndOfInput)));
+        assert!(matches!(
+            RangeDecoder::new(&[0u8; 4]),
+            Err(BitstreamError::EndOfInput)
+        ));
     }
 }

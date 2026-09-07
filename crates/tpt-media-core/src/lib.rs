@@ -44,8 +44,8 @@ pub use track::{MediaType, Stream, Track};
 /// Convenience re-exports of common items.
 pub mod prelude {
     pub use crate::{
-        AudioFrame, ChannelLayout, ClockDomain, CodecConfig, CodecId, Duration, Frame,
-        MediaType, Metadata, Packet, PacketFlags, PixelFormat, SampleFormat, Stream,
-        SyncError, SyncMap, SyncPoint, Timebase, Timestamp, Track, VideoFrame,
+        AudioFrame, ChannelLayout, ClockDomain, CodecConfig, CodecId, Duration, Frame, MediaType,
+        Metadata, Packet, PacketFlags, PixelFormat, SampleFormat, Stream, SyncError, SyncMap,
+        SyncPoint, Timebase, Timestamp, Track, VideoFrame,
     };
 }

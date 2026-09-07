@@ -151,8 +151,12 @@ pub fn encode_clus(timestamp: u64, flags: u8, track_id: u8, payload: &[u8]) -> V
 
 /// Decode a `CLUS` chunk body.
 pub fn decode_clus(body: &[u8]) -> Option<(u64, u8, u8, &[u8])> {
-    if body.len() < 10 { return None; }
-    let ts = u64::from_le_bytes([body[0], body[1], body[2], body[3], body[4], body[5], body[6], body[7]]);
+    if body.len() < 10 {
+        return None;
+    }
+    let ts = u64::from_le_bytes([
+        body[0], body[1], body[2], body[3], body[4], body[5], body[6], body[7],
+    ]);
     let flags = body[8];
     let track_id = body[9];
     Some((ts, flags, track_id, &body[10..]))
@@ -169,10 +173,17 @@ pub fn encode_chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
 
 /// Read the next chunk header.
 pub fn read_chunk_header(bytes: &[u8], pos: usize) -> Option<([u8; 4], usize, usize)> {
-    if pos + 8 > bytes.len() { return None; }
+    if pos + 8 > bytes.len() {
+        return None;
+    }
     let mut id = [0u8; 4];
     id.copy_from_slice(&bytes[pos..pos + 4]);
-    let size = u32::from_le_bytes([bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]]) as usize;
+    let size = u32::from_le_bytes([
+        bytes[pos + 4],
+        bytes[pos + 5],
+        bytes[pos + 6],
+        bytes[pos + 7],
+    ]) as usize;
     Some((id, size, pos + 8))
 }
 
@@ -272,11 +283,17 @@ impl<'a> TptDemuxer<'a> {
 }
 
 impl<'a> Container for TptDemuxer<'a> {
-    fn stream(&self) -> &Stream { &self.stream }
+    fn stream(&self) -> &Stream {
+        &self.stream
+    }
 
     fn next_packet(&mut self) -> ContainerResult<Packet> {
         if let Some(target) = self.seek_to.take() {
-            self.cursor = match self.index.iter().position(|e| e.keyframe && e.timestamp >= target) {
+            self.cursor = match self
+                .index
+                .iter()
+                .position(|e| e.keyframe && e.timestamp >= target)
+            {
                 Some(i) => i,
                 None => self.index.len(),
             };
@@ -290,13 +307,22 @@ impl<'a> Container for TptDemuxer<'a> {
             if let Some((ts, flags, track_id, payload)) = decode_clus(body) {
                 let mut pkt = Packet::empty(
                     track_id,
-                    Timestamp { ticks: ts as i64, timebase: self.header.timebase },
+                    Timestamp {
+                        ticks: ts as i64,
+                        timebase: self.header.timebase,
+                    },
                 );
                 pkt.dts = pkt.pts;
                 pkt.data = payload.to_vec();
-                if flags & 0x01 != 0 { pkt.flags |= PacketFlags::KEYFRAME; }
-                if flags & 0x02 != 0 { pkt.flags |= PacketFlags::END_OF_FRAME; }
-                if flags & 0x04 != 0 { pkt.flags |= PacketFlags::DISCONTINUITY; }
+                if flags & 0x01 != 0 {
+                    pkt.flags |= PacketFlags::KEYFRAME;
+                }
+                if flags & 0x02 != 0 {
+                    pkt.flags |= PacketFlags::END_OF_FRAME;
+                }
+                if flags & 0x04 != 0 {
+                    pkt.flags |= PacketFlags::DISCONTINUITY;
+                }
                 return Ok(pkt);
             }
         }
@@ -307,14 +333,18 @@ impl<'a> Container for TptDemuxer<'a> {
         Err(ContainerError::Unsupported("TptDemuxer is read-only"))
     }
 
-    fn finalize(&mut self) -> ContainerResult<()> { Ok(()) }
+    fn finalize(&mut self) -> ContainerResult<()> {
+        Ok(())
+    }
 
     fn seek_to_keyframe(&mut self, target_pts: i64) -> ContainerResult<()> {
         self.seek_to = Some(target_pts as u64);
         Ok(())
     }
 
-    fn tracks(&self) -> &[Track] { &self.stream.tracks }
+    fn tracks(&self) -> &[Track] {
+        &self.stream.tracks
+    }
 }
 
 /// In-memory muxer for `.tpt` byte streams.
@@ -326,8 +356,12 @@ pub struct TptMuxer {
 
 impl TptMuxer {
     pub fn new(timebase: Timebase) -> Self {
-        let mut m = TptMuxer { bytes: Vec::new(), finalized: false };
-        m.bytes.extend_from_slice(&FileHeader::new(timebase).to_bytes());
+        let mut m = TptMuxer {
+            bytes: Vec::new(),
+            finalized: false,
+        };
+        m.bytes
+            .extend_from_slice(&FileHeader::new(timebase).to_bytes());
         m
     }
 
@@ -348,14 +382,22 @@ impl TptMuxer {
 }
 
 /// Convenience: build a complete `.tpt` byte buffer.
-pub fn build_tpt(timebase: Timebase, tracks: &[(u8, &[u8; 4], &[u8])], packets: &[Packet]) -> Vec<u8> {
+pub fn build_tpt(
+    timebase: Timebase,
+    tracks: &[(u8, &[u8; 4], &[u8])],
+    packets: &[Packet],
+) -> Vec<u8> {
     let mut m = TptMuxer::new(timebase);
     for &(id, codec, priv_data) in tracks {
         m.add_track(id, codec, priv_data);
     }
     for p in packets {
         let flags = if p.is_keyframe() { 0x01 } else { 0 }
-            | if p.flags.contains(PacketFlags::END_OF_FRAME) { 0x02 } else { 0 }
+            | if p.flags.contains(PacketFlags::END_OF_FRAME) {
+                0x02
+            } else {
+                0
+            }
             | if p.is_discontinuity() { 0x04 } else { 0 };
         let ts = p.pts.ticks as u64;
         m.add_cluster(ts, flags, p.track_id, &p.data);
@@ -406,7 +448,10 @@ mod tests {
     fn header_rejects_bad_magic() {
         let mut b = [0u8; 16];
         b[0..4].copy_from_slice(b"XXXX");
-        assert!(matches!(FileHeader::from_bytes(&b), Err(TptError::BadHeader)));
+        assert!(matches!(
+            FileHeader::from_bytes(&b),
+            Err(TptError::BadHeader)
+        ));
     }
 
     #[test]
@@ -438,7 +483,8 @@ mod tests {
     fn unknown_chunks_are_skipped() {
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
         m.add_track(0, b"PULS", &[]);
-        m.bytes.extend_from_slice(&encode_chunk(b"XYZ!", &[1, 2, 3, 4]));
+        m.bytes
+            .extend_from_slice(&encode_chunk(b"XYZ!", &[1, 2, 3, 4]));
         m.add_cluster(10, 0x01, 0, &[0xAA]);
         let bytes = m.finish();
         let (_h, _t, packets) = parse_tpt(&bytes).unwrap();
@@ -464,8 +510,34 @@ mod tests {
     fn build_tpt_helper() {
         let tracks: [(u8, &[u8; 4], &[u8]); 1] = [(0, b"PULS", &[0])];
         let packets = vec![
-            Packet { data: vec![1,2,3], pts: Timestamp { ticks: 0, timebase: Timebase::MILLISECONDS }, dts: Timestamp { ticks: 0, timebase: Timebase::MILLISECONDS }, flags: PacketFlags::KEYFRAME, track_id: 0, duration: None },
-            Packet { data: vec![4,5,6], pts: Timestamp { ticks: 100, timebase: Timebase::MILLISECONDS }, dts: Timestamp { ticks: 100, timebase: Timebase::MILLISECONDS }, flags: PacketFlags::empty(), track_id: 0, duration: None },
+            Packet {
+                data: vec![1, 2, 3],
+                pts: Timestamp {
+                    ticks: 0,
+                    timebase: Timebase::MILLISECONDS,
+                },
+                dts: Timestamp {
+                    ticks: 0,
+                    timebase: Timebase::MILLISECONDS,
+                },
+                flags: PacketFlags::KEYFRAME,
+                track_id: 0,
+                duration: None,
+            },
+            Packet {
+                data: vec![4, 5, 6],
+                pts: Timestamp {
+                    ticks: 100,
+                    timebase: Timebase::MILLISECONDS,
+                },
+                dts: Timestamp {
+                    ticks: 100,
+                    timebase: Timebase::MILLISECONDS,
+                },
+                flags: PacketFlags::empty(),
+                track_id: 0,
+                duration: None,
+            },
         ];
         let bytes = build_tpt(Timebase::MILLISECONDS, &tracks, &packets);
         let (_h, _t, decoded) = parse_tpt(&bytes).unwrap();
@@ -482,16 +554,28 @@ mod tests {
         let packets = vec![
             Packet {
                 data: vec![0xAB],
-                pts: Timestamp { ticks: 0, timebase: Timebase::MILLISECONDS },
-                dts: Timestamp { ticks: 0, timebase: Timebase::MILLISECONDS },
+                pts: Timestamp {
+                    ticks: 0,
+                    timebase: Timebase::MILLISECONDS,
+                },
+                dts: Timestamp {
+                    ticks: 0,
+                    timebase: Timebase::MILLISECONDS,
+                },
                 flags: PacketFlags::DISCONTINUITY | PacketFlags::KEYFRAME,
                 track_id: 0,
                 duration: None,
             },
             Packet {
                 data: vec![0xCD],
-                pts: Timestamp { ticks: 100, timebase: Timebase::MILLISECONDS },
-                dts: Timestamp { ticks: 100, timebase: Timebase::MILLISECONDS },
+                pts: Timestamp {
+                    ticks: 100,
+                    timebase: Timebase::MILLISECONDS,
+                },
+                dts: Timestamp {
+                    ticks: 100,
+                    timebase: Timebase::MILLISECONDS,
+                },
                 flags: PacketFlags::END_OF_FRAME,
                 track_id: 0,
                 duration: None,

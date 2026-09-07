@@ -112,7 +112,10 @@ mod tests {
     #[test]
     fn insert_and_get() {
         let mut m = Metadata::new();
-        m.insert(MetadataKey::new("title"), MetadataValue::Text("Hello".into()));
+        m.insert(
+            MetadataKey::new("title"),
+            MetadataValue::Text("Hello".into()),
+        );
         assert_eq!(
             m.get(&MetadataKey::new("title")),
             Some(&MetadataValue::Text("Hello".into()))
@@ -132,7 +135,10 @@ mod tests {
     fn remove() {
         let mut m = Metadata::new();
         m.insert(MetadataKey::new("k"), MetadataValue::Bool(true));
-        assert_eq!(m.remove(&MetadataKey::new("k")), Some(MetadataValue::Bool(true)));
+        assert_eq!(
+            m.remove(&MetadataKey::new("k")),
+            Some(MetadataValue::Bool(true))
+        );
         assert!(m.is_empty());
     }
 }
