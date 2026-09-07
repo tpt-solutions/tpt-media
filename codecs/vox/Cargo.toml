@@ -1,0 +1,21 @@
+[package]
+name = "tpt-audio-vox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Vox: TPT edge / IoT speech codec (no_std, fixed-point LPC + VQ)."
+
+[dependencies]
+tpt-media-core = { workspace = true }
+tpt-media-bitstream = { workspace = true }
+tpt-media-codec = { workspace = true }
+
+[features]
+default = ["std"]
+std = []

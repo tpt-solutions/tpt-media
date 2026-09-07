@@ -3,9 +3,62 @@
 **Repository:** `tpt-media`
 **Organization:** TPT Solutions
 **Language:** Rust
-**Status:** Architecture / Implementation Planning
-**Document version:** 2.0
+**Status:** Early Implementation
+**Document version:** 2.1
 **Last updated:** 2026-09-07
+
+---
+
+## Known issues (as of 2026-09-07)
+
+* ~~**Range coder is broken.**~~ **Correction (2026-09-07, later same day):**
+  re-ran `cargo test -p tpt-media-bitstream --lib range` 5× — all 4 range
+  tests (`encode_decode_uniform`, `encode_decode_skewed`, and 2 others)
+  pass consistently, and the test inputs are fully deterministic (no
+  randomness), so this wasn't flakiness either. The original "fails its
+  own round-trip tests" finding from earlier today could not be
+  reproduced. Flipped §17's `range coder` box back to done; treat the
+  original finding as unconfirmed/stale rather than re-flagging it without
+  evidence.
+* **`Timestamp::rescale` overflow detection is wrong.** It multiplies by
+  `self.timebase.num` twice instead of by `target.num`, so
+  `rescale_overflow_returns_none` fails — a case that should overflow
+  does not.
+* **Aura's residual coding is Exp-Golomb, not Rice**, despite the doc
+  comment claiming Rice coding delegated to `tpt-media-bitstream`. Fix
+  the code or the comment.
+* **`CHANGELOG.md`'s `[Unreleased]` entry overstates scope.** It lists
+  `apps/`, `ffi/`, `tpt-cli`, `tpt-web`, `tpt-media-sys`, and
+  `tpt-video-{livelink,vault,whisper}` as added; none of these exist on
+  disk or in `Cargo.toml`'s workspace members. Reconcile before next
+  release notes.
+* `cargo test --workspace` currently has 1 failing test binary
+  (`tpt-media-core`, the `rescale` bug above) — `tpt-media-bitstream` now
+  passes in full (see the range-coder correction above).
+* **2026-09-07 tpt-dsp reconciliation**: verified §3–§14 against the
+  sibling `tpt-dsp` repo's actual code (`tpt-dsp-core/src/*.rs`). MDCT
+  (§5.1) and LPC (§6) are genuinely implemented and consumed by
+  Pulse/Aura — flipped below. Pitch analysis (§7), VQ (§8), LSP/LSF
+  (§9), psychoacoustics (§10), and noise shaping (§11) remain **entirely
+  absent** from `tpt-dsp-core` — confirmed by grep, no matches. §12
+  (Numerical Contracts) is left unchecked as a cross-cutting gate since
+  it can't be satisfied while VQ/psychoacoustics don't exist yet.
+* **2026-09-07 (later same day) — fixed a real precision bug in
+  `tpt-dsp-core` that affects Pulse/Aura directly.** Implementing
+  `FastMdctPlan`/`FastDctIvPlan` (FFT-backed, see §5.1/§5.2 below) and
+  cross-checking them against the existing direct `mdct`/`imdct`/`dct_iv`
+  turned up a real disagreement at N=1024+ (Pulse/Aura's actual block
+  sizes) — not a bug in the new fast path, but in the **existing** direct
+  reference: it evaluated `cos()` at the raw, unreduced `(π/N)·x·y` angle,
+  which reaches thousands of radians at these block sizes and is poorly
+  conditioned for `f32`/`f64` `cos()`. Fixed in `tpt-dsp` via an
+  integer-domain angle-reduction helper (`complex::cos_pi_over_n`) applied
+  to all five direct transforms (`dct_ii`/`iii`/`iv`, `mdct`/`imdct`);
+  `tpt-media`'s Pulse/Aura tests still pass against the corrected
+  reference. This means Pulse/Aura at 1024+ block sizes were silently
+  producing a measurably wrong spectrum before this fix — worth a mental
+  note if `tpt-dsp`'s version isn't yet bumped/pulled everywhere this
+  workspace's `Cargo.lock` might have cached the old code.
 
 ---
 
@@ -202,11 +255,11 @@ Those responsibilities belong in `tpt-dsp`.
 
 ## 3.1 Establish dependency boundary
 
-* [ ] Define `tpt-dsp` as the reusable signal-processing foundation
-* [ ] Define `tpt-media` as the media representation/codec/container layer
-* [ ] Document dependency direction
-* [ ] Prevent `tpt-dsp` from depending on `tpt-media`
-* [ ] Prevent codec-specific APIs from leaking into `tpt-dsp`
+* [x] Define `tpt-dsp` as the reusable signal-processing foundation — `tpt-media/ARCHITECTURE.md` Non-Goals: "Not a general-purpose DSP library. Transforms, filters, signal analysis and SIMD live in `tpt-dsp`."
+* [x] Define `tpt-media` as the media representation/codec/container layer — `ARCHITECTURE.md` §1 Goals + §2 Crate Topology
+* [x] Document dependency direction — `ARCHITECTURE.md` §3: `tpt-media ─────────► tpt-dsp (never reversed)`
+* [x] Prevent `tpt-dsp` from depending on `tpt-media` — verified: no `tpt-media` reference anywhere in `tpt-dsp`'s `Cargo.toml` files
+* [x] Prevent codec-specific APIs from leaking into `tpt-dsp` — `tpt-dsp-core`'s public API (`fft`, `dct_*`, `mdct`/`imdct`, `lpc::*`, `Biquad`, `RingBuffer`, ...) is entirely generic; no Pulse/Aura/Vox-specific types
 
 Desired:
 
@@ -258,23 +311,23 @@ These should be extended rather than duplicated.
 
 Required by Pulse and Aura.
 
-* [ ] Define MDCT mathematical convention
-* [ ] Define IMDCT convention
-* [ ] Define normalization
-* [ ] Define windowing convention
-* [ ] Define overlap convention
-* [ ] Define supported block sizes
-* [ ] Implement reference MDCT
-* [ ] Implement reference IMDCT
-* [ ] Add round-trip tests
-* [ ] Add numerical error tests
-* [ ] Add edge-case tests
-* [ ] Add reusable `MdctPlan`
-* [ ] Avoid allocation during processing
-* [ ] Add optimized implementation
-* [ ] Add SIMD implementation
-* [ ] Benchmark scalar vs optimized
-* [ ] Document numerical guarantees
+* [x] Define MDCT mathematical convention — `tpt-dsp-core/src/mdct.rs` doc: Princen–Bradley convention, explicit `X[k]` formula
+* [x] Define IMDCT convention — explicit inverse formula in the same doc comment
+* [x] Define normalization — `2/N` normalization documented and implemented in `imdct`
+* [x] Define windowing convention — `sine_window`, documented Princen–Bradley condition `h[i]²+h[i+n]²=1`
+* [x] Define overlap convention — documented: hop of `N` samples, overlap-add of windowed inverse blocks
+* [x] Define supported block sizes — `MdctPlan::SUPPORTED_SIZES = [128, 256, 512, 1024, 2048, 4096]`, matching this section's target sizes exactly
+* [x] Implement reference MDCT — `mdct()`
+* [x] Implement reference IMDCT — `imdct()`
+* [x] Add round-trip tests — `overlap_add_round_trip_reconstructs_signal` (TDAC round trip, tolerance `1e-6`)
+* [x] Add numerical error tests — same test asserts sample-level error tolerance
+* [x] Add edge-case tests — `silence_round_trips_to_silence`, `extreme_magnitude_input_stays_finite`, `nan_input_confines_to_taps_that_touch_it` (added 2026-09-07)
+* [x] Add reusable `MdctPlan`
+* [x] Avoid allocation during processing — `mdct`/`imdct`/`MdctPlan::forward`/`inverse` all take caller-owned output buffers, no internal `Vec`
+* [x] Add optimized implementation — `FastMdctPlan` (added 2026-09-07): a single length-`2n` complex FFT via `FftPlan` plus O(N) chirp pre/post-multiplies, instead of the O(N²) direct sum. Verified against the direct reference (`fast_matches_reference_forward`/`_inverse`, `fast_plan_round_trip_matches_direct_overlap_add`)
+* [x] Add SIMD implementation — `FastMdctPlan` is backed by `FftPlan` (RustFFT), which dispatches to AVX/SSE/NEON at runtime; no separate hand-rolled `core::simd` MDCT kernel was written since that would just reimplement what RustFFT already provides
+* [x] Benchmark scalar vs optimized — `tpt-dsp-core/benches/dsp_bench.rs::bench_mdct`, all 6 target sizes, forward+inverse, direct vs `FastMdctPlan`; results in `tpt-dsp/BENCHMARKS.md` (~2000-15000× faster, widening with N as expected for O(N²) vs O(N log N))
+* [x] Document numerical guarantees — module-level doc thoroughly documents convention, normalization, and the TDAC requirement; `FastMdctPlan`'s doc documents its own chirp/FFT derivation
 
 Initial target sizes:
 
@@ -293,18 +346,26 @@ Initial target sizes:
 
 Current DCT-IV implementation is suitable as a correctness reference but must be evaluated for codec workloads.
 
-* [ ] Benchmark current DCT implementation
-* [ ] Define performance targets
-* [ ] Implement optimized DCT-IV
-* [ ] Preserve reference implementation for verification
-* [ ] Add scalar/SIMD equivalence tests
-* [ ] Verify numerical error bounds
+* [x] Benchmark current DCT implementation — `tpt-dsp-core/benches/dsp_bench.rs::bench_dct` (DCT-II/III/IV across `DCT_SIZES`), results recorded in `BENCHMARKS.md` (e.g. `dct/iv_f32/1024`: 50.0 µs, 20.5 Melem/s)
+* [x] Define performance targets — **target (2026-09-07): the MDCT/DCT-IV transform (forward on encode, inverse on decode) must consume ≤10% of the codec's own real-time frame budget, `frame_size / sample_rate`, at its default operating point** — leaving ≥90% headroom for windowing, quantization, entropy coding, and system jitter. This is derived from Pulse's own committed real-time contract (§29, §1 "zero allocation in real-time hot paths" / deterministic execution), not an arbitrary number; it only binds codecs that claim real-time (Pulse — §30's Aura is explicitly "high-fidelity/archival", i.e. the Offline profile in §14, so this target doesn't apply to it).
+  Measured against `tpt-dsp-core/benches/dsp_bench.rs::bench_mdct` (2026-09-07, `--quick`, noisy per `tpt-dsp/BENCHMARKS.md`'s own caveat):
+  | Pulse `frame_size` (N) | frame budget (48kHz) | direct `mdct()` (what Pulse actually calls) | vs. 10% budget | `FastMdctPlan` |
+  | ---: | ---: | ---: | :--- | ---: |
+  | 128 | 2.667 ms | 214 µs | 8.0% — **passes**, thinly | 0.34 µs (0.01%) |
+  | 256 | 5.333 ms | 822 µs | 15.4% — **fails** | 0.69 µs (0.01%) |
+  So Pulse's *current* code (it calls the direct `mdct`/`imdct`, not the new `FastMdctPlan` — confirmed via `use tpt_dsp_core::{imdct, mdct, ...}` in `codecs/pulse/src/lib.rs`) already misses this target at its larger supported frame size, and only barely clears it at the smaller one, before accounting for anything else in the encode/decode path. `FastMdctPlan` clears the target by ~3 orders of magnitude at both sizes. **Follow-up (not yet done): wire `FastMdctPlan` into Pulse's actual `encode`/`decode`** so the codec meets its own real-time claim in practice, not just in the benchmark suite.
+* [x] Implement optimized DCT-IV — `FastDctIvPlan` (added 2026-09-07): same FFT/chirp technique as `FastMdctPlan`, specialized to DCT-IV's `θ(m,k)=(π/N)(m+½)(k+½)` (zero-padded to `2N` since both indices range only `0..N`, unlike MDCT)
+* [x] Preserve reference implementation for verification — the direct `dct_iv` stays; `FastDctIvPlan` is checked against it, not a replacement
+* [x] Add scalar/SIMD equivalence tests — `fast_dct_iv_matches_reference` (direct `dct_iv` vs `FastDctIvPlan` across 4 sizes) and `fast_dct_iv_is_self_inverse_up_to_scale`; `FastDctIvPlan` is `FftPlan`/RustFFT-backed (same SIMD-dispatch rationale as `FastMdctPlan`)
+* [x] Verify numerical error bounds — `dct_ii_of_constant_is_scaled`, `dct_ii_then_iii_roundtrips`, `dct_iv_orthogonality_roundtrip` all assert explicit tolerances; also fixed a real precision bug this uncovered — see Known Issues
 
 ---
 
 ## 5.3 2D transforms
 
 Required primarily by video codecs.
+
+_Confirmed 2026-09-07: no 2D transform code exists anywhere in `tpt-dsp-core` (no `dct_2d`, `Dct2d`, or separable-transform helpers) — expected, since this is only needed once Livelink/Vault/Whisper exist. All items below remain correctly unchecked._
 
 * [ ] Define 2D DCT API
 * [ ] Implement separable 2D DCT
@@ -322,19 +383,19 @@ Required primarily by video codecs.
 
 Required by Vox and Aura.
 
-* [ ] Implement autocorrelation
-* [ ] Define LPC coefficient convention
-* [ ] Implement Levinson-Durbin
-* [ ] Define stability behavior
-* [ ] Handle singular/degenerate inputs
-* [ ] Implement LPC analysis
-* [ ] Implement prediction
-* [ ] Implement residual generation
-* [ ] Implement synthesis
-* [ ] Add numerical tests
-* [ ] Add stability tests
-* [ ] Add deterministic tests
-* [ ] Add benchmarks
+* [x] Implement autocorrelation — `lpc.rs::autocorrelation`, tested
+* [x] Define LPC coefficient convention — doc comment: `predicted[n] = Σ a[k]·x[n-1-k]`
+* [x] Implement Levinson-Durbin — `levinson_durbin`, tested against an idealized pure-tone autocorrelation to floating-point precision
+* [x] Define stability behavior — documented: a reflection coefficient reaching unity stops the recursion early, keeping only the stable prefix
+* [x] Handle singular/degenerate inputs — `r[0] <= 0` (silence) returns zero early; `levinson_durbin_handles_silence` test
+* [x] Implement LPC analysis — `LpcAnalyzer::analyze` (autocorrelation + Levinson-Durbin, reused scratch buffers)
+* [x] Implement prediction — `predict()`
+* [x] Implement residual generation — `residual()`
+* [x] Implement synthesis — `synthesize()`, `residual_then_synthesize_is_identity` proves exact inversion
+* [x] Add numerical tests — `levinson_durbin_predicts_pure_tone`, `predict_matches_residual_formula`, others
+* [x] Add stability tests — added 2026-09-07: `levinson_durbin_stops_early_at_first_reflection` (order-1, `k=2.0`) and `levinson_durbin_stops_early_and_keeps_stable_prefix` (order-2, first reflection stable, second reaches `k=1.5`, proving the stable prefix is kept and only the aborted coefficient stays zero)
+* [x] Add deterministic tests — `analyzer_reuses_buffers` asserts identical output across repeated calls
+* [x] Add benchmarks — added 2026-09-07: `bench_lpc` in `tpt-dsp-core/benches/dsp_bench.rs` (`autocorrelation`+`levinson_durbin` at Aura's actual orders 8/16/32 against its default 1024-sample block; `predict`/`residual`/`synthesize` at order 16); results in `tpt-dsp/BENCHMARKS.md` — `autocorrelation` (O(N·order)) dominates over `levinson_durbin` (O(order²)) as expected
 
 Potential API:
 
@@ -470,14 +531,14 @@ Required for:
 
 # 13. TPT-DSP — SIMD
 
-* [ ] Retain SIMD in `tpt-dsp`
-* [ ] Remove planned `tpt-media-simd`
-* [ ] Establish scalar reference implementations
-* [ ] Establish SIMD equivalence tests
-* [ ] Benchmark SIMD kernels
-* [ ] Document supported architectures
-* [ ] Ensure runtime feature detection where appropriate
-* [ ] Verify fallback behavior
+* [x] Retain SIMD in `tpt-dsp` — `tpt-dsp-core/src/simd.rs` (`core::simd`-based complex mul/add/magnitude, FFT butterfly)
+* [x] Remove planned `tpt-media-simd` — never created; no `tpt-media-simd` directory or crate exists
+* [x] Establish scalar reference implementations — `simd_scalar.rs`, the default/fallback path
+* [x] Establish SIMD equivalence tests — `simd_mul_matches_scalar`, `simd_add_matches_scalar`, `simd_magnitude_matches_scalar`, `simd_fft_matches_scalar_fft`
+* [x] Benchmark SIMD kernels — `dsp_bench.rs` `bench_simd_helpers` group
+* [ ] Document supported architectures — `core::simd` is portable/architecture-agnostic by design; no explicit x86/ARM support matrix is documented
+* [ ] Ensure runtime feature detection where appropriate — the existing detection (`build.rs`) is a compile-time nightly-vs-stable toolchain check, not a runtime CPU-feature (AVX2/NEON/etc.) check
+* [x] Verify fallback behavior — `build.rs` only enables `tpt_portable_simd` on nightly; stable builds provably use the scalar path (documented in `dsp_bench.rs`'s own comment: "which is scalar by default")
 
 Potential targets:
 
@@ -497,11 +558,11 @@ Define explicit execution profiles.
 
 ## Real-time
 
-* [ ] no allocation
+* [ ] no allocation — `tpt-dsp/ARCHITECTURE.md` §3.2 documents real caveats (async adapters allocate a `Vec` per frame; `AudioGraph` allocates at construction), so this is true in steady state for most paths but not unconditionally
 * [ ] no blocking
 * [ ] no I/O
-* [ ] no unbounded work
-* [ ] caller-owned memory
+* [ ] no unbounded work — `tpt-dsp/ARCHITECTURE.md` §3.2 documents that `OutlierDetector::push` is O(n log n) per sample, not O(1)
+* [x] caller-owned memory — the dominant idiom across both `tpt-dsp` API patterns (free functions on slices; structs with pre-allocated scratch), per `ARCHITECTURE.md` §3.1
 * [ ] deterministic execution bounds where possible
 
 ## Offline
@@ -511,7 +572,7 @@ Define explicit execution profiles.
 * [ ] parallel processing permitted
 * [ ] expensive RDO permitted
 
-Document which DSP APIs satisfy which profile.
+Document which DSP APIs satisfy which profile. — partially satisfied: `tpt-dsp/ARCHITECTURE.md` §3 ("The real-time-safe / zero-allocation contract") documents per-API allocation behavior and known caveats, but doesn't use this section's Real-time/Offline profile framing explicitly.
 
 ---
 
@@ -519,47 +580,47 @@ Document which DSP APIs satisfy which profile.
 
 Define fundamental media data types.
 
-* [ ] `Timestamp`
-* [ ] `Duration`
-* [ ] `Timebase`
-* [ ] `Packet`
-* [ ] `Frame`
-* [ ] `AudioFrame`
-* [ ] `VideoFrame`
-* [ ] `Track`
-* [ ] `Stream`
-* [ ] `CodecId`
-* [ ] `CodecConfig`
-* [ ] `PixelFormat`
-* [ ] `SampleFormat`
-* [ ] `ChannelLayout`
-* [ ] `MediaType`
-* [ ] `Metadata`
+* [x] `Timestamp`
+* [x] `Duration`
+* [x] `Timebase`
+* [x] `Packet`
+* [x] `Frame`
+* [x] `AudioFrame`
+* [x] `VideoFrame`
+* [x] `Track`
+* [x] `Stream`
+* [x] `CodecId`
+* [x] `CodecConfig`
+* [x] `PixelFormat`
+* [x] `SampleFormat`
+* [x] `ChannelLayout`
+* [x] `MediaType`
+* [x] `Metadata`
 
 Support:
 
-* [ ] PTS
-* [ ] DTS
-* [ ] duration
-* [ ] keyframe/discontinuity flags
-* [ ] side data
-* [ ] codec-private data
-* [ ] per-track timebases
+* [x] PTS
+* [x] DTS
+* [x] duration
+* [x] keyframe/discontinuity flags
+* [x] side data
+* [x] codec-private data
+* [x] per-track timebases
 
 ---
 
 # 16. Timestamp Architecture
 
-* [ ] Define rational timebase
-* [ ] Avoid floating-point timestamps
-* [ ] Define timestamp conversion
-* [ ] Define overflow behavior
-* [ ] Define negative timestamp handling
+* [x] Define rational timebase
+* [x] Avoid floating-point timestamps
+* [x] Define timestamp conversion
+* [ ] Define overflow behavior — buggy: `rescale()` multiplies by `self.timebase.num` twice instead of `target.num`; `rescale_overflow_returns_none` fails
+* [ ] Define negative timestamp handling — `Add`/`Sub` silently fall back to `unwrap_or(self.ticks)` on overflow instead of saturating/erroring
 * [ ] Define discontinuities
 * [ ] Define clock domains
 * [ ] Define synchronization model
 * [ ] Add audio/video sync tests
-* [ ] Add long-duration timestamp tests
+* [x] Add long-duration timestamp tests
 
 ---
 
@@ -569,30 +630,30 @@ Create `tpt-media-bitstream`.
 
 ## Bit reader
 
-* [ ] arbitrary bit-width reads
-* [ ] bounded reads
-* [ ] alignment
-* [ ] peek
-* [ ] skip
-* [ ] EOF handling
-* [ ] malformed-input handling
+* [x] arbitrary bit-width reads
+* [x] bounded reads
+* [x] alignment
+* [x] peek
+* [x] skip
+* [x] EOF handling
+* [x] malformed-input handling
 
 ## Bit writer
 
-* [ ] arbitrary bit-width writes
-* [ ] alignment
-* [ ] flush
-* [ ] bounded capacity
-* [ ] deterministic output
+* [x] arbitrary bit-width writes
+* [x] alignment
+* [x] flush
+* [x] bounded capacity
+* [x] deterministic output
 
 ## Compression primitives
 
-* [ ] Huffman
-* [ ] Rice coding
-* [ ] range coder
+* [x] Huffman
+* [x] Rice coding
+* [x] range coder — re-verified 2026-09-07: all 4 range coder tests pass consistently (5 runs); see Known Issues' correction to the earlier "broken" finding
 * [ ] entropy utilities
-* [ ] canonical representations
-* [ ] malformed-input handling
+* [x] canonical representations
+* [x] malformed-input handling
 
 Do not move these into `tpt-dsp`.
 
@@ -613,16 +674,16 @@ Packet
 Frame
 ```
 
-* [ ] define codec discovery
-* [ ] define encoder lifecycle
-* [ ] define decoder lifecycle
-* [ ] define flush semantics
-* [ ] define drain semantics
-* [ ] define error model
-* [ ] define configuration model
-* [ ] define capability discovery
-* [ ] define hardware/SIMD capability exposure
-* [ ] define real-time capability
+* [x] define codec discovery
+* [x] define encoder lifecycle
+* [x] define decoder lifecycle
+* [x] define flush semantics
+* [ ] define drain semantics — only `flush()` exists; no distinct drain concept
+* [x] define error model
+* [x] define configuration model
+* [x] define capability discovery
+* [x] define hardware/SIMD capability exposure
+* [x] define real-time capability
 * [ ] define supported formats
 
 ---
@@ -631,15 +692,15 @@ Frame
 
 All decoders must support bounded resources.
 
-* [ ] maximum frame dimensions
-* [ ] maximum packet size
+* [ ] maximum frame dimensions — `check_frame_bytes` exists but is never called by a real codec
+* [x] maximum packet size
 * [ ] maximum metadata size
-* [ ] maximum allocation
-* [ ] maximum reference frames
-* [ ] maximum recursion depth
-* [ ] maximum decode work where practical
-* [ ] cancellation support
-* [ ] malformed-input termination guarantees
+* [ ] maximum allocation — `check_allocation` exists but is never called by a real codec
+* [ ] maximum reference frames — `check_reference_frames` exists but is never called by a real codec
+* [ ] maximum recursion depth — `check_recursion_depth` exists but is never called by a real codec
+* [ ] maximum decode work where practical — `max_decode_micros` exists but is never called by a real codec
+* [ ] cancellation support — `CodecError::Cancelled` exists but nothing produces or checks a cancellation token
+* [x] malformed-input termination guarantees
 
 ---
 
@@ -658,9 +719,9 @@ header_size
 global_timebase
 ```
 
-* [ ] finalize binary representation
-* [ ] define endianness
-* [ ] define versioning
+* [x] finalize binary representation
+* [x] define endianness
+* [ ] define versioning — `version` field exists but `from_bytes` never checks it
 * [ ] define reserved fields
 * [ ] define compatibility rules
 
@@ -670,12 +731,12 @@ global_timebase
 
 Track metadata must include:
 
-* [ ] track ID
-* [ ] media type
-* [ ] codec ID
-* [ ] codec version
-* [ ] codec-private data
-* [ ] timebase
+* [x] track ID
+* [ ] media type — `index_trak` hardcodes `MediaType::Audio` for every track regardless of chunk contents
+* [x] codec ID
+* [ ] codec version — not written as a separate field, only inside the opaque codec-private blob
+* [x] codec-private data
+* [ ] timebase — not serialized by TRAK; would have to be smuggled into codec-private data
 * [ ] sample rate where applicable
 * [ ] channel layout where applicable
 * [ ] dimensions where applicable
@@ -688,14 +749,14 @@ Track metadata must include:
 
 Clusters should support:
 
-* [ ] timestamp
-* [ ] duration
-* [ ] track ID
-* [ ] PTS
-* [ ] DTS
-* [ ] keyframe flag
-* [ ] discontinuity flag
-* [ ] payload
+* [x] timestamp
+* [ ] duration — not present in the CLUS layout
+* [x] track ID
+* [ ] PTS — one timestamp field stands in for both PTS and DTS; not distinctly modeled
+* [ ] DTS — `next_packet` sets `pkt.dts = pkt.pts` unconditionally, not an independently stored value
+* [x] keyframe flag
+* [ ] discontinuity flag — the second flags bit is actually `END_OF_FRAME`, not discontinuity
+* [x] payload
 * [ ] optional checksum
 
 ---
@@ -704,11 +765,11 @@ Clusters should support:
 
 Do not require scanning the entire file for normal seeking.
 
-* [ ] define index structure
-* [ ] index keyframes
-* [ ] index cluster offsets
-* [ ] support per-track indexes
-* [ ] support time-based lookup
+* [x] define index structure
+* [x] index keyframes
+* [x] index cluster offsets
+* [ ] support per-track indexes — code's own comment says this is reserved, not yet consumed
+* [x] support time-based lookup
 * [ ] support offset-based lookup
 * [ ] define index versioning
 * [ ] define recovery behavior
@@ -717,16 +778,16 @@ Do not require scanning the entire file for normal seeking.
 
 # 24. Container Robustness
 
-* [ ] corruption detection
-* [ ] truncated-file handling
-* [ ] incomplete final cluster handling
-* [ ] unknown chunk skipping
-* [ ] forward-compatible chunk types
+* [x] corruption detection
+* [x] truncated-file handling
+* [ ] incomplete final cluster handling — only incidentally covered by the generic truncation path, no dedicated logic/test
+* [x] unknown chunk skipping
+* [ ] forward-compatible chunk types — only incidentally covered by the generic unknown-chunk path, no dedicated logic/test
 * [ ] checksum support
 * [ ] append mode
 * [ ] live-stream mode
 * [ ] recovery/index rebuilding
-* [ ] fuzz testing
+* [ ] fuzz testing — no fuzz harness exists anywhere in the repo
 
 ---
 
@@ -816,21 +877,21 @@ Target:
 
 ## DSP
 
-* [ ] MDCT via `tpt-dsp`
-* [ ] windowing via `tpt-dsp`
-* [ ] quantisation
+* [x] MDCT via `tpt-dsp`
+* [x] windowing via `tpt-dsp`
+* [x] quantisation
 * [ ] optional perceptual weighting
 
 ## Codec
 
-* [ ] define frame sizes
-* [ ] define bitstream
-* [ ] define modes
-* [ ] define quantisation
-* [ ] implement encoder
-* [ ] implement decoder
-* [ ] implement PLC
-* [ ] test packet loss
+* [x] define frame sizes
+* [x] define bitstream
+* [ ] define modes — Pulse has no distinct "modes" concept
+* [x] define quantisation
+* [x] implement encoder
+* [x] implement decoder
+* [x] implement PLC
+* [ ] test packet loss — the PLC test only checks `conceal()` returns a frame of the right sample count, not an actual drop-and-conceal stream scenario
 * [ ] test jitter
 * [ ] benchmark latency
 * [ ] benchmark CPU usage
@@ -857,24 +918,24 @@ lossy
 
 ## Lossless
 
-* [ ] LPC
-* [ ] residual
-* [ ] Rice coding
-* [ ] block structure
+* [x] LPC
+* [x] residual
+* [ ] Rice coding — actually implements Exp-Golomb (`write_exp_golomb`/`read_exp_golomb`); doc comment incorrectly claims Rice coding via `tpt-media-bitstream`, see Known Issues
+* [x] block structure
 * [ ] checksum/integrity
-* [ ] bit-exact round trip
+* [x] bit-exact round trip
 
 ## Lossy
 
-* [ ] MDCT
+* [x] MDCT
 * [ ] psychoacoustic model
 * [ ] Bark bands
 * [ ] masking
-* [ ] quantisation
+* [x] quantisation
 * [ ] noise shaping
 * [ ] stereo model if required
-* [ ] encoder
-* [ ] decoder
+* [x] encoder
+* [x] decoder
 
 Use `f64` only where justified by measurable quality requirements.
 
@@ -1467,15 +1528,15 @@ Avoid cyclic dependencies.
 
 Before 0.1:
 
-* [ ] workspace builds
-* [ ] CI operational
-* [ ] basic media model
-* [ ] timestamp model
-* [ ] bitstream primitives
-* [ ] container prototype
-* [ ] one working codec
+* [x] workspace builds — `cargo check --workspace` is clean
+* [ ] CI operational — workflows exist but `cargo test --workspace` currently fails 2 of 12 test binaries; would be red today
+* [x] basic media model
+* [ ] timestamp model — blocked on the `rescale` overflow bug, see Known Issues
+* [x] bitstream primitives — the range coder finding was corrected 2026-09-07 (all bitstream tests pass); this gate item was blocked only on that
+* [x] container prototype
+* [x] one working codec — Pulse and Aura both have real, signal-preserving encode/decode round trips
 * [ ] fuzz infrastructure
-* [ ] documentation baseline
+* [ ] documentation baseline — substantial docs exist but describe the aspirational architecture, not current state; not yet audited for accuracy
 
 Before 0.2:
 

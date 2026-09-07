@@ -1,0 +1,21 @@
+[package]
+name = "tpt-media-pipeline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Node-based media pipeline (Source -> Demux -> Decode -> Filter -> Encode -> Mux -> Sink)."
+
+[dependencies]
+tpt-media-core = { workspace = true }
+tpt-media-codec = { workspace = true }
+tpt-media-container = { workspace = true }
+
+[features]
+default = ["std"]
+std = []

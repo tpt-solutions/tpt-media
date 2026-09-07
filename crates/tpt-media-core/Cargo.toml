@@ -1,0 +1,24 @@
+[package]
+name = "tpt-media-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Shared media data types for the tpt-media stack (timestamps, packets, frames, tracks, metadata)."
+
+[dependencies]
+tpt-media-bitstream = { workspace = true }
+thiserror = { workspace = true }
+bitflags = { workspace = true }
+
+[features]
+default = ["std"]
+std = []
+
+[lib]
+path = "src/lib.rs"

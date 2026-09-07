@@ -1,0 +1,19 @@
+[package]
+name = "tpt-media-bitstream"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Zero-allocation bit reader/writer and entropy coding for tpt-media."
+
+[dependencies]
+thiserror = { workspace = true }
+
+[features]
+default = ["std"]
+std = []

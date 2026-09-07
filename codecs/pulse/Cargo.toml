@@ -1,0 +1,23 @@
+[package]
+name = "tpt-audio-pulse"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Pulse: TPT native real-time low-latency audio codec (MDCT + scalar quantisation + PLC)."
+
+[dependencies]
+tpt-media-core = { workspace = true }
+tpt-media-bitstream = { workspace = true }
+tpt-media-codec = { workspace = true }
+tpt-dsp-core = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+
+[features]
+default = ["std"]
+std = []
