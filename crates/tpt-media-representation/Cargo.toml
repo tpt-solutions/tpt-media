@@ -1,0 +1,17 @@
+[package]
+name = "tpt-media-representation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Swappable media representation contracts (analysis/synthesis, quantisation, rate/distortion, sparsity) for the tpt-media representation-research platform."
+
+[dependencies]
+
+[lib]
+path = "src/lib.rs"

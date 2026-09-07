@@ -3,14 +3,20 @@
 //! ## Modes
 //!
 //! - **Lossless** — linear-predictive coding (LPC) up to order 32
-//!   followed by Rice-coded residuals. Bit-exact round-trip.
+//!   followed by Exp-Golomb-coded residuals (zigzag-mapped). Bit-exact
+//!   round-trip.
 //! - **Lossy** — large-window MDCT (2048/4096) with Bark-band
 //!   quantisation. Uses `f64` internally.
 //!
 //! This v0.1 implementation includes:
 //!
 //! - Autocorrelation-based LPC analysis (Levinson-Durbin recursion).
-//! - Rice-coded residuals (delegated to `tpt-media-bitstream`).
+//! - Exp-Golomb-coded residuals (a tiny local `write_exp_golomb` /
+//!   `read_exp_golomb`, NOT the `Rice` coder in `tpt-media-bitstream` —
+//!   see `Known Issues` in `todo.md`; the v0.1 wire format uses
+//!   Exp-Golomb and changing it would break every existing packet, so
+//!   the doc is being brought into line with the code rather than vice
+//!   versa).
 //! - MDCT analysis and synthesis.
 //!
 //! See `docs/provenance.md` for algorithm sources.

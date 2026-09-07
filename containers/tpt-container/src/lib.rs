@@ -296,6 +296,7 @@ impl<'a> Container for TptDemuxer<'a> {
                 pkt.data = payload.to_vec();
                 if flags & 0x01 != 0 { pkt.flags |= PacketFlags::KEYFRAME; }
                 if flags & 0x02 != 0 { pkt.flags |= PacketFlags::END_OF_FRAME; }
+                if flags & 0x04 != 0 { pkt.flags |= PacketFlags::DISCONTINUITY; }
                 return Ok(pkt);
             }
         }
@@ -354,7 +355,8 @@ pub fn build_tpt(timebase: Timebase, tracks: &[(u8, &[u8; 4], &[u8])], packets: 
     }
     for p in packets {
         let flags = if p.is_keyframe() { 0x01 } else { 0 }
-            | if p.flags.contains(PacketFlags::END_OF_FRAME) { 0x02 } else { 0 };
+            | if p.flags.contains(PacketFlags::END_OF_FRAME) { 0x02 } else { 0 }
+            | if p.is_discontinuity() { 0x04 } else { 0 };
         let ts = p.pts.ticks as u64;
         m.add_cluster(ts, flags, p.track_id, &p.data);
     }
@@ -468,5 +470,40 @@ mod tests {
         let bytes = build_tpt(Timebase::MILLISECONDS, &tracks, &packets);
         let (_h, _t, decoded) = parse_tpt(&bytes).unwrap();
         assert_eq!(decoded.len(), 2);
+    }
+
+    #[test]
+    fn discontinuity_flag_round_trips_through_container() {
+        // Regression test for the "second flags bit is actually
+        // END_OF_FRAME, not discontinuity" issue from todo.md §22:
+        // a packet marked DISCONTINUITY must round-trip through the v1
+        // `.tpt` wire format and arrive back with the flag still set.
+        let tracks: [(u8, &[u8; 4], &[u8]); 1] = [(0, b"PULS", &[])];
+        let packets = vec![
+            Packet {
+                data: vec![0xAB],
+                pts: Timestamp { ticks: 0, timebase: Timebase::MILLISECONDS },
+                dts: Timestamp { ticks: 0, timebase: Timebase::MILLISECONDS },
+                flags: PacketFlags::DISCONTINUITY | PacketFlags::KEYFRAME,
+                track_id: 0,
+                duration: None,
+            },
+            Packet {
+                data: vec![0xCD],
+                pts: Timestamp { ticks: 100, timebase: Timebase::MILLISECONDS },
+                dts: Timestamp { ticks: 100, timebase: Timebase::MILLISECONDS },
+                flags: PacketFlags::END_OF_FRAME,
+                track_id: 0,
+                duration: None,
+            },
+        ];
+        let bytes = build_tpt(Timebase::MILLISECONDS, &tracks, &packets);
+        let (_h, _t, decoded) = parse_tpt(&bytes).unwrap();
+        assert_eq!(decoded.len(), 2);
+        assert!(decoded[0].is_discontinuity());
+        assert!(decoded[0].is_keyframe());
+        assert!(!decoded[0].is_end_of_frame());
+        assert!(!decoded[1].is_discontinuity());
+        assert!(decoded[1].is_end_of_frame());
     }
 }

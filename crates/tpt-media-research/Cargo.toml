@@ -1,0 +1,19 @@
+[package]
+name = "tpt-media-research"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Representation-research harness for tpt-media: synthetic signals, rate/distortion + sparsity measurement, and alternative video representations benchmarked against conventional block-transform coding."
+
+[dependencies]
+tpt-media-representation = { workspace = true }
+tpt-dsp-core = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+criterion = "0.8"

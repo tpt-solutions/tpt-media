@@ -9,6 +9,7 @@
 //! - [`huffman`]: canonical Huffman encoder/decoder.
 //! - [`rice`]: Rice/Golomb coder.
 //! - [`range`]: static range coder.
+//! - [`entropy`]: Shannon entropy, histogram, and distribution helpers.
 //!
 //! All types in this crate are allocation-free at runtime: they
 //! operate on caller-owned buffers.
@@ -24,6 +25,7 @@ mod bit_writer;
 pub mod huffman;
 pub mod rice;
 pub mod range;
+pub mod entropy;
 
 pub use bit_reader::{BitReader, BitstreamError};
 pub use bit_writer::{BitWriter, WriteError};

@@ -26,6 +26,7 @@ mod metadata;
 mod packet;
 mod pixel_format;
 mod sample_format;
+mod sync;
 mod timebase;
 mod track;
 
@@ -36,14 +37,15 @@ pub use metadata::{Metadata, MetadataKey, MetadataValue};
 pub use packet::{Packet, PacketFlags};
 pub use pixel_format::PixelFormat;
 pub use sample_format::SampleFormat;
+pub use sync::{ClockDomain, SyncError, SyncMap, SyncPoint};
 pub use timebase::{Duration, Timebase, Timestamp};
 pub use track::{MediaType, Stream, Track};
 
 /// Convenience re-exports of common items.
 pub mod prelude {
     pub use crate::{
-        AudioFrame, ChannelLayout, CodecConfig, CodecId, Duration, Frame, MediaType, Metadata,
-        Packet, PacketFlags, PixelFormat, SampleFormat, Stream, Timebase, Timestamp, Track,
-        VideoFrame,
+        AudioFrame, ChannelLayout, ClockDomain, CodecConfig, CodecId, Duration, Frame,
+        MediaType, Metadata, Packet, PacketFlags, PixelFormat, SampleFormat, Stream,
+        SyncError, SyncMap, SyncPoint, Timebase, Timestamp, Track, VideoFrame,
     };
 }

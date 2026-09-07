@@ -20,29 +20,57 @@
   reproduced. Flipped §17's `range coder` box back to done; treat the
   original finding as unconfirmed/stale rather than re-flagging it without
   evidence.
-* **`Timestamp::rescale` overflow detection is wrong.** It multiplies by
-  `self.timebase.num` twice instead of by `target.num`, so
-  `rescale_overflow_returns_none` fails — a case that should overflow
-  does not.
-* **Aura's residual coding is Exp-Golomb, not Rice**, despite the doc
-  comment claiming Rice coding delegated to `tpt-media-bitstream`. Fix
-  the code or the comment.
-* **`CHANGELOG.md`'s `[Unreleased]` entry overstates scope.** It lists
-  `apps/`, `ffi/`, `tpt-cli`, `tpt-web`, `tpt-media-sys`, and
-  `tpt-video-{livelink,vault,whisper}` as added; none of these exist on
-  disk or in `Cargo.toml`'s workspace members. Reconcile before next
-  release notes.
-* `cargo test --workspace` currently has 1 failing test binary
-  (`tpt-media-core`, the `rescale` bug above) — `tpt-media-bitstream` now
-  passes in full (see the range-coder correction above).
+* ~~**`Timestamp::rescale` overflow detection is wrong.**~~ **Fixed
+  2026-09-07 (later same day):** the conversion used `self.timebase.num`
+  in both factors of the numerator, which both produced wrong results
+  and masked real overflows. Math re-derived from first principles,
+  corrected to `new = ticks · self.timebase.num · target.den /
+  (self.timebase.den · target.num)`, and the existing
+  `rescale_overflow_returns_none` test (which used `i64::MAX` µs → 90
+  kHz and fit even with the bug) replaced with one whose inputs
+  actually overflow `i64`, plus a new sanity check asserting 1 s → 90
+  kHz = exactly 90 000 ticks. See `CHANGELOG.md` `[Unreleased] / Fixed`.
+* ~~**Aura's residual coding is Exp-Golomb, not Rice.**~~ **Fixed
+  2026-09-07 (later same day):** brought the doc comment into line
+  with the code (Exp-Golomb-coded residuals with `write_exp_golomb` /
+  `read_exp_golomb` in-crate, zigzag-mapped). Switching the wire
+  format to Rice would be a separate, breaking change and is still
+  tracked as the §974 unchecked item.
+* ~~**`CHANGELOG.md`'s `[Unreleased]` entry overstates scope.**~~
+  **Fixed 2026-09-07 (later same day):** removed the
+  not-yet-on-disk claims about `apps/`, `ffi/`, `tpt-cli`, `tpt-web`,
+  `tpt-media-sys`, and `tpt-video-{livelink,vault,whisper}`, replaced
+  with an honest note that they're target structure pending
+  implementation, and added a `### Fixed` section summarising the
+  `Timestamp::rescale` and Aura doc-comment corrections.
+* `cargo test --workspace` currently has 0 failing test binaries
+  (the `rescale` bug above was the last one — `tpt-media-core`'s
+  timebase module and `tpt-media-bitstream` both pass in full).
 * **2026-09-07 tpt-dsp reconciliation**: verified §3–§14 against the
   sibling `tpt-dsp` repo's actual code (`tpt-dsp-core/src/*.rs`). MDCT
   (§5.1) and LPC (§6) are genuinely implemented and consumed by
   Pulse/Aura — flipped below. Pitch analysis (§7), VQ (§8), LSP/LSF
-  (§9), psychoacoustics (§10), and noise shaping (§11) remain **entirely
-  absent** from `tpt-dsp-core` — confirmed by grep, no matches. §12
-  (Numerical Contracts) is left unchecked as a cross-cutting gate since
-  it can't be satisfied while VQ/psychoacoustics don't exist yet.
+  (§9), psychoacoustics (§10), and noise shaping (§11) were **entirely
+  absent** from `tpt-dsp-core` at the time — confirmed by grep, no
+  matches. **Update, same day, later sessions**: all five have since
+  been implemented (see their own sections below); this line is kept for
+  history rather than silently deleted.
+* **2026-09-07 — a real sign error in the first noise-shaping
+  implementation (§11), caught by a test, not by review.** The first
+  version fed back the past quantization error by *adding* it
+  (`shaped = input + predicted_error`); this compiles fine and even
+  passes a shallow smoke test, but for a constant input it converges to
+  a fixed point after one step and gets stuck there forever (a
+  degenerate limit cycle) — it doesn't do anything a plain memoryless
+  quantizer doesn't. A DC-tracking test (checking the shaped output's
+  long-run average recovers the true constant, the classic delta-sigma
+  demonstration) failed with `shaped avg error = plain avg error`
+  exactly, which forced re-deriving the standard `NTF=1-z⁻¹` formula from
+  scratch — the correct sign *subtracts* the fed-back error. Worth
+  remembering: a noise-shaping/error-feedback filter with the wrong
+  feedback sign still type-checks, still runs, and can still look
+  plausible in a quick check; only a test of the property the filter is
+  actually *for* (here, DC-averaging accuracy) caught it.
 * **2026-09-07 (later same day) — fixed a real precision bug in
   `tpt-dsp-core` that affects Pulse/Aura directly.** Implementing
   `FastMdctPlan`/`FastDctIvPlan` (FFT-backed, see §5.1/§5.2 below) and
@@ -415,15 +443,15 @@ synthesize()
 
 Required primarily by Vox and potentially useful elsewhere.
 
-* [ ] Define pitch-analysis API
-* [ ] Implement autocorrelation pitch estimator
-* [ ] Implement AMDF estimator
-* [ ] Define pitch period range
-* [ ] Define voiced/unvoiced detection
-* [ ] Add confidence metric
-* [ ] Add tests using synthetic signals
-* [ ] Add speech corpus tests
-* [ ] Benchmark
+* [x] Define pitch-analysis API — `tpt-dsp-core/src/pitch.rs`: `PitchEstimate<F>{period_samples: Option<usize>, confidence, voiced}` + `frequency_hz()` helper
+* [x] Implement autocorrelation pitch estimator — `autocorrelation_pitch`, normalized `Σx[n]x[n+lag]/Σx[n]²`, argmax over the search range. Biases the argmax toward the *shortest* near-tied lag (an absolute margin) to avoid the classic "octave error": a signal periodic at N is, by construction, also periodic at 2N/3N/..., and a naive global argmax can pick a harmonic instead of the fundamental on floating-point noise alone — this was caught by the test below actually returning the wrong (doubled) period before the fix
+* [x] Implement AMDF estimator — `amdf_pitch`, `mean(|x[n]-x[n+lag]|)`, argmin over the search range. Same octave-error concern and fix, but scaled to the AMDF range observed so far rather than a fixed margin, since AMDF's "good" values cluster near zero rather than near a bounded ceiling
+* [x] Define pitch period range — `hz_range_to_period_samples(sample_rate, min_f0_hz, max_f0_hz)` + `SPEECH_MIN_F0_HZ`/`SPEECH_MAX_F0_HZ` (50-500Hz) constants
+* [x] Define voiced/unvoiced detection — threshold on `confidence` against a caller-supplied `voiced_threshold` (`DEFAULT_VOICED_THRESHOLD = 0.3`, literature-typical); `period_samples` is `None` when unvoiced so callers can't accidentally use a meaningless lag
+* [x] Add confidence metric — autocorrelation: normalized peak value; AMDF: `1 - min/max` of the AMDF values seen across the search range
+* [x] Add tests using synthetic signals — `autocorrelation_pitch_recovers_known_period`/`amdf_pitch_recovers_known_period` (known-frequency sine), `silence_is_unvoiced_for_both_estimators`, `hash_noise_is_unvoiced_for_both_estimators` (SplitMix64 PRNG — a simpler per-index hash was tried first and rejected because it still had short-range structure `autocorrelation_pitch` could lock onto, a real false-positive risk worth documenting)
+* [ ] Add speech corpus tests — no real speech corpus is available in this environment; only synthetic signals are tested. Left honestly unchecked rather than substituting a synthetic proxy for what this item actually asks
+* [x] Benchmark — `tpt-dsp-core/benches/dsp_bench.rs::bench_pitch`, both estimators, at a Vox-realistic 16kHz/40ms frame over the full speech F0 range; ~53µs each (0.13% of the frame budget) — see `BENCHMARKS.md`
 
 ---
 
@@ -431,17 +459,17 @@ Required primarily by Vox and potentially useful elsewhere.
 
 Required by Vox and Whisper.
 
-* [ ] Define generic VQ API
-* [ ] Implement nearest-vector search
-* [ ] Implement distance metrics
-* [ ] Implement fixed-size codebooks
-* [ ] Implement encoder
-* [ ] Implement decoder
-* [ ] Support caller-owned buffers
-* [ ] Add deterministic behavior
-* [ ] Add optional accelerated search
-* [ ] Benchmark linear search
-* [ ] Investigate tree/product quantisation for larger codebooks
+* [x] Define generic VQ API — `tpt-dsp-core/src/vq.rs`: flat-codebook convention (`entries*dim`), `DistanceMetric` enum, free functions + `VqCodebook` owning wrapper (`alloc`-gated)
+* [x] Implement nearest-vector search — `nearest_vector`, linear scan, deterministic lowest-index tie-break
+* [x] Implement distance metrics — `DistanceMetric::{SquaredEuclidean, Manhattan}`; `metrics_can_disagree_on_ranking` test proves they're genuinely distinct, not accidentally identical
+* [x] Implement fixed-size codebooks — flat `&[F]` convention (`codebook.len() == entries*dim`) for the free functions; `VqCodebook` for owned storage
+* [x] Implement encoder — `vq_encode`
+* [x] Implement decoder — `vq_decode`
+* [x] Support caller-owned buffers — all free functions take caller-provided output slices, no internal allocation
+* [x] Add deterministic behavior — `ties_break_toward_lowest_index_and_are_deterministic` (exact-tie input, repeated calls agree)
+* [x] Add optional accelerated search — `nearest_vector_accelerated`: early-exit once a codeword's partial distance sum can't beat the current best (both metrics accumulate non-negative terms, so this is always safe). Proven bit-identical to the linear scan (`accelerated_matches_linear_search`, 2 metrics × 20 random queries against a 40-entry codebook), not just "usually agrees" — ~3-3.6× faster at Vox's/Whisper's target codebook sizes (data-dependent, see `BENCHMARKS.md`)
+* [x] Benchmark linear search — `tpt-dsp-core/benches/dsp_bench.rs::bench_vq`, linear vs accelerated, at (1024,10) and (4096,16) — Vox's/Whisper's own target codebook sizes (§31/§34); results in `BENCHMARKS.md`
+* [ ] Investigate tree/product quantisation for larger codebooks — intentionally not implemented: no concrete consumer (Whisper doesn't exist yet) to validate requirements against, same reasoning as holding off on §5.3's 2D transforms
 
 VQ itself belongs in DSP.
 
@@ -453,14 +481,14 @@ The codec-specific codebook belongs in the codec.
 
 Useful for speech coding.
 
-* [ ] Define LSP representation
-* [ ] Define LSF representation
-* [ ] LPC → LSP conversion
-* [ ] LSP → LPC conversion
-* [ ] Stability validation
-* [ ] Interpolation
-* [ ] Quantisation support
-* [ ] Tests
+* [x] Define LSP representation — `tpt-dsp-core/src/lsp.rs`: `p` strictly-increasing frequencies in radians `(0,π)`, alternating between the P/Q root families
+* [x] Define LSF representation — `lsp_rad_to_lsf_hz`/`lsf_hz_to_lsp_rad`: the same frequencies in Hz (`rad * sample_rate/2π`)
+* [x] LPC → LSP conversion — `lpc_to_lsp`: builds the symmetric/antisymmetric `P(z)`/`Q(z)` polynomials and finds their interlacing roots via a direct evaluate-and-bisect grid search (not the classical Chebyshev-recursion formulation — chosen because it needs no extra scratch/coefficient transform and is directly testable against `lsp_to_lpc`)
+* [x] LSP → LPC conversion — `lsp_to_lpc`: rebuilds `P(z)`/`Q(z)` from the interlacing roots (`A = (P+Q)/2`); round-trips exactly against `lpc_to_lsp` at LPC orders 2, 4, 10, 20, and 32 (Aura's max)
+* [x] Stability validation — `lsp_is_stable`: strictly increasing, all in `(0,π)`, even length — exactly the condition under which `lsp_to_lpc` reconstructs a stable filter
+* [x] Interpolation — `lsp_interpolate`; test proves the practical reason LSP exists (a convex combination of two stable LSP sets is itself stable, unlike interpolating raw LPC coefficients)
+* [x] Quantisation support — `lsp_quantize_uniform`: uniform per-coefficient quantization with an ordering safeguard (nudges a colliding value past its predecessor) — naive independent quantization can otherwise collapse two close LSPs to the same level and silently produce an unstable filter
+* [x] Tests — round trip (5 orders), stability-rejection, interpolation-preserves-stability, quantization-preserves-ordering-under-collision, LSF conversion
 
 ---
 
@@ -470,22 +498,22 @@ Required primarily by Aura.
 
 ## 10.1 Frequency scales
 
-* [ ] Bark scale
-* [ ] critical-band mapping
-* [ ] ERB utilities if useful
-* [ ] frequency ↔ Bark conversion
-* [ ] band aggregation
+* [x] Bark scale — `tpt-dsp-core/src/bark.rs::hz_to_bark`, Traunmüller (1990) formula with low/high-frequency corrections; matches known reference points (1kHz≈8.5 Bark, 5kHz≈19 Bark)
+* [x] critical-band mapping — `fft_bin_bark_bands`: maps every FFT bin to its Bark band index for a given sample rate/FFT size
+* [x] ERB utilities if useful — `erb_bandwidth`/`hz_to_erb_rate`/`erb_rate_to_hz` (Glasberg & Moore, 1990); the ERB-rate formula's `log10` is directly (exactly) invertible, unlike Bark's corrected formula which needs `bark_to_hz`'s bisection
+* [x] frequency ↔ Bark conversion — `hz_to_bark`/`bark_to_hz` (the latter via bisection, since the corrected formula has no closed-form inverse)
+* [x] band aggregation — `aggregate_bands`: sums per-bin spectrum values into their assigned Bark band
 
 ## 10.2 Psychoacoustic primitives
 
-* [ ] threshold-in-quiet model
-* [ ] tonal/noise classification
-* [ ] spectral spreading
-* [ ] simultaneous masking
-* [ ] masking threshold
-* [ ] perceptual weighting
-* [ ] model validation
-* [ ] benchmark
+* [x] threshold-in-quiet model — `tpt-dsp-core/src/psychoacoustic.rs::threshold_in_quiet`, Terhardt (1979) approximation; test confirms the ear is most sensitive around 3kHz vs. 100Hz/15kHz
+* [x] tonal/noise classification — `is_tonal_peak`/`classify_tonal_bins`: a local-peak-with-prominence test (simplified vs. MPEG psychoacoustic model 1's frequency-region-specific neighbor windows, documented as such)
+* [x] spectral spreading — `spreading_function_db`, Schroeder (1979); peaks exactly at `dz=0` (verified via the formula's own calculus, not just assumed) and decays in both directions
+* [x] simultaneous masking — `simultaneous_masking`: spreads every masker band's energy across the Bark axis with the standard tonal (`14.5+z` dB) or noise (`5.5` dB constant) offset
+* [x] masking threshold — `combined_threshold_db`: max of the spread masking excitation and the threshold in quiet
+* [x] perceptual weighting — `perceptual_weight_db`: signal-to-mask ratio (SMR) in dB
+* [x] model validation — integration test: a single loud tonal masker at 1kHz raises the combined threshold >10dB above quiet near itself, and the threshold is higher near the masker than several critical bands away
+* [x] benchmark — `tpt-dsp-core/benches/dsp_bench.rs::bench_psychoacoustic`: `simultaneous_masking` across all 25 audible Bark bands (6.72µs), `classify_tonal_bins` over a 1024-bin spectrum (594ns); results in `BENCHMARKS.md`
 
 These should be generic models, not Aura-specific implementations.
 
@@ -493,39 +521,73 @@ These should be generic models, not Aura-specific implementations.
 
 # 11. TPT-DSP — Noise Shaping
 
-* [ ] Define noise-shaping filter API
-* [ ] Implement generic noise-shaping filter
-* [ ] Support configurable orders
-* [ ] Validate stability
-* [ ] Add tests
-* [ ] Add benchmark
+* [x] Define noise-shaping filter API — `tpt-dsp-core/src/noise_shaping.rs`: `noise_shape_step(input, feedback, error_history, quantize)`, error subtracted from input (not added — see below), caller-owned history
+* [x] Implement generic noise-shaping filter — `noise_shape_step` + `NoiseShaper` (`alloc`-gated owning wrapper); generic over any caller-supplied `quantize` closure, not tied to a specific quantization scheme
+* [x] Support configurable orders — order is just `feedback.len()` (`error_history` sized to match); tested at order 1 and 2
+* [x] Validate stability — `noise_shaper_is_stable`: round-to-nearest is self-limiting for *any* finite feedback gain (proven, not just tested, up to gain 1000), so the check has real content only for a `quantize` closure that isn't self-limiting — verified it correctly distinguishes a converging vs. diverging linear recursion for a deliberately non-self-limiting test quantizer
+* [x] Add tests — DC-tracking (shaped average recovers a non-quantizable constant almost exactly; plain quantization doesn't), bounded-cumulative-error (vs. plain quantization's linear growth), hand-computed history shift/update, both stability-check scenarios, wrapper-matches-free-function
+* [x] Add benchmark — `tpt-dsp-core/benches/dsp_bench.rs::bench_noise_shaping`, orders 1 and 16 (~4.9ns / ~16.5ns, scales linearly with order as expected); results in `BENCHMARKS.md`
 
 ---
 
 # 12. TPT-DSP — Numerical Contracts
 
-For every transform and numerical algorithm:
+**Audited 2026-09-07** against the actual code in `tpt-dsp-core/src/*.rs`,
+now that all 8 required algorithm families genuinely exist (they didn't
+when this section was last touched — see the Known Issues note above).
+This section's 9 items describe a *formal, uniform contract* across all
+8 families; the honest finding is that no single item is uniformly true
+across all 8, so each stays unchecked below with what's actually there:
 
-* [ ] Define input domain
-* [ ] Define output domain
-* [ ] Define normalization
-* [ ] Define precision
-* [ ] Define acceptable error
-* [ ] Define valid sizes
-* [ ] Define failure behavior
-* [ ] Define determinism expectations
-* [ ] Add reference tests
+* [ ] Define input domain — asserted (and panics documented) in every
+  module this session touched (`mdct`/`dct`/`lpc`/`vq`/`psychoacoustic`/
+  `bark`/`lsp`/`pitch`/`noise_shaping`, 6-8 `# Panics` sections each) but
+  `fft.rs` (pre-existing, untouched this session) asserts valid sizes
+  without a matching `# Panics` doc section — not a uniform contract yet
+* [ ] Define output domain — rarely stated explicitly anywhere (mostly
+  inferred from the input domain + the operation, e.g. "N inputs → N
+  outputs"); no module states an output *range* guarantee (e.g. "always
+  finite", "always in `[-1,1]`")
+* [ ] Define normalization — well documented for MDCT/DCT/LPC/VQ (this
+  session's convention docs spell out exact formulas); FFT's
+  forward/inverse normalization convention is only demonstrated via
+  tests (`inverse_roundtrip` dividing by `len`), not stated in prose
+* [ ] Define precision — no module states a formal precision contract
+  (e.g. "expect ~1e-6 relative error in f32"); all generic `F: Float`
+  code is silent on this, precision only shows up ad hoc as test
+  tolerances
+* [ ] Define acceptable error — same gap as precision: tolerances exist
+  per-test (`1e-4`, `1e-6`, `1e-9`, ...) but there's no single documented
+  policy for what tolerance a given algorithm/precision should target
+* [x] Define valid sizes — genuinely uniform: every module (including
+  `fft.rs`) asserts its size constraints (power-of-two, even order,
+  matching lengths, etc.) and panics rather than producing garbage
+* [x] Define failure behavior — uniform: every algorithm here panics on
+  invalid input (no silent wrong answers); `lpc_to_lsp` is the one
+  exception with a real non-panic failure mode (`bool` return when the
+  input isn't stable enough to find all roots), and that's documented
+* [ ] Define determinism expectations — implicit everywhere (pure
+  functions, no RNG, so trivially deterministic) but never *stated*;
+  §39/§40 elsewhere in this document cover determinism/SIMD-equivalence
+  at the workspace level, which is arguably the right place for this,
+  making a per-algorithm restatement here low-value
+* [x] Add reference tests — genuinely uniform and the strongest item:
+  every one of the 8 families below has a real reference/round-trip/
+  equivalence test with an explicit tolerance (FFT vs. naive DFT,
+  MDCT/DCT-IV fast-vs-direct, LPC round-trip through LSP, VQ
+  accelerated-vs-linear, psychoacoustic model validation, filters/
+  resampling have their own pre-existing tests)
 
 Required for:
 
-* [ ] FFT
-* [ ] DCT
-* [ ] MDCT
-* [ ] LPC
-* [ ] filters
-* [ ] resampling
-* [ ] VQ
-* [ ] psychoacoustic calculations
+* [ ] FFT — valid sizes/failure behavior/reference tests all present; no formal `# Panics` docs, no precision/normalization prose
+* [ ] DCT — same profile as FFT, plus the precision fix from §5.2 (angle-reduction) is documented in code but not as a formal "precision" contract
+* [ ] MDCT — the best-documented family in the crate (explicit convention, normalization, panics, numerical-guarantees paragraph, fast-vs-direct equivalence tests) but still lacks a stated precision/acceptable-error number
+* [ ] LPC — convention, stability behavior, and panics are documented; precision/acceptable-error still implicit-only
+* [ ] filters — pre-existing, only partially audited this session; has some `# Panics` sections but not comprehensive
+* [ ] resampling — pre-existing; has more `# Panics` sections than filters, but same precision/acceptable-error gap
+* [ ] VQ — convention, determinism, and panics documented; same precision/acceptable-error gap
+* [ ] psychoacoustic calculations — convention and panics documented (this is a modeling toolkit, not a pure-math transform, so "precision"/"acceptable error" apply less cleanly here than elsewhere)
 
 ---
 
@@ -536,8 +598,8 @@ Required for:
 * [x] Establish scalar reference implementations — `simd_scalar.rs`, the default/fallback path
 * [x] Establish SIMD equivalence tests — `simd_mul_matches_scalar`, `simd_add_matches_scalar`, `simd_magnitude_matches_scalar`, `simd_fft_matches_scalar_fft`
 * [x] Benchmark SIMD kernels — `dsp_bench.rs` `bench_simd_helpers` group
-* [ ] Document supported architectures — `core::simd` is portable/architecture-agnostic by design; no explicit x86/ARM support matrix is documented
-* [ ] Ensure runtime feature detection where appropriate — the existing detection (`build.rs`) is a compile-time nightly-vs-stable toolchain check, not a runtime CPU-feature (AVX2/NEON/etc.) check
+* [x] Document supported architectures — added `tpt-dsp` `ARCHITECTURE.md` §10 with an explicit x86/x86_64 (SSE2 baseline), ARM/AArch64 (NEON baseline), wasm32 and future-RISC-V support matrix, plus matching notes in `simd.rs`'s and `lib.rs`'s doc comments; also fixed a stale `ARCHITECTURE.md` line that still called the vectorised path "not started"
+* [x] Ensure runtime feature detection where appropriate — judged not appropriate and documented why in the same §10: `tpt-dsp-core` is `#![forbid(unsafe_code)]`, and the standard `is_x86_feature_detected!`/target-feature-multiversioning pattern requires an unsafe call site; separately, `core::simd` has no runtime-dispatch mode to begin with — wider ISAs (AVX2/AVX-512/SVE) are a build-time choice (`-C target-cpu`/`target-feature`) for whoever compiles the final binary, not something the library selects. The existing `build.rs` check remains a toolchain (nightly-vs-stable) probe, not a CPU-feature probe — noted explicitly as such
 * [x] Verify fallback behavior — `build.rs` only enables `tpt_portable_simd` on nightly; stable builds provably use the scalar path (documented in `dsp_bench.rs`'s own comment: "which is scalar by default")
 
 Potential targets:
@@ -558,21 +620,21 @@ Define explicit execution profiles.
 
 ## Real-time
 
-* [ ] no allocation — `tpt-dsp/ARCHITECTURE.md` §3.2 documents real caveats (async adapters allocate a `Vec` per frame; `AudioGraph` allocates at construction), so this is true in steady state for most paths but not unconditionally
-* [ ] no blocking
-* [ ] no I/O
-* [ ] no unbounded work — `tpt-dsp/ARCHITECTURE.md` §3.2 documents that `OutlierDetector::push` is O(n log n) per sample, not O(1)
-* [x] caller-owned memory — the dominant idiom across both `tpt-dsp` API patterns (free functions on slices; structs with pre-allocated scratch), per `ARCHITECTURE.md` §3.1
-* [ ] deterministic execution bounds where possible
+* [ ] no allocation — `tpt-dsp/ARCHITECTURE.md` §3.2/§11.2 documents real caveats (async adapters allocate a `Vec` per frame; `IirFilter`/`Eq` reallocate scratch the first time a block exceeds every prior size seen), so this is true in steady state for most paths but not unconditionally
+* [ ] no blocking — `ARCHITECTURE.md` §11.2 documents two real exceptions: `SpscQueue`/`Producer`/`Consumer` deliberately also expose blocking `send`/`recv` alongside the real-time-safe `try_send`/`try_recv`, and `tpt-dsp-analysis::async_adapters` blocks on an async runtime (`block_on`/`.await`) by design as a streaming/offline adapter
+* [ ] no I/O — `ARCHITECTURE.md` §11.2 confirms this holds unconditionally for `tpt-dsp-core`/`-audio`/`-analysis`/`-control` (no file/socket/serial/audio-device access in any of the four), but not for the workspace as a whole: `tpt-dsp-io` is entirely I/O by design (`audio::run_output`/`run_input`, `serial::SerialReader`, `tcp::serve_iq`) — those are driver/setup functions that call into a real-time-safe processing closure, not processing functions themselves
+* [ ] no unbounded work — `tpt-dsp/ARCHITECTURE.md` §3.2/§11.2 documents that `OutlierDetector::push` is O(n log n) per sample, not O(1); also names `tpt-dsp-io::IqStream::feed`'s unbounded buffer growth (if `drain` is never called) as the other exception in the workspace
+* [x] caller-owned memory — the dominant idiom across both `tpt-dsp` API patterns (free functions on slices; structs with pre-allocated scratch), per `ARCHITECTURE.md` §3.1/§11.2, with no known exception anywhere in the workspace
+* [x] deterministic execution bounds where possible — `ARCHITECTURE.md` §11.2 confirms every loop in `tpt-dsp-core`/`-audio`/`-analysis`/`-control` terminates within a bound computable from the input size or a fixed constant (FFT/DCT bounded by `n`, `lsp.rs`'s root search bounded by a fixed `grid_points` plus an unconditional 40-iteration bisection, `simd.rs`'s vectorised loops by `len`); no polling loop, `while true`, or unbounded recursion exists — this is a worst-case-boundedness criterion, so it holds even where the stricter "no unbounded work" criterion above does not (e.g. `OutlierDetector`'s data-independent O(n log n) sort)
 
 ## Offline
 
-* [ ] dynamic allocation permitted
-* [ ] larger scratch buffers permitted
-* [ ] parallel processing permitted
-* [ ] expensive RDO permitted
+* [x] dynamic allocation permitted — defined as an explicit Offline-profile permission in `ARCHITECTURE.md` §11.1
+* [x] larger scratch buffers permitted — defined as an explicit Offline-profile permission in `ARCHITECTURE.md` §11.1
+* [x] parallel processing permitted — defined as an explicit Offline-profile permission in `ARCHITECTURE.md` §11.1 (not yet exercised by any current API, but explicitly allowed)
+* [x] expensive RDO permitted — defined as an explicit Offline-profile permission in `ARCHITECTURE.md` §11.1 (not yet exercised by any current API, but explicitly allowed)
 
-Document which DSP APIs satisfy which profile. — partially satisfied: `tpt-dsp/ARCHITECTURE.md` §3 ("The real-time-safe / zero-allocation contract") documents per-API allocation behavior and known caveats, but doesn't use this section's Real-time/Offline profile framing explicitly.
+Document which DSP APIs satisfy which profile. — satisfied: `tpt-dsp/ARCHITECTURE.md` §11 defines both profiles explicitly (§11.1), states where each Real-time criterion currently holds or doesn't with the specific exception (§11.2), and classifies every public API across all five crates plus `tpt-dsp-viz` into Real-time or Offline in a per-crate table (§11.3), using this section's own Real-time/Offline framing directly.
 
 ---
 
@@ -614,12 +676,12 @@ Support:
 * [x] Define rational timebase
 * [x] Avoid floating-point timestamps
 * [x] Define timestamp conversion
-* [ ] Define overflow behavior — buggy: `rescale()` multiplies by `self.timebase.num` twice instead of `target.num`; `rescale_overflow_returns_none` fails
-* [ ] Define negative timestamp handling — `Add`/`Sub` silently fall back to `unwrap_or(self.ticks)` on overflow instead of saturating/erroring
-* [ ] Define discontinuities
-* [ ] Define clock domains
-* [ ] Define synchronization model
-* [ ] Add audio/video sync tests
+* [x] Define overflow behavior — `rescale()` corrected 2026-09-07 (see Known Issues); `i128` intermediates with explicit `checked_mul` on every step, returns `None` on any overflow, identity-rescaling short-circuited. `rescale_overflow_returns_none` replaced with one whose inputs actually overflow `i64` (1 Hz → 90 kHz, 90 000× expansion); a sanity test (`1 s → 90 kHz == 90 000`) guards against the previous factor-swap bug
+* [x] Define negative timestamp handling — `Add`/`Sub` (Timestamp + Duration, Timestamp − Duration) now **saturate** to `i64::MAX`/`i64::MIN` in the direction of the signed Duration, instead of silently returning the unchanged left-hand side via `unwrap_or(self.ticks)`. New fallible variants `Timestamp::checked_add_duration` / `checked_sub_duration` return `Option<Timestamp>` for callers that genuinely need to detect overflow. Saturation direction is signed-duration-aware, not left-hand-side-aware (a positive duration saturates upward; a negative duration saturates downward), so `0 - Duration{-1} == +1` and `i64::MIN - Duration{+1} == i64::MIN`. Tests: `timestamp_add_duration_saturates_on_overflow`, `timestamp_sub_duration_saturates_on_overflow`, `timestamp_checked_{add,sub}_duration_propagates_none`, `timestamp_add_sub_negative_duration_round_trips`
+* [x] Define discontinuities — `PacketFlags::DISCONTINUITY` was already present in `tpt-media-core` but undocumented and not round-tripped through the v1 `.tpt` wire format (the "second flags bit is actually `END_OF_FRAME`, not discontinuity" finding in Known Issues). Now: full semantic doc comment on the flag, `Packet::is_discontinuity()` / `is_end_of_frame()` accessors added, `tpt-container` muxer and demuxer both round-trip bit 0x04. Test: `discontinuity_flag_round_trips_through_container`, plus `discontinuity_flag_accessor`, `end_of_frame_flag_accessor`, `packet_flags_are_independent`
+* [x] Define clock domains — new `tpt-media-core::sync::ClockDomain` (named `(String, Timebase)` pair; equality is by *name only*, deliberately, so two accidentally-similar timebases in different domains can't be silently equated). See `crates/tpt-media-core/src/sync.rs`
+* [x] Define synchronization model — `tpt-media-core::sync::{SyncPoint, SyncMap, SyncError}`. `SyncPoint` pins one moment in one `ClockDomain` to one moment in another; `SyncMap` collects pins and translates timestamps between domains by **linear interpolation** between adjacent pins, deliberately **rejecting extrapolation** (returns `SyncError::OutOfRange`) to prevent A/V drift bugs; `f64` arithmetic is confined to the API boundary (seconds), with `i64` ticks everywhere else. `DomainMismatch` covers wrong-timebase inputs. Test coverage: 12 sync tests including exact-pin-match, two-pin interpolation, three-pin local interpolation, before/after-pin rejection, wrong-timebase rejection, zero-length-interval (no divide-by-zero), negative-time, and wallclock→video
+* [x] Add audio/video sync tests — `audio_video_sync_end_to_end` exercises a realistic 48 kHz-audio × 90 kHz-video scenario with two pins (t=0 and t=60 s), covering exact-pin match, interpolated values, and out-of-range rejection
 * [x] Add long-duration timestamp tests
 
 ---
@@ -920,7 +982,7 @@ lossy
 
 * [x] LPC
 * [x] residual
-* [ ] Rice coding — actually implements Exp-Golomb (`write_exp_golomb`/`read_exp_golomb`); doc comment incorrectly claims Rice coding via `tpt-media-bitstream`, see Known Issues
+* [ ] Rice coding — actually implements Exp-Golomb (`write_exp_golomb`/`read_exp_golomb`); doc comment corrected 2026-09-07 to match the wire format (see Known Issues + `CHANGELOG.md` `[Unreleased] / Fixed`). Switching the wire format to actual Rice coding is still pending and would be a breaking change to the v0.1 packet format
 * [x] block structure
 * [ ] checksum/integrity
 * [x] bit-exact round trip
@@ -1656,5 +1718,56 @@ without needing to know how its underlying DSP algorithms are implemented.
 This is the intended long-term architecture of the TPT media stack.
 
 This gives you a single master checklist, while still making it clear to an agent that some [ ] items belong to the tpt-dsp repository rather than being implemented inside tpt-media.
+
+---
+
+# 56. Representation Research Platform
+
+Investigate whether natural video can be represented more sparsely/efficiently
+by a fundamentally different mathematical representation than block-transform
+codecs, rather than only by improving prediction/transform/quantisation/
+entropy coding within that paradigm. Livelink/Vault/Whisper (§32-34) already
+assume the conventional block/motion-vector/DCT paradigm; this section builds
+a swappable representation abstraction first, so those codecs can later become
+instances of it rather than the only option ever tried. See
+`docs/representation-research.md` for the full methodology once written.
+
+This is explicitly *not* an attempt to build a better codec. The deliverable
+is the experimental apparatus plus enough concrete representations to prove
+it isn't a speculative abstraction with nothing validating it.
+
+## Architecture
+
+* [ ] `tpt-media-representation` crate — `Representation`/`Quantizer`/`RateEstimator`/`DistortionMetric` trait contracts + `SignalView`/`SignalBuffer` spatiotemporal (`V(x,y,t)`) signal type, kept separate from `tpt-media-core`'s packed-pixel `VideoFrame` because the research question is mathematical (real-valued signals, arbitrary transforms), not about production pixel formats
+* [ ] `tpt-media-research` crate — synthetic signal generators, entropy estimation, the RD/sparsity experiment harness, and the concrete representations below
+* [ ] "no free decoder-side information" rate-accounting rule enforced structurally: `Coeffs`/`Quantized` types carry the complete decoder-required state (dictionaries, motion parameters, mode choices included), so a `RateEstimator` summing bits over the whole value cannot silently omit side information
+* [ ] primary/secondary/diagnostic metric hierarchy is the documented (and implemented) methodology: bits/sample vs. distortion is the RD frontier (primary); entropy, non-zero count, energy compaction are secondary diagnostics; coefficient-retention curves are diagnostic-only and never used to declare a representation "better"
+* [ ] `tpt-dsp` is not modified — 2D transforms are built as separable passes over the existing 1D `dct_ii`/`dct_iii`; entropy estimation, synthetic signals, and VQ-codebook *training* (tpt-dsp only has VQ *search*) live in `tpt-media-research`
+
+## Representations
+
+* [ ] `baseline` — raw/uncompressed identity representation, the RD anchor and Phase 0 reference point
+* [ ] `block_dct` — Avenue A: separable 2D DCT-II over a configurable block size, via row+column passes of `tpt-dsp-core::dct::{dct_ii,dct_iii}`
+* [ ] `temporal_dct` — previous-frame prediction (open-loop) + block DCT on the residual; not one of the "3 representations," just the 3rd oracle-experiment condition
+* [ ] `patch_vq` — Avenues C/D: patch extraction + a Lloyd/k-means-trained codebook (new, local to `tpt-media-research`) + `tpt-dsp-core::vq` search/encode/decode; dictionary transmission cost explicitly counted in the rate
+* [ ] `motion_aligned` — Avenue F: coordinate warp `x' = x - vt` (bilinear, toroidal) before representation; velocity is embedded in `Coeffs` so its transmission cost is counted even though the oracle experiment hands it the *true* velocity — knowing it exactly doesn't make it free to decode
+
+## Oracle experiment
+
+* [ ] four-condition comparison — raw pixels, spatial DCT, DCT + previous-frame prediction, motion-aligned using the *true* velocity — on a synthetic moving edge `I(x,t) = f(x - vt)` with known `v`, compared at matched rate points
+* [ ] the test harness asserts only measurement validity (every reported value finite; each representation's own round trip reconstructs within tolerance; matched-rate comparison interpolates within the sampled range, never extrapolates; identical inputs reproduce byte-identical output) — it never asserts the hypothesized direction of the result, so the experiment is allowed to conclude "motion alignment didn't help under these conditions"
+* [ ] actual result, recorded honestly once run: *(not yet run)*
+
+## Phases
+
+* [ ] Phase 0 — establish the truth: raw vs. DCT, prove the RD/measurement harness is honest
+* [ ] Phase 2 — challenge locality: blocks (`block_dct`) vs. patches (`patch_vq`)
+* [ ] Phase 4 — challenge coordinates: stationary vs. motion-aligned (the oracle experiment)
+* [ ] Phase 5 — challenge representation: coefficients (`block_dct`) vs. dictionary/VQ (`patch_vq`)
+* Phase 1 (DCT vs. alternative transforms), Phase 3 (2-D frame vs. 3-D space-time), and Phase 6 (combine winners) are enabled by the abstraction but explicitly deferred, not implemented this milestone
+
+## Compatibility with Vault/Whisper (§33-34)
+
+* [ ] no code changes to Vault/Whisper needed yet — neither has any implementation on disk. Recorded intent only: Vault's eventual prediction → partition → transform → quantisation → entropy pipeline and Whisper's eventual patches → dictionary → VQ → temporal-prediction pipeline should each become expressible as one `Representation` impl, without forcing either codec's internals to look identical to the other
 
 One thing I particularly like about this arrangement is that if you later decide to build something like RF codecs, scientific signal codecs, telemetry compression, or robotics signal processing, the DSP work we've done for media isn't trapped inside tpt-media; it becomes part of the reusable TPT foundation.
