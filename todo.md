@@ -932,13 +932,27 @@ Create `tpt-media-io`.
 
 Reuse `tpt-dsp-io` rather than duplicating functionality.
 
-* [ ] define PCM integration
-* [ ] integrate WAV
-* [ ] integrate raw audio
-* [ ] define image/video frame I/O
-* [ ] define streaming sources
-* [ ] define streaming sinks
-* [ ] define async integration where appropriate
+* [x] define PCM integration
+* [x] integrate WAV
+* [x] integrate raw audio
+* [x] define image/video frame I/O
+* [x] define streaming sources
+* [x] define streaming sinks
+* [x] define async integration where appropriate
+
+Done 2026-09-08. `crates/tpt-media-io` (no_std + alloc; `std` default
+feature). New `IoError` model (UnexpectedEof/InvalidHeader/Unsupported/
+Overflow/Other). PCM: `PcmSpec` + `encode_pcm`/`decode_pcm` with chunked
+monotonic PTS + `normalize_to_f32`/`denormalize_from_f32` (f32 bit-exact for
+≤24-bit int). WAV: byte-exact `parse_wav`/`decode_wav`/`write_wav` for the
+codec pipeline plus a std-gated `f32` bridge that **reuses `tpt-dsp-io`**
+(`decode_wav_f32`/`write_wav_f32`) — no duplication. Raster frame I/O:
+dependency-free PPM P6 / PGM P5 + `checkerboard` fixtures. Streaming
+`FrameSource`/`MediaItem` pull and `FrameSink` push traits with concrete
+readers/writers (slice/vec in no_std; file/stdin/stdout under `std`). Async
+integration: `AsyncFrameSource`/`AsyncFrameSink` (RPITIT + `Send`) and a
+sync `BlockingAdapter`; dependency-free. Design: `docs/media-io-design.md`.
+32 unit tests.
 
 ---
 
@@ -1345,14 +1359,22 @@ tpt inspect
 tpt benchmark
 ```
 
-* [ ] codec selection
-* [ ] container selection
-* [ ] quality configuration
-* [ ] bitrate configuration
-* [ ] metadata manipulation
-* [ ] streaming stdin/stdout
-* [ ] machine-readable output
-* [ ] error reporting
+* [x] codec selection
+* [x] container selection
+* [x] quality configuration
+* [x] bitrate configuration
+* [x] metadata manipulation
+* [x] streaming stdin/stdout
+* [x] machine-readable output
+* [x] error reporting
+
+Done 2026-09-08. `apps/tpt-cli` (`tpt` binary + lib core). `probe` /
+`inspect` / `list-codecs` / `--help` fully implemented; `encode` and
+`decode` are now live end-to-end (WAV → `pulse`/`aura` codec → `.tpt`, and
+back), using the §27 media I/O (`decode_wav`/`write_wav`) and the native
+codec encoder/decoder plumbing. Remaining: `transcode` and `benchmark`
+validate their config then exit 3. Design: `docs/cli-design.md`. Added to
+workspace members (`apps/` now enabled).
 
 ---
 

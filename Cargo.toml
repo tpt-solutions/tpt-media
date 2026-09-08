@@ -2,10 +2,10 @@
 resolver = "2"
 # Note: as we work our way down todo.md, members are added to this list
 # one at a time. The foundation crates (crates/tpt-media-*),
-# tpt-container, and the first three codecs (pulse/aura/vox) are
-# enabled; the remaining codec crates, the apps, and the FFI bridge
-# are listed in todo.md §2 and will be enabled as their implementations
-# land.
+# tpt-container, the first three codecs (pulse/aura/vox), and the first
+# app (apps/tpt-cli) are enabled; the remaining codec crates, the web/ui
+# apps, and the FFI bridge are listed in todo.md §2 and will be enabled
+# as their implementations land.
 members = [
     "crates/tpt-media-core",
     "crates/tpt-media-bitstream",
@@ -22,6 +22,8 @@ members = [
     "codecs/vox",
 
     "containers/tpt-container",
+
+    "apps/tpt-cli",
 ]
 
 [workspace.package]
@@ -74,6 +76,9 @@ tpt-video-whisper = { path = "codecs/whisper", version = "0.1.0" }
 # codecs (Pulse, Aura) opt into "std" while the no_std Vox codec opts
 # into "alloc" only.
 tpt-dsp-core = { path = "../tpt-dsp/tpt-dsp-core", version = "0.1", default-features = false }
+# tpt-dsp-io: file/device I/O reused by tpt-media-io instead of being
+# reimplemented (todo.md §27). std-only by nature.
+tpt-dsp-io = { path = "../tpt-dsp/tpt-dsp-io", version = "0.1" }
 
 # External dependencies — kept minimal per todo.md §1
 bitflags = { version = "2.4", default-features = false }

@@ -1,0 +1,26 @@
+[package]
+name = "tpt-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "TPT media command-line interface (probe, encode, decode, transcode, inspect, benchmark)."
+
+[[bin]]
+name = "tpt"
+path = "src/main.rs"
+
+[dependencies]
+tpt-media-core = { workspace = true }
+tpt-media-codec = { workspace = true }
+tpt-media-container = { workspace = true }
+tpt-media-io = { workspace = true }
+tpt-media-probe = { workspace = true }
+tpt-container = { workspace = true }
+tpt-audio-pulse = { workspace = true }
+tpt-audio-aura = { workspace = true }

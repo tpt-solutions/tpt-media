@@ -9,12 +9,12 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "PCM/WAV/raw audio I/O for the tpt-media stack."
+description = "PCM/WAV/raw audio and image frame I/O plus streaming sources/sinks for the tpt-media stack (reuses tpt-dsp-io for WAV/DSP)."
 
 [dependencies]
 tpt-media-core = { workspace = true }
-thiserror = { workspace = true }
+tpt-dsp-io = { workspace = true, optional = true }
 
 [features]
 default = ["std"]
-std = []
+std = ["dep:tpt-dsp-io"]

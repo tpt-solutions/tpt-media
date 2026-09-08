@@ -39,7 +39,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `drive_scheduled`, `LatencyObserver`/`LatencyLog`, `ScheduledRun`).
   Design documented in `docs/pipeline-design.md`. no_std + alloc; 21 unit
   + 1 container integration test (§26, 2026-09-08).
-- `tpt-media-io`: PCM/WAV/raw audio I/O.
+- `tpt-media-io` §27: media I/O crate (no_std + alloc; `std` default
+  feature). New `IoError` model (UnexpectedEof / InvalidHeader /
+  Unsupported / Overflow / Other). PCM: `PcmSpec`, `encode_pcm`/`decode_pcm`
+  with chunked monotonic PTS, `normalize_to_f32`/`denormalize_from_f32`
+  (f32 domain bit-exact for ≤24-bit integer formats). WAV: byte-exact
+  `parse_wav`/`decode_wav`/`write_wav` for the codec pipeline plus a
+  std-gated `f32` bridge `decode_wav_f32`/`write_wav_f32` that **reuses
+  `tpt-dsp-io`** rather than duplicating it (§27 constraint). Raster frame
+  I/O: dependency-free PPM P6 / PGM P5 readers/writers over `VideoFrame`,
+  `checkerboard` fixtures, std path helpers. Streaming `FrameSource` +
+  `MediaItem` (pull) and `FrameSink` (push) traits with concrete
+  implementations over slices/vecs (no_std) and files/stdin/stdout (`std`);
+  a stream that ends mid-sample-frame is reported as an error. Async
+  integration: `AsyncFrameSource`/`AsyncFrameSink` (RPITIT + `Send`,
+  dependency-free) and a sync `BlockingAdapter`. Design:
+  `docs/media-io-design.md`. 32 unit tests (§27, 2026-09-08).
 - `tpt-media-probe`: container and codec introspection.
 - `tpt-media-probe` §44: full `.tpt` probing via `TptDemuxer` — container
   version and global timebase, per-track audio/video/subtitle/metadata
@@ -57,10 +72,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   codec implementations. (`tpt-video-livelink`, `tpt-video-vault`,
   `tpt-video-whisper` are listed in `todo.md` §2 as the target
   structure but have **not** been added yet.)
+- `apps/tpt-cli` §43: `tpt` is now a working trans-Q codec CLI.
+  `encode`/`decode` are live end-to-end (WAV → `pulse`/`aura` → `.tpt`
+  and back): encode reads a 16-bit mono WAV (44.1/48 kHz), chunks and
+  zero-pads to codec block sizes (Pulse 512, Aura 1024), muxes with full
+  track metadata (timebase, codec version, sample rate, channels,
+  `--set-meta` tags) and records the exact sample count under the
+  reserved `tpt.io.sample_count` key; decode sniffs the container, picks
+  the first audio track, decodes via the track's codec (explicit
+  `--codec` must match), trims padding and writes a 16-bit WAV. Binary
+  stdout flows through `Outcome.binary_stdout`; `Ctx` gained a
+  `write_file` injector. `transcode`/`benchmark` still exit 3 (not wired);
+  `vox` exits 3. 27 unit tests incl. a lossless Aura round trip
+  (§43, 2026-09-08).
+- `tpt-cli` §43: the `tpt` command-line interface (first `apps/`
+  workspace member). Commands `probe` (with `--json` deterministic
+  output), `inspect`, `list-codecs`, and `--help` are fully implemented;
+  `encode`/`decode` were later wired end-to-end (see the `tpt-cli` §43
+  entry above); `transcode`/`benchmark` fully validate their config
+  (`--codec --container --quality --bitrate --set-meta [--runs]`,
+  positionals, `-` for stdin/stdout) then exit 3. Hand-rolled arg parser
+  and JSON writer (no clap, no serde). Injectable I/O (`Ctx`) so every
+  command is tested in-process without a filesystem. Design:
+  `docs/cli-design.md`. 16 unit tests (§43, 2026-09-08).
 - Documentation: `README.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`,
   `SECURITY.md`, `docs/architecture.md`, `docs/codec-design.md`,
   `docs/container-design.md`, `docs/pipeline-design.md`,
-  `docs/performance.md`, `docs/security.md`, `docs/provenance.md`.
+  `docs/cli-design.md`, `docs/media-io-design.md`, `docs/performance.md`,
+  `docs/security.md`, `docs/provenance.md`.
 - `tpt-media-representation`: representation research contracts —
   `Representation`/`Quantizer`/`RateEstimator`/`DistortionMetric`,
   spatiotemporal `SignalView`/`SignalBuffer` (`V(x,y,t)`),
@@ -129,6 +168,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   0x02 END_OF_FRAME). Now: full semantic docs on all three flags,
   `Packet::is_discontinuity()` / `is_end_of_frame()` accessors, and
   bit 0x04 round-trips through both muxer and demuxer.
+- `tpt-audio-pulse`: the per-packet header carried `frame_size` in an
+  8-bit field, so the *default* `frame_size` of 256 overflowed to 0
+  and every packet the default encoder produced was rejected as
+  `MalformedPacket` by the decoder. The header now writes a 1-bit
+  128/256 selector (both sides updated together; existing 128
+  packets and the `plc` codec are unaffected). Regression test added.
+- `tpt-audio-pulse`: `bits_per_coef` was not part of the bitstream,
+  so a decoder configured with default 8 bits mis-parsed packets
+  encoded at a different coefficient depth. The CLI now carries it
+  (and Aura's `block_size`, which is likewise not self-described) in
+  the track's codec-private `data`; defaults still apply when the
+  field is absent.
 
 ### Added
 

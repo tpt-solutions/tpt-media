@@ -169,7 +169,7 @@ impl Encoder for PulseEncoder {
         let mut buf = vec![0u8; max_bits.div_ceil(8)];
         let written = {
             let mut w = BitWriter::new(&mut buf);
-            w.write(8, self.enc.frame_size as u64)
+            w.write(1, (self.enc.frame_size as u64 / 128) - 1)
                 .map_err(|_| CodecError::Internal)?;
             w.write(8, self.enc.n_bands as u64)
                 .map_err(|_| CodecError::Internal)?;
@@ -304,7 +304,8 @@ impl Decoder for PulseDecoder {
 impl PulseDecoder {
     fn decode_inner(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
         let mut r = BitReader::new(&packet.data);
-        let frame_size = r.read(8).map_err(|_| CodecError::MalformedPacket)? as u16;
+        let fs_code = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
+        let frame_size = 128 * (fs_code as u16 + 1);
         if frame_size != 128 && frame_size != 256 {
             return Err(CodecError::MalformedPacket);
         }
@@ -542,6 +543,30 @@ mod tests {
         let pts = Timestamp::zero(Timebase::new(1, 48_000));
         let f = dec.conceal(pts).unwrap();
         assert_eq!(f.sample_count, 512);
+    }
+
+    #[test]
+    fn default_frame_size_256_round_trips() {
+        // Regression: the frame-size header was written into 8 bits, so the
+        // default frame_size 256 overflowed to 0 and the decoder rejected
+        // every packet. The header now carries a 1-bit 128/256 selector.
+        let cfg = CodecConfig::default();
+        let enc_cfg = PulseEncoderConfig::default();
+        let mut enc = PulseEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = PulseDecoder::new(cfg, enc_cfg).unwrap();
+
+        let mut frame = AudioFrame::alloc(512, SampleFormat::S16, ChannelLayout::Mono, 48_000);
+        for (i, s) in frame.samples.chunks_mut(2).enumerate() {
+            let v = (0.4 * (i as f32 * 0.07).sin() * i16::MAX as f32) as i16;
+            s.copy_from_slice(&v.to_le_bytes());
+        }
+        frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
+
+        let packets = enc.encode(&frame).unwrap();
+        assert_eq!(packets.len(), 1);
+        let decoded = dec.decode(&packets[0]).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].sample_count, 512);
     }
 
     #[test]

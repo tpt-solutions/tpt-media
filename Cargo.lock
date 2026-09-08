@@ -624,6 +624,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tpt-cli"
+version = "0.1.0"
+dependencies = [
+ "tpt-audio-aura",
+ "tpt-audio-pulse",
+ "tpt-container",
+ "tpt-media-codec",
+ "tpt-media-container",
+ "tpt-media-core",
+ "tpt-media-io",
+ "tpt-media-probe",
+]
+
+[[package]]
 name = "tpt-container"
 version = "0.1.0"
 dependencies = [
@@ -642,6 +656,13 @@ dependencies = [
  "num-complex",
  "num-traits",
  "rustfft",
+]
+
+[[package]]
+name = "tpt-dsp-io"
+version = "0.1.0"
+dependencies = [
+ "tpt-dsp-core",
 ]
 
 [[package]]
@@ -683,7 +704,7 @@ dependencies = [
 name = "tpt-media-io"
 version = "0.1.0"
 dependencies = [
- "thiserror",
+ "tpt-dsp-io",
  "tpt-media-core",
 ]
 
