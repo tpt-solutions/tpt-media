@@ -632,7 +632,6 @@ dependencies = [
  "tpt-media-codec",
  "tpt-media-container",
  "tpt-media-core",
- "tpt-media-probe",
 ]
 
 [[package]]
@@ -692,6 +691,7 @@ dependencies = [
 name = "tpt-media-pipeline"
 version = "0.1.0"
 dependencies = [
+ "tpt-container",
  "tpt-media-codec",
  "tpt-media-container",
  "tpt-media-core",
@@ -701,8 +701,9 @@ dependencies = [
 name = "tpt-media-probe"
 version = "0.1.0"
 dependencies = [
- "thiserror",
- "tpt-media-bitstream",
+ "tpt-container",
+ "tpt-media-codec",
+ "tpt-media-container",
  "tpt-media-core",
 ]
 

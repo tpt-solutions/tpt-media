@@ -10,17 +10,21 @@
 //! follow-on, not required to answer the RD/sparsity questions this
 //! milestone asks.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Empirical (zeroth-order) Shannon entropy of `symbols`, in bits/symbol:
 /// `H = -Σ p(s)·log2 p(s)` over the observed frequency distribution.
 ///
 /// Returns `0.0` for an empty slice or a slice of one repeated symbol.
+///
+/// Counts are accumulated in a [`BTreeMap`] (sorted key order), so the
+/// floating-point summation order is identical run to run — this is part of
+/// the crate's byte-identical determinism contract.
 pub fn empirical_entropy_bits(symbols: &[i32]) -> f64 {
     if symbols.is_empty() {
         return 0.0;
     }
-    let mut counts: HashMap<i32, u64> = HashMap::new();
+    let mut counts: BTreeMap<i32, u64> = BTreeMap::new();
     for &s in symbols {
         *counts.entry(s).or_insert(0) += 1;
     }
@@ -37,7 +41,7 @@ pub fn empirical_entropy_bits_u32(symbols: &[u32]) -> f64 {
     if symbols.is_empty() {
         return 0.0;
     }
-    let mut counts: HashMap<u32, u64> = HashMap::new();
+    let mut counts: BTreeMap<u32, u64> = BTreeMap::new();
     for &s in symbols {
         *counts.entry(s).or_insert(0) += 1;
     }

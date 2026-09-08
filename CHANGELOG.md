@@ -25,9 +25,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - `tpt-media-container`: container abstraction over the `.tpt` format.
 - `tpt-container`: native `.tpt` container implementation (header,
   TRAK, CLUS, seeking, corruption tolerance, streaming).
-- `tpt-media-pipeline`: node-based media pipeline.
+- `tpt-media-pipeline` §26: full pipeline core — `Node` abstraction with
+  `NodeEvent`/`NodeError` contract (one input consumed, at most one output
+  emitted per call), lockstep typed `Chain<L,R>` composition with
+  cascading flush (left-stage internal buffers drain into the right stage
+  before the right stage flushes its own), `Pipeline` pull/drive with a
+  stall-bound backpressure guard, built-in `Source`/`Map`/`Bounded`/
+  `Cancellable`/`Sink` nodes, `Timestamped<T>` PTS/DTS/duration
+  pass-through, `MediaFormat`/`StreamSpec`/`FormatAware` stream and
+  format negotiation, `Executor` threading abstraction (`Inline`, plus
+  std-only `ThreadedExecutor` offloading the graph to a worker thread),
+  and realtime scheduling (`RealtimeProfile`, `Clock`-injected
+  `drive_scheduled`, `LatencyObserver`/`LatencyLog`, `ScheduledRun`).
+  Design documented in `docs/pipeline-design.md`. no_std + alloc; 21 unit
+  + 1 container integration test (§26, 2026-09-08).
 - `tpt-media-io`: PCM/WAV/raw audio I/O.
 - `tpt-media-probe`: container and codec introspection.
+- `tpt-media-probe` §44: full `.tpt` probing via `TptDemuxer` — container
+  version and global timebase, per-track audio/video/subtitle/metadata
+  inspection (codec ID + version, sample rate, channel layout,
+  dimensions, pixel format, first/last PTS, frame/sample counts, name,
+  language, typed `TMTA` metadata), duration (last PTS + duration),
+  overall and per-track bitrate estimates, integrity reporting
+  (container `CRC1` footer and per-cluster checksum failures), and codec
+  capability reporting against the `tpt-media-codec` `Registry` with the
+  native codec family table. `probe_file` reads from disk (`std`).
+  Dependency edge inverted: `tpt-container` no longer depends on
+  `tpt-media-probe` (was unused), so probe → container (§44, §52,
+  2026-09-08).
 - `tpt-audio-pulse`, `tpt-audio-aura`, `tpt-audio-vox`: native audio
   codec implementations. (`tpt-video-livelink`, `tpt-video-vault`,
   `tpt-video-whisper` are listed in `todo.md` §2 as the target
@@ -36,6 +61,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `SECURITY.md`, `docs/architecture.md`, `docs/codec-design.md`,
   `docs/container-design.md`, `docs/pipeline-design.md`,
   `docs/performance.md`, `docs/security.md`, `docs/provenance.md`.
+- `tpt-media-representation`: representation research contracts —
+  `Representation`/`Quantizer`/`RateEstimator`/`DistortionMetric`,
+  spatiotemporal `SignalView`/`SignalBuffer` (`V(x,y,t)`),
+  MSE/distortion/sparsity diagnostics.
+- `tpt-media-core`: `Track::media` gains optional `TrackMedia` parameters
+  (sample rate, channel layout, width/height, pixel format); `ChannelMask`
+  gains `from_bits` for deserializers.
+- `tpt-container` §20–25 (container completeness, 2026-09-08):
+  - Header: 20-byte layout with a reserved `u32`; real version checking
+    (`UnsupportedVersion` for version 0 / future major / future minor);
+    documented compatibility rules; 16-byte version 0.1 headers still parse.
+  - `TRAK`: full track descriptor — media type, codec version, per-track
+    timebase, sample rate, channel layout, dimensions, pixel format, name,
+    language. New `TMTA` chunk for typed metadata pairs.
+  - `CLUS`: distinct `PTS`/`DTS`/`duration`, dedicated `DISCONTINUITY` flag,
+    optional per-cluster CRC-32 (flags bit 4).
+  - Index: `IDX ` per-track chunk with absolute offsets and a version byte;
+    unknown index versions are ignored (recovery); `seek_to_keyframe_on_track`
+    and `seek_to_offset`; `rebuild_index()` and `reconstruct_trailer()`.
+  - Robustness: incomplete-final-cluster handling, reserved/unknown chunk
+    skipping, container `CRC1` footer, append mode, live-stream mode, and a
+    deterministic fuzz-style corruption/truncation sweep that cannot panic.
+  - Streaming: fragmented/clustered writing, incremental parsing via
+    `new_streaming` + `feed()`, live append, missing-final-index playback,
+    graceful termination via the `finalize()` trailer.
+- Dependency-free no_std CRC-32 (`crc32` module) for container checksums.
+- `tpt-media-research`: §56 representation research platform —
+  five concrete representations (`baseline`, `block_dct`, `temporal_dct`,
+  `patch_vq`, `motion_aligned`), deterministic entropy estimation and
+  synthetic signal generators, the RD/sparsity measurement harness with
+  primary/secondary/diagnostic metric hierarchy, `det_rng`, and trained
+  VQ codebook construction (`kmeans.rs`).
+- Representation experiments: four-condition oracle (moving edge) plus
+  Phases 0/2/4/5, asserted for measurement validity (never hypothesis
+  direction) and documented, results included, in
+  `docs/representation-research.md`.
 
 ### Fixed
 

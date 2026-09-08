@@ -39,13 +39,13 @@ pub use pixel_format::PixelFormat;
 pub use sample_format::SampleFormat;
 pub use sync::{ClockDomain, SyncError, SyncMap, SyncPoint};
 pub use timebase::{Duration, Timebase, Timestamp};
-pub use track::{MediaType, Stream, Track};
+pub use track::{MediaType, Stream, Track, TrackMedia};
 
 /// Convenience re-exports of common items.
 pub mod prelude {
     pub use crate::{
         AudioFrame, ChannelLayout, ClockDomain, CodecConfig, CodecId, Duration, Frame, MediaType,
         Metadata, Packet, PacketFlags, PixelFormat, SampleFormat, Stream, SyncError, SyncMap,
-        SyncPoint, Timebase, Timestamp, Track, VideoFrame,
+        SyncPoint, Timebase, Timestamp, Track, TrackMedia, VideoFrame,
     };
 }

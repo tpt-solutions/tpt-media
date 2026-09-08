@@ -381,7 +381,7 @@ Current DCT-IV implementation is suitable as a correctness reference but must be
   | ---: | ---: | ---: | :--- | ---: |
   | 128 | 2.667 ms | 214 µs | 8.0% — **passes**, thinly | 0.34 µs (0.01%) |
   | 256 | 5.333 ms | 822 µs | 15.4% — **fails** | 0.69 µs (0.01%) |
-  So Pulse's *current* code (it calls the direct `mdct`/`imdct`, not the new `FastMdctPlan` — confirmed via `use tpt_dsp_core::{imdct, mdct, ...}` in `codecs/pulse/src/lib.rs`) already misses this target at its larger supported frame size, and only barely clears it at the smaller one, before accounting for anything else in the encode/decode path. `FastMdctPlan` clears the target by ~3 orders of magnitude at both sizes. **Follow-up (not yet done): wire `FastMdctPlan` into Pulse's actual `encode`/`decode`** so the codec meets its own real-time claim in practice, not just in the benchmark suite.
+  So Pulse's *previous* code called the direct `mdct`/`imdct`, which already missed this target at its larger supported frame size, and only barely cleared it at the smaller one, before accounting for anything else in the encode/decode path. **Follow-up done 2026-09-08:** `codecs/pulse/src/lib.rs` now uses `FastMdctPlan` — `PulseEncoder` holds one plan sized to its fixed `frame_size`; `PulseDecoder` holds one plan per supported size (128 and 256, selected per-packet via `mdct_plan_for`, since the wire format self-describes frame size independent of the decoder's own configured default) so a size-128 packet decoded on a size-256-configured decoder still inverts correctly. Plans are built once at construction (the one-time FFT-plan/twiddle allocation) and only `forward`/`inverse` run in the hot path, which allocate nothing. All 6 existing `tpt-audio-pulse` tests still pass unchanged. `FastMdctPlan` clears the ≤10% target by ~3 orders of magnitude at both sizes, so the codec now meets its own real-time claim in practice, not just in the benchmark suite.
 * [x] Implement optimized DCT-IV — `FastDctIvPlan` (added 2026-09-07): same FFT/chirp technique as `FastMdctPlan`, specialized to DCT-IV's `θ(m,k)=(π/N)(m+½)(k+½)` (zero-padded to `2N` since both indices range only `0..N`, unlike MDCT)
 * [x] Preserve reference implementation for verification — the direct `dct_iv` stays; `FastDctIvPlan` is checked against it, not a replacement
 * [x] Add scalar/SIMD equivalence tests — `fast_dct_iv_matches_reference` (direct `dct_iv` vs `FastDctIvPlan` across 4 sizes) and `fast_dct_iv_is_self_inverse_up_to_scale`; `FastDctIvPlan` is `FftPlan`/RustFFT-backed (same SIMD-dispatch rationale as `FastMdctPlan`)
@@ -532,33 +532,38 @@ These should be generic models, not Aura-specific implementations.
 
 # 12. TPT-DSP — Numerical Contracts
 
-**Audited 2026-09-07** against the actual code in `tpt-dsp-core/src/*.rs`,
-now that all 8 required algorithm families genuinely exist (they didn't
-when this section was last touched — see the Known Issues note above).
-This section's 9 items describe a *formal, uniform contract* across all
-8 families; the honest finding is that no single item is uniformly true
-across all 8, so each stays unchecked below with what's actually there:
+**Audited 2026-09-07**, docs completed 2026-09-08, against the actual code
+in `tpt-dsp-core/src/*.rs`, now that all 8 required algorithm families
+genuinely exist. This section's 9 items describe a *formal, uniform
+contract* across all 8 families:
 
-* [ ] Define input domain — asserted (and panics documented) in every
-  module this session touched (`mdct`/`dct`/`lpc`/`vq`/`psychoacoustic`/
-  `bark`/`lsp`/`pitch`/`noise_shaping`, 6-8 `# Panics` sections each) but
-  `fft.rs` (pre-existing, untouched this session) asserts valid sizes
-  without a matching `# Panics` doc section — not a uniform contract yet
-* [ ] Define output domain — rarely stated explicitly anywhere (mostly
-  inferred from the input domain + the operation, e.g. "N inputs → N
-  outputs"); no module states an output *range* guarantee (e.g. "always
-  finite", "always in `[-1,1]`")
-* [ ] Define normalization — well documented for MDCT/DCT/LPC/VQ (this
-  session's convention docs spell out exact formulas); FFT's
-  forward/inverse normalization convention is only demonstrated via
-  tests (`inverse_roundtrip` dividing by `len`), not stated in prose
-* [ ] Define precision — no module states a formal precision contract
-  (e.g. "expect ~1e-6 relative error in f32"); all generic `F: Float`
-  code is silent on this, precision only shows up ad hoc as test
-  tolerances
-* [ ] Define acceptable error — same gap as precision: tolerances exist
-  per-test (`1e-4`, `1e-6`, `1e-9`, ...) but there's no single documented
-  policy for what tolerance a given algorithm/precision should target
+* [x] Define input domain — every module now has `# Panics` sections
+  documenting its domain restrictions; `fft.rs`'s `twiddles`/`fft_inplace`/
+  `fft_inplace_f32`/`ifft_inplace`/`fft`/`ifft` (the one gap found in the
+  2026-09-07 audit) got explicit `# Panics` sections added 2026-09-08
+* [x] Define output domain — every one of the 8 families now has an
+  explicit "**Output domain**" line in a `# Numerical contract` module-doc
+  section, added 2026-09-08 (e.g. "unbounded, finite input → finite
+  output" for the linear transforms; a defined index range for VQ; a
+  non-negative range for `db_to_power`)
+* [x] Define normalization — FFT's forward/inverse convention (previously
+  only demonstrated via tests) and DCT's "unnormalized, round trip needs
+  an explicit `N/2` divide" convention are now stated in prose in each
+  module's `# Numerical contract` section, alongside the pre-existing
+  MDCT/LPC/VQ convention docs
+* [x] Define precision — each of the 8 families' `# Numerical contract`
+  section now states a concrete expected relative/absolute error, backed
+  by an actual named test (e.g. FFT ~1e-3/1e-4 in `f32`, ~1e-9/1e-10 in
+  `f64`; MDCT direct path ~1e-6 in `f64`, `FastMdctPlan` ~1e-3/1e-4 in
+  `f32`)
+* [x] Define acceptable error — the stated policy, applied uniformly
+  across all 8: "the tightest tolerance the test suite currently passes
+  at the sizes exercised, not a derived theoretical bound" — documented
+  explicitly as such in each family's contract section so it isn't
+  mistaken for a formal error-analysis result. VQ and LPC's `predict`/
+  `residual` are the two genuine exceptions, correctly documented as
+  *exact* (finite arithmetic on caller data, not an approximation with a
+  tolerance to state)
 * [x] Define valid sizes — genuinely uniform: every module (including
   `fft.rs`) asserts its size constraints (power-of-two, even order,
   matching lengths, etc.) and panics rather than producing garbage
@@ -567,10 +572,11 @@ across all 8, so each stays unchecked below with what's actually there:
   exception with a real non-panic failure mode (`bool` return when the
   input isn't stable enough to find all roots), and that's documented
 * [ ] Define determinism expectations — implicit everywhere (pure
-  functions, no RNG, so trivially deterministic) but never *stated*;
-  §39/§40 elsewhere in this document cover determinism/SIMD-equivalence
-  at the workspace level, which is arguably the right place for this,
-  making a per-algorithm restatement here low-value
+  functions, no RNG, so trivially deterministic) but still not *stated*
+  per-module; left unchecked deliberately — §39/§40 elsewhere in this
+  document cover determinism/SIMD-equivalence at the workspace level,
+  which is arguably the right place for this, making a per-algorithm
+  restatement here low-value rather than a real gap
 * [x] Add reference tests — genuinely uniform and the strongest item:
   every one of the 8 families below has a real reference/round-trip/
   equivalence test with an explicit tolerance (FFT vs. naive DFT,
@@ -578,16 +584,21 @@ across all 8, so each stays unchecked below with what's actually there:
   accelerated-vs-linear, psychoacoustic model validation, filters/
   resampling have their own pre-existing tests)
 
-Required for:
+Required for (all 8 families' `# Numerical contract` doc sections added
+2026-09-08 in `tpt-dsp-core/src/{fft,dct,mdct,lpc,filters,resample,vq,
+psychoacoustic,bark}.rs`; `cargo test -p tpt-dsp-core --all-features` (117
+tests + 3 doctests) and `cargo clippy --all-features --all-targets -D
+warnings` both still pass, and `cargo doc --all-features --no-deps`
+introduces no new broken/private intra-doc links):
 
-* [ ] FFT — valid sizes/failure behavior/reference tests all present; no formal `# Panics` docs, no precision/normalization prose
-* [ ] DCT — same profile as FFT, plus the precision fix from §5.2 (angle-reduction) is documented in code but not as a formal "precision" contract
-* [ ] MDCT — the best-documented family in the crate (explicit convention, normalization, panics, numerical-guarantees paragraph, fast-vs-direct equivalence tests) but still lacks a stated precision/acceptable-error number
-* [ ] LPC — convention, stability behavior, and panics are documented; precision/acceptable-error still implicit-only
-* [ ] filters — pre-existing, only partially audited this session; has some `# Panics` sections but not comprehensive
-* [ ] resampling — pre-existing; has more `# Panics` sections than filters, but same precision/acceptable-error gap
-* [ ] VQ — convention, determinism, and panics documented; same precision/acceptable-error gap
-* [ ] psychoacoustic calculations — convention and panics documented (this is a modeling toolkit, not a pure-math transform, so "precision"/"acceptable error" apply less cleanly here than elsewhere)
+* [x] FFT — `# Panics` added to every function; output domain, normalization (forward unnormalized / inverse `1/N`), and precision (~1e-3/1e-4 `f32`, ~1e-9/1e-10 `f64`) now stated in prose
+* [x] DCT — output domain, the "unnormalized, round trip needs an explicit `N/2`" convention, and precision (direct ~1e-3/1e-4, `FastDctIvPlan` ~1e-4 relative) now stated
+* [x] MDCT — was already the best-documented family (convention/normalization/panics); precision/acceptable-error now added (~1e-6 `f64` direct, ~1e-3/1e-4 `f32` `FastMdctPlan`)
+* [x] LPC — precision/acceptable-error added, correctly distinguishing `predict`/`residual`'s *exact* arithmetic from `levinson_durbin`'s ~1e-9 approximation
+* [x] filters — input/output domain and precision now stated, correctly scoped: RBJ cookbook designs are spot-checked (1e-3/1e-6), but `process_biquad`/`Fir`/`IirFilter` themselves have no general error bound since they're exact arithmetic on caller-supplied coefficients
+* [x] resampling — input/output domain and precision (chunked-vs-one-shot equivalence, 1e-6) now stated, explicit that stopband attenuation is a per-design property, not a machinery-wide contract
+* [x] VQ — documented as *exact* search (no approximation tolerance), with the one real numerical claim (accelerated search never disagrees with linear scan) called out as bit-identical, not merely close
+* [x] psychoacoustic calculations — documented honestly as a modeling toolkit where most validation is *relational* (ordering, sign, decay-with-distance), not a numeric tolerance; the one genuine round-trip identity (`db_to_power(power_to_db(p))`) does get a stated 1e-9 tolerance
 
 ---
 
@@ -783,9 +794,9 @@ global_timebase
 
 * [x] finalize binary representation
 * [x] define endianness
-* [ ] define versioning — `version` field exists but `from_bytes` never checks it
-* [ ] define reserved fields
-* [ ] define compatibility rules
+* [x] define versioning — `version` is major<<8|minor; `from_bytes` rejects version 0, future minor, or higher major with `UnsupportedVersion` (2026-09-08)
+* [x] define reserved fields — 20-byte header gains a `reserved u32`, zero when writing, ignored on read; header_size may grow (2026-09-08)
+* [x] define compatibility rules — unknown/reserved chunks skipped, header reserved bytes ignored, version major bumps reserved for binary-incompatible changes (2026-09-08)
 
 ---
 
@@ -794,16 +805,16 @@ global_timebase
 Track metadata must include:
 
 * [x] track ID
-* [ ] media type — `index_trak` hardcodes `MediaType::Audio` for every track regardless of chunk contents
+* [x] media type — TRAK carries `media_type` u8 (audio/video/subtitle/metadata); `index_trak` decodes it instead of hardcoding Audio (2026-09-08)
 * [x] codec ID
-* [ ] codec version — not written as a separate field, only inside the opaque codec-private blob
+* [x] codec version — `codec_version u16` is a first-class TRAK field (2026-09-08)
 * [x] codec-private data
-* [ ] timebase — not serialized by TRAK; would have to be smuggled into codec-private data
-* [ ] sample rate where applicable
-* [ ] channel layout where applicable
-* [ ] dimensions where applicable
-* [ ] pixel format where applicable
-* [ ] metadata
+* [x] timebase — TRAK serializes the per-track timebase (num/den); falls back to the global timebase when absent (2026-09-08)
+* [x] sample rate where applicable — `sample_rate u32` in TRAK (2026-09-08)
+* [x] channel layout where applicable — `channel_layout u8` tag + `channel_mask u16` (2026-09-08)
+* [x] dimensions where applicable — `width/height u32` in TRAK (2026-09-08)
+* [x] pixel format where applicable — `pixel_format u8` (0xFF = none) (2026-09-08)
+* [x] metadata — typed key/value pairs in a TMTA chunk (string/int/bool/bytes) (2026-09-08)
 
 ---
 
@@ -812,14 +823,14 @@ Track metadata must include:
 Clusters should support:
 
 * [x] timestamp
-* [ ] duration — not present in the CLUS layout
+* [x] duration — optional `duration u32` field, enabled by `CLUS` flags bit 3 (2026-09-08)
 * [x] track ID
-* [ ] PTS — one timestamp field stands in for both PTS and DTS; not distinctly modeled
-* [ ] DTS — `next_packet` sets `pkt.dts = pkt.pts` unconditionally, not an independently stored value
+* [x] PTS — distinct `pts u64` field (2026-09-08)
+* [x] DTS — distinct `dts u64` field; `next_packet` restores it instead of forcing `dts = pts` (2026-09-08)
 * [x] keyframe flag
-* [ ] discontinuity flag — the second flags bit is actually `END_OF_FRAME`, not discontinuity
+* [x] discontinuity flag — flags bit 2 is `DISCONTINUITY` (bits: 0 keyframe, 1 end-of-frame, 2 discontinuity); round-trip test added (2026-09-08)
 * [x] payload
-* [ ] optional checksum
+* [x] optional checksum — `CLUS` flags bit 4 enables a per-cluster CRC-32 over the body up to the checksum; verified by `verify_cluster_checksums()` (2026-09-08)
 
 ---
 
@@ -830,11 +841,11 @@ Do not require scanning the entire file for normal seeking.
 * [x] define index structure
 * [x] index keyframes
 * [x] index cluster offsets
-* [ ] support per-track indexes — code's own comment says this is reserved, not yet consumed
+* [x] support per-track indexes — `track_index(track_id)` + `seek_to_keyframe_on_track`; per-track entries in the on-disk `IDX ` chunk (2026-09-08)
 * [x] support time-based lookup
-* [ ] support offset-based lookup
-* [ ] define index versioning
-* [ ] define recovery behavior
+* [x] support offset-based lookup — `seek_to_offset(offset)`; on-disk entries carry absolute byte offsets (2026-09-08)
+* [x] define index versioning — `index_version u8`; an unknown version is ignored and seeking falls back to the scan index (2026-09-08)
+* [x] define recovery behavior — missing/corrupt/newer `IDX ` is ignored; `rebuild_index()` regenerates the in-memory index from a scan (2026-09-08)
 
 ---
 
@@ -842,14 +853,14 @@ Do not require scanning the entire file for normal seeking.
 
 * [x] corruption detection
 * [x] truncated-file handling
-* [ ] incomplete final cluster handling — only incidentally covered by the generic truncation path, no dedicated logic/test
+* [x] incomplete final cluster handling — dedicated tests: strict parse errors `Truncated`, streaming parse pauses and resumes via `feed()` (2026-09-08)
 * [x] unknown chunk skipping
-* [ ] forward-compatible chunk types — only incidentally covered by the generic unknown-chunk path, no dedicated logic/test
-* [ ] checksum support
-* [ ] append mode
-* [ ] live-stream mode
-* [ ] recovery/index rebuilding
-* [ ] fuzz testing — no fuzz harness exists anywhere in the repo
+* [x] forward-compatible chunk types — reserved range (first byte 0x00..=0x1F) and unknown IDs skipped; dedicated test (2026-09-08)
+* [x] checksum support — per-cluster CRC (optional) and container `CRC1` footer (always on finalize) (2026-09-08)
+* [x] append mode — muxer appends chunks without seek-back; `append_raw` splices pre-serialized chunks (2026-09-08)
+* [x] live-stream mode — `new_streaming` + `feed()` continue parsing a growing buffer (2026-09-08)
+* [x] recovery/index rebuilding — `rebuild_index()` and `reconstruct_trailer()` (2026-09-08)
+* [x] fuzz testing — deterministic corruption/truncation sweeps (every truncation point + 512 seeded bit-flips) never panic; no external fuzz harness deps (2026-09-08)
 
 ---
 
@@ -857,13 +868,13 @@ Do not require scanning the entire file for normal seeking.
 
 Support files that are not yet complete.
 
-* [ ] fragmented/clustered writing
-* [ ] incremental parsing
-* [ ] live append
-* [ ] missing final index
-* [ ] streaming playback
-* [ ] graceful termination
-* [ ] optional footer/index reconstruction
+* [x] fragmented/clustered writing — muxer appends complete TLV chunks as they are produced (2026-09-08)
+* [x] incremental parsing — `new_streaming` tolerates a partial trailing chunk and resumes on `feed()` (2026-09-08)
+* [x] live append — `feed` continues scanning a growing buffer; tests feed 8 bytes at a time end-to-end (2026-09-08)
+* [x] missing final index — streams without `IDX `/`CRC1` still reproduce every packet; EOF is signalled by `Truncated` after the last cluster (2026-09-08)
+* [x] streaming playback — packets are served from the scan index while the buffer is still being appended to (2026-09-08)
+* [x] graceful termination — `finalize()` writes the `IDX ` + `CRC1` trailer (2026-09-08)
+* [x] optional footer/index reconstruction — `reconstruct_trailer()` returns the trailer bytes for a trailer-less stream (2026-09-08)
 
 ---
 
@@ -889,18 +900,29 @@ Mux
 Sink
 ```
 
-* [ ] define node abstraction
-* [ ] define stream negotiation
-* [ ] define format negotiation
-* [ ] define backpressure
-* [ ] define buffering
-* [ ] define cancellation
-* [ ] define error propagation
-* [ ] define flushing
-* [ ] define end-of-stream
-* [ ] define timestamps through pipeline
-* [ ] define threading model
-* [ ] define realtime scheduling profile
+* [x] define node abstraction
+* [x] define stream negotiation
+* [x] define format negotiation
+* [x] define backpressure
+* [x] define buffering
+* [x] define cancellation
+* [x] define error propagation
+* [x] define flushing
+* [x] define end-of-stream
+* [x] define timestamps through pipeline
+* [x] define threading model
+* [x] define realtime scheduling profile
+  * 2026-09-08: implemented in `crates/tpt-media-pipeline`; docs in
+    `docs/pipeline-design.md`. `Node`/`NodeEvent`/`NodeError` contract,
+    lockstep `Chain<L,R>` with cascading flush, `Pipeline` pull/drive with
+    stall-bound backpressure guard, `Bounded`/`Cancellable`/`Map`/`Sink`/
+    `Source` nodes, `Timestamped<T>` passthrough, `MediaFormat`/
+    `StreamSpec`/`FormatAware` negotiation, `Executor` (`Inline`,
+    `ThreadedExecutor` std-only), `RealtimeProfile`/`ScheduledRun`/
+    `LatencyObserver`/`LatencyLog` with clock injection. 21 unit + 1
+    container integration test (`tests/container_flow.rs`, packets flow
+    with PTS intact); crates/tpt-media-pipeline compiles `no_std`, clippy
+    clean, workspace tests green.
 
 ---
 
@@ -1338,17 +1360,23 @@ tpt benchmark
 
 Create `tpt-media-probe`.
 
-* [ ] identify container
-* [ ] identify codec
-* [ ] inspect tracks
-* [ ] inspect duration
-* [ ] inspect timestamps
-* [ ] inspect dimensions
-* [ ] inspect sample rate
-* [ ] inspect bitrate
-* [ ] inspect metadata
-* [ ] report corruption
-* [ ] report codec capabilities
+* [x] identify container — magic sniff (`TPTM`, `RIFF`/`WAVE`, unknown)
+* [x] identify codec — codec ID + bitstream version from `TRAK`
+* [x] inspect tracks — audio / video / subtitle / metadata track lists
+* [x] inspect duration — longest track (last PTS + duration), seconds
+* [x] inspect timestamps — per-track first/last PTS (track timebase)
+* [x] inspect dimensions — width/height/pixel format from `TrackMedia`
+* [x] inspect sample rate — sample rate + channel layout from `TrackMedia`
+* [x] inspect bitrate — payload bits ÷ duration (per-track and overall)
+* [x] inspect metadata — track name/language and typed `TMTA` pairs
+* [x] report corruption — parse errors, truncation, version, container
+      `CRC1` mismatch, per-cluster checksum failures; never panics
+* [x] report codec capabilities — framework `Registry` availability plus
+      the native codec family table (2026-09-08)
+
+The probe consumes `tpt-container` directly via `TptDemuxer` (tracks +
+full packet scan); the dependency edge was inverted so probe → container
+(removed the unused `tpt-media-probe` edge from `tpt-container`, §52).
 
 ---
 
@@ -1729,8 +1757,8 @@ codecs, rather than only by improving prediction/transform/quantisation/
 entropy coding within that paradigm. Livelink/Vault/Whisper (§32-34) already
 assume the conventional block/motion-vector/DCT paradigm; this section builds
 a swappable representation abstraction first, so those codecs can later become
-instances of it rather than the only option ever tried. See
-`docs/representation-research.md` for the full methodology once written.
+instances of it rather than the only option ever tried. Full methodology and
+the honest recorded results live in `docs/representation-research.md`.
 
 This is explicitly *not* an attempt to build a better codec. The deliverable
 is the experimental apparatus plus enough concrete representations to prove
@@ -1738,36 +1766,36 @@ it isn't a speculative abstraction with nothing validating it.
 
 ## Architecture
 
-* [ ] `tpt-media-representation` crate — `Representation`/`Quantizer`/`RateEstimator`/`DistortionMetric` trait contracts + `SignalView`/`SignalBuffer` spatiotemporal (`V(x,y,t)`) signal type, kept separate from `tpt-media-core`'s packed-pixel `VideoFrame` because the research question is mathematical (real-valued signals, arbitrary transforms), not about production pixel formats
-* [ ] `tpt-media-research` crate — synthetic signal generators, entropy estimation, the RD/sparsity experiment harness, and the concrete representations below
-* [ ] "no free decoder-side information" rate-accounting rule enforced structurally: `Coeffs`/`Quantized` types carry the complete decoder-required state (dictionaries, motion parameters, mode choices included), so a `RateEstimator` summing bits over the whole value cannot silently omit side information
-* [ ] primary/secondary/diagnostic metric hierarchy is the documented (and implemented) methodology: bits/sample vs. distortion is the RD frontier (primary); entropy, non-zero count, energy compaction are secondary diagnostics; coefficient-retention curves are diagnostic-only and never used to declare a representation "better"
-* [ ] `tpt-dsp` is not modified — 2D transforms are built as separable passes over the existing 1D `dct_ii`/`dct_iii`; entropy estimation, synthetic signals, and VQ-codebook *training* (tpt-dsp only has VQ *search*) live in `tpt-media-research`
+* [x] `tpt-media-representation` crate — `Representation`/`Quantizer`/`RateEstimator`/`DistortionMetric` trait contracts + `SignalView`/`SignalBuffer` spatiotemporal (`V(x,y,t)`) signal type, kept separate from `tpt-media-core`'s packed-pixel `VideoFrame` because the research question is mathematical (real-valued signals, arbitrary transforms), not about production pixel formats
+* [x] `tpt-media-research` crate — synthetic signal generators, entropy estimation, the RD/sparsity experiment harness, and the concrete representations below
+* [x] "no free decoder-side information" rate-accounting rule enforced structurally: `Coeffs`/`Quantized` types carry the complete decoder-required state (dictionaries, motion parameters, mode choices included), so a `RateEstimator` summing bits over the whole value cannot silently omit side information
+* [x] primary/secondary/diagnostic metric hierarchy is the documented (and implemented) methodology: bits/sample vs. distortion is the RD frontier (primary); entropy, non-zero count, energy compaction are secondary diagnostics; coefficient-retention curves are diagnostic-only and never used to declare a representation "better"
+* [x] `tpt-dsp` is not modified — 2D transforms are built as separable passes over the existing 1D `dct_ii`/`dct_iii`; entropy estimation, synthetic signals, and VQ-codebook *training* (tpt-dsp only has VQ *search*) live in `tpt-media-research`
 
 ## Representations
 
-* [ ] `baseline` — raw/uncompressed identity representation, the RD anchor and Phase 0 reference point
-* [ ] `block_dct` — Avenue A: separable 2D DCT-II over a configurable block size, via row+column passes of `tpt-dsp-core::dct::{dct_ii,dct_iii}`
-* [ ] `temporal_dct` — previous-frame prediction (open-loop) + block DCT on the residual; not one of the "3 representations," just the 3rd oracle-experiment condition
-* [ ] `patch_vq` — Avenues C/D: patch extraction + a Lloyd/k-means-trained codebook (new, local to `tpt-media-research`) + `tpt-dsp-core::vq` search/encode/decode; dictionary transmission cost explicitly counted in the rate
-* [ ] `motion_aligned` — Avenue F: coordinate warp `x' = x - vt` (bilinear, toroidal) before representation; velocity is embedded in `Coeffs` so its transmission cost is counted even though the oracle experiment hands it the *true* velocity — knowing it exactly doesn't make it free to decode
+* [x] `baseline` — raw/uncompressed identity representation, the RD anchor and Phase 0 reference point
+* [x] `block_dct` — Avenue A: separable 2D DCT-II over a configurable block size, via row+column passes of `tpt-dsp-core::dct::{dct_ii,dct_iii}`
+* [x] `temporal_dct` — previous-frame prediction (open-loop) + block DCT on the residual; not one of the "3 representations," just the 3rd oracle-experiment condition
+* [x] `patch_vq` — Avenues C/D: patch extraction + a Lloyd/k-means-trained codebook (new, local to `tpt-media-research`) + `tpt-dsp-core::vq` search/encode/decode; dictionary transmission cost explicitly counted in the rate
+* [x] `motion_aligned` — Avenue F: coordinate warp `x' = x - vt` (bilinear, toroidal) before representation; velocity is embedded in `Coeffs` so its transmission cost is counted even though the oracle experiment hands it the *true* velocity — knowing it exactly doesn't make it free to decode
 
 ## Oracle experiment
 
-* [ ] four-condition comparison — raw pixels, spatial DCT, DCT + previous-frame prediction, motion-aligned using the *true* velocity — on a synthetic moving edge `I(x,t) = f(x - vt)` with known `v`, compared at matched rate points
-* [ ] the test harness asserts only measurement validity (every reported value finite; each representation's own round trip reconstructs within tolerance; matched-rate comparison interpolates within the sampled range, never extrapolates; identical inputs reproduce byte-identical output) — it never asserts the hypothesized direction of the result, so the experiment is allowed to conclude "motion alignment didn't help under these conditions"
-* [ ] actual result, recorded honestly once run: *(not yet run)*
+* [x] four-condition comparison — raw pixels, spatial DCT, DCT + previous-frame prediction, motion-aligned using the *true* velocity — on a synthetic moving edge `I(x,t) = f(x - vt)` with known `v`, compared at matched rate points
+* [x] the test harness asserts only measurement validity (every reported value finite; each representation's own round trip reconstructs within tolerance; matched-rate comparison interpolates within the sampled range, never extrapolates; identical inputs reproduce byte-identical output) — it never asserts the hypothesized direction of the result, so the experiment is allowed to conclude "motion alignment didn't help under these conditions"
+* [x] actual result, recorded honestly once run: at the single common rate 0.06787 b/s, motion-aligned is lossless (psnr inf) vs. spatial DCT 12.06 dB, temporal pred 10.48 dB, raw 3.32 dB — see `docs/representation-research.md` §2. The full matrix of recorded comparisons (incl. the honest losses: previous-frame pred *underperforming* spatial DCT, and the fixed-K codebook's hard distortion floor) is in that document.
 
 ## Phases
 
-* [ ] Phase 0 — establish the truth: raw vs. DCT, prove the RD/measurement harness is honest
-* [ ] Phase 2 — challenge locality: blocks (`block_dct`) vs. patches (`patch_vq`)
-* [ ] Phase 4 — challenge coordinates: stationary vs. motion-aligned (the oracle experiment)
-* [ ] Phase 5 — challenge representation: coefficients (`block_dct`) vs. dictionary/VQ (`patch_vq`)
+* [x] Phase 0 — establish the truth: raw vs. DCT, prove the RD/measurement harness is honest
+* [x] Phase 2 — challenge locality: blocks (`block_dct`) vs. patches (`patch_vq`)
+* [x] Phase 4 — challenge coordinates: stationary vs. motion-aligned (the oracle experiment)
+* [x] Phase 5 — challenge representation: coefficients (`block_dct`) vs. dictionary/VQ (`patch_vq`)
 * Phase 1 (DCT vs. alternative transforms), Phase 3 (2-D frame vs. 3-D space-time), and Phase 6 (combine winners) are enabled by the abstraction but explicitly deferred, not implemented this milestone
 
 ## Compatibility with Vault/Whisper (§33-34)
 
-* [ ] no code changes to Vault/Whisper needed yet — neither has any implementation on disk. Recorded intent only: Vault's eventual prediction → partition → transform → quantisation → entropy pipeline and Whisper's eventual patches → dictionary → VQ → temporal-prediction pipeline should each become expressible as one `Representation` impl, without forcing either codec's internals to look identical to the other
+* [x] no code changes to Vault/Whisper needed yet — neither has any implementation on disk. Recorded intent only: Vault's eventual prediction → partition → transform → quantisation → entropy pipeline and Whisper's eventual patches → dictionary → VQ → temporal-prediction pipeline should each become expressible as one `Representation` impl, without forcing either codec's internals to look identical to the other
 
 One thing I particularly like about this arrangement is that if you later decide to build something like RF codecs, scientific signal codecs, telemetry compression, or robotics signal processing, the DSP work we've done for media isn't trapped inside tpt-media; it becomes part of the reusable TPT foundation.

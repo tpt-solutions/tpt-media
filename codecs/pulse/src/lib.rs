@@ -14,7 +14,7 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use tpt_dsp_core::{imdct, mdct, mdct_sine_window};
+use tpt_dsp_core::{mdct_sine_window, FastMdctPlan};
 use tpt_media_bitstream::{BitReader, BitWriter};
 use tpt_media_codec::{
     Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, Decoder, DynDecoder,
@@ -106,6 +106,7 @@ pub struct PulseEncoder {
     cfg: CodecConfig,
     enc: PulseEncoderConfig,
     last_spectrum: Vec<f32>,
+    mdct_plan: FastMdctPlan,
 }
 
 impl PulseEncoder {
@@ -118,6 +119,7 @@ impl PulseEncoder {
                 "band_steps length must equal n_bands",
             ));
         }
+        let mdct_plan = FastMdctPlan::new(enc.frame_size as usize);
         Ok(PulseEncoder {
             info: static_info(Capabilities {
                 real_time_encoder: true,
@@ -126,6 +128,7 @@ impl PulseEncoder {
             cfg: codec_cfg,
             enc,
             last_spectrum: Vec::new(),
+            mdct_plan,
         })
     }
 }
@@ -155,7 +158,7 @@ impl Encoder for PulseEncoder {
             x[i] *= w[i];
         }
         let mut spec = vec![0f32; fs];
-        mdct(&x, &mut spec);
+        self.mdct_plan.forward(&x, &mut spec);
         self.last_spectrum = spec.clone();
         let band_size = (spec.len() / self.enc.n_bands as usize).max(1);
         // Upper bound: 2-byte header + per band (2-byte step + 1-byte
@@ -201,12 +204,20 @@ impl Encoder for PulseEncoder {
 }
 
 /// Pulse decoder.
+///
+/// Holds a pre-built [`FastMdctPlan`] for each supported frame size (128 and
+/// 256). The wire format self-describes its frame size per packet
+/// (`decode_inner` reads it from the bitstream), independent of `enc`'s own
+/// configured default, so a single fixed-size plan is not enough — the
+/// decoder must be able to invert whichever size the sender actually used.
 pub struct PulseDecoder {
     info: CodecInfo,
     cfg: CodecConfig,
     enc: PulseEncoderConfig,
     last_spectrum: Vec<f32>,
     plc_phase: u32,
+    mdct_plan_128: FastMdctPlan,
+    mdct_plan_256: FastMdctPlan,
 }
 
 impl PulseDecoder {
@@ -223,7 +234,18 @@ impl PulseDecoder {
             enc,
             last_spectrum: Vec::new(),
             plc_phase: 0,
+            mdct_plan_128: FastMdctPlan::new(FRAME_128 as usize),
+            mdct_plan_256: FastMdctPlan::new(FRAME_256 as usize),
         })
+    }
+
+    /// The pre-built plan matching spectral length `n` (128 or 256).
+    fn mdct_plan_for(&mut self, n: usize) -> &mut FastMdctPlan {
+        if n == FRAME_128 as usize {
+            &mut self.mdct_plan_128
+        } else {
+            &mut self.mdct_plan_256
+        }
     }
 
     /// Packet-loss concealment: synthesise a plausible frame.
@@ -242,7 +264,7 @@ impl PulseDecoder {
         }
         self.plc_phase = self.plc_phase.wrapping_add(1);
         let mut x = vec![0f32; two_n];
-        imdct(&spec, &mut x);
+        self.mdct_plan_for(fs as usize).inverse(&spec, &mut x);
         let w = sine_window(two_n);
         for i in 0..two_n {
             x[i] *= w[i];
@@ -305,7 +327,8 @@ impl PulseDecoder {
         self.last_spectrum = spec.clone();
         let two_n = 2 * frame_size as usize;
         let mut x = vec![0f32; two_n];
-        imdct(&spec, &mut x);
+        self.mdct_plan_for(frame_size as usize)
+            .inverse(&spec, &mut x);
         let w = sine_window(two_n);
         for i in 0..two_n {
             x[i] *= w[i];

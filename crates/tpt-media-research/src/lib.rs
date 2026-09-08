@@ -1,14 +1,15 @@
 //! Representation-research harness for `tpt-media`: synthetic signal
-//! generators, deterministic PRNG seeding, and empirical entropy
-//! estimation.
+//! generators, deterministic PRNG seeding, empirical entropy estimation, the
+//! matched-rate distortion harness, the concrete representations under test,
+//! and the oracle experiment / methodology phases run by `experiments.rs`.
 //!
-//! See `docs/representation-research.md` and `todo.md` for the
-//! methodology this crate exists to support. The crate has no
-//! representation-codec logic of its own; it consumes the abstract
-//! `Representation` contract from `tpt-media-representation` and the
-//! generic DSP primitives from `tpt-dsp-core`, and exposes measurement
-//! helpers (synthetic inputs, entropy estimators, deterministic RNG) the
-//! harness uses to compare representations honestly.
+//! See `docs/representation-research.md` and `todo.md` §56 for the
+//! methodology this crate exists to support. The crate has no representation-
+//! codec logic of its own; it consumes the abstract `Representation`
+//! contract from `tpt-media-representation` and the generic DSP primitives
+//! from `tpt-dsp-core`, and exposes measurement helpers (synthetic inputs,
+//! entropy estimators, deterministic RNG) that the harness uses to compare
+//! representations honestly.
 //!
 //! # Determinism
 //!
@@ -17,5 +18,11 @@
 //! inputs and the same seed are byte-identical.
 
 pub mod det_rng;
+pub mod diagnostics;
 pub mod entropy;
+pub mod experiments;
+pub mod harness;
+pub mod kmeans;
+pub mod representations;
 pub mod signals;
+pub mod uniform;

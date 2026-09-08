@@ -20,6 +20,11 @@ impl ChannelMask {
         self.0
     }
 
+    /// Build a mask from raw channel bits (used by deserializers).
+    pub const fn from_bits(bits: u16) -> ChannelMask {
+        ChannelMask(bits)
+    }
+
     /// `true` if any channel is set.
     pub const fn is_empty(self) -> bool {
         self.0 == 0
