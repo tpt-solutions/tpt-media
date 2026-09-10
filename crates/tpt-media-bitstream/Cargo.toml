@@ -13,7 +13,8 @@ description = "Zero-allocation bit reader/writer and entropy coding for tpt-medi
 
 [dependencies]
 thiserror = { workspace = true }
+libm = "0.2"
 
 [features]
 default = ["std"]
-std = []
+std = ["thiserror/std"]

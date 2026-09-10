@@ -423,7 +423,7 @@ mod tests {
             }],
         );
         bytes.extend_from_slice(&encode_chunk(&CHUNK_IDX, &encode_idx(99, &tracks)));
-        bytes.extend_from_slice(&encode_chunk(&b"CRC1", &[0, 0, 0, 0]));
+        bytes.extend_from_slice(&encode_chunk(b"CRC1", &[0, 0, 0, 0]));
         let d = TptDemuxer::new(&bytes).unwrap();
         assert!(d.disk_index().is_none());
         assert_eq!(d.stream().tracks.len(), 1);

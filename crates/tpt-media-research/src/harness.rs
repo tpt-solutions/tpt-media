@@ -194,14 +194,19 @@ pub fn interpolated_distortion(points: &[RdPoint], target_rate: f64) -> Option<f
 /// A named RD curve, used by the matched-rate comparison table.
 pub type LabeledCurve = (&'static str, Vec<RdPoint>);
 
+/// One row of a matched-rate table: a target rate and each curve's
+/// distortion interpolated at it (`None` when the curve never reaches the
+/// target — i.e. ranking by that row would require extrapolation).
+pub type MatchedRateRow = Vec<(String, Option<f64>)>;
+
+/// A matched-rate comparison table: target rate → per-curve distortions.
+pub type MatchedRateTable = Vec<(f64, MatchedRateRow)>;
+
 /// For every target rate, report each curve's distortion **interpolated
 /// within its own sampled range**; curves that never reach a target (would
 /// need extrapolation) are reported as `None`. The harness refuses to rank
 /// anything that needed extrapolation.
-pub fn matched_rate_table(
-    curves: &[LabeledCurve],
-    targets: &[f64],
-) -> Vec<(f64, Vec<(String, Option<f64>)>)> {
+pub fn matched_rate_table(curves: &[LabeledCurve], targets: &[f64]) -> MatchedRateTable {
     targets
         .iter()
         .map(|&target| {
@@ -241,7 +246,7 @@ pub fn validate_curve(points: &[RdPoint]) -> Result<(), String> {
 /// success-useful case — callers treat any returned cell as a harness
 /// configuration error, since experiments *choose* targets inside the
 /// sampled ranges.
-pub fn missing_from_table(table: &[(f64, Vec<(String, Option<f64>)>)]) -> Vec<(f64, String)> {
+pub fn missing_from_table(table: &MatchedRateTable) -> Vec<(f64, String)> {
     let mut missing = Vec::new();
     for (target, row) in table {
         for (name, value) in row {
@@ -306,7 +311,7 @@ mod tests {
             &rep,
             &cfg,
             &steps,
-            |s| LinearQuantizer::<BaselineCoeffs>::new(s),
+            LinearQuantizer::<BaselineCoeffs>::new,
             &EntropyRate,
             &mut out,
         );
@@ -315,7 +320,7 @@ mod tests {
             &rep,
             &cfg,
             &steps,
-            |s| LinearQuantizer::<BaselineCoeffs>::new(s),
+            LinearQuantizer::<BaselineCoeffs>::new,
             &EntropyRate,
             &mut out,
         );
@@ -337,7 +342,7 @@ mod tests {
             &rep,
             &cfg,
             &[0.5f32],
-            |s| LinearQuantizer::<BlockDctCoeffs>::new(s),
+            LinearQuantizer::<BlockDctCoeffs>::new,
             &EntropyRate,
             &mut out,
         )[0];
@@ -346,7 +351,7 @@ mod tests {
             &rep,
             &cfg,
             &[0.0078f32],
-            |s| LinearQuantizer::<BlockDctCoeffs>::new(s),
+            LinearQuantizer::<BlockDctCoeffs>::new,
             &EntropyRate,
             &mut out,
         )[0];

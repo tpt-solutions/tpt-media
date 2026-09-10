@@ -5,7 +5,7 @@
 **Language:** Rust
 **Status:** Early Implementation
 **Document version:** 2.1
-**Last updated:** 2026-09-07
+**Last updated:** 2026-09-09
 
 ---
 
@@ -724,7 +724,7 @@ Create `tpt-media-bitstream`.
 * [x] Huffman
 * [x] Rice coding
 * [x] range coder — re-verified 2026-09-07: all 4 range coder tests pass consistently (5 runs); see Known Issues' correction to the earlier "broken" finding
-* [ ] entropy utilities
+* [x] entropy utilities — `entropy.rs` (`shannon_entropy_bits`/`_nats`, `normalize`, `histogram`), 10 tests, wired into `lib.rs` (2026-09-09)
 * [x] canonical representations
 * [x] malformed-input handling
 
@@ -751,13 +751,13 @@ Frame
 * [x] define encoder lifecycle
 * [x] define decoder lifecycle
 * [x] define flush semantics
-* [ ] define drain semantics — only `flush()` exists; no distinct drain concept
+* [x] define drain semantics — `Decoder::drain` / `Encoder::drain` (graceful EOS distinct from hard `flush`), plus `DynDecoder::drain`/`DynEncoder::drain` and `Capabilities::supports_drain`/`supports_encoder_drain`; default forwards to `flush` for codecs with no buffered output (2026-09-09)
 * [x] define error model
 * [x] define configuration model
 * [x] define capability discovery
 * [x] define hardware/SIMD capability exposure
 * [x] define real-time capability
-* [ ] define supported formats
+* [x] define supported formats — `SupportedFormat` (audio/video) + `CodecInfo::supported_formats` + `supports_format()`, letting pipelines validate track→codec pairings up front (2026-09-09)
 
 ---
 
@@ -765,14 +765,14 @@ Frame
 
 All decoders must support bounded resources.
 
-* [ ] maximum frame dimensions — `check_frame_bytes` exists but is never called by a real codec
+* [x] maximum frame dimensions — Pulse/Aura decode paths now call `limits.check_frame_bytes(...)` before producing output (2026-09-09)
 * [x] maximum packet size
 * [ ] maximum metadata size
-* [ ] maximum allocation — `check_allocation` exists but is never called by a real codec
-* [ ] maximum reference frames — `check_reference_frames` exists but is never called by a real codec
-* [ ] maximum recursion depth — `check_recursion_depth` exists but is never called by a real codec
-* [ ] maximum decode work where practical — `max_decode_micros` exists but is never called by a real codec
-* [ ] cancellation support — `CodecError::Cancelled` exists but nothing produces or checks a cancellation token
+* [x] maximum allocation — Pulse (`check_allocation` on the decoded spectrum buffer) and Aura (lossless coefficient/sample buffers, lossy MDCT spec+synthesis buffers) now call `limits.check_allocation(...)` before allocating; both have tests asserting a tight budget yields `ResourceLimit(Allocation)` on a structurally valid packet (2026-09-09)
+* [ ] maximum reference frames — still no video codec to exercise it
+* [ ] maximum recursion depth — no recursive codec decode paths yet
+* [ ] maximum decode work where practical — `max_decode_micros` still uncalled (would need a measured loop budget)
+* [ ] cancellation support — `CodecError::Cancelled` exists but no codec produces/checks a cancellation token yet
 * [x] malformed-input termination guarantees
 
 ---
@@ -989,8 +989,8 @@ Target:
 * [x] implement encoder
 * [x] implement decoder
 * [x] implement PLC
-* [ ] test packet loss — the PLC test only checks `conceal()` returns a frame of the right sample count, not an actual drop-and-conceal stream scenario
-* [ ] test jitter
+* [x] test packet loss — `plc_conceals_mid_stream_packet_loss` (2026-09-09): encodes a 4-frame tone, drops the middle packet, substitutes `conceal()` at its slot, and asserts the concealed frame carries the right sample count/PTS and non-zero energy (realised from the last decoded spectrum), with clean decode before and after the gap
+* [x] test jitter — `jittered_pts_are_preserved_not_reordered` (2026-09-09): delivers valid packets in arrival order 0,2,3,1; the decoder must not panic/reorder on its own and each output frame echoes its own packet's PTS with full-length, non-silent output
 * [ ] benchmark latency
 * [ ] benchmark CPU usage
 
@@ -1020,7 +1020,7 @@ lossy
 * [x] residual
 * [ ] Rice coding — actually implements Exp-Golomb (`write_exp_golomb`/`read_exp_golomb`); doc comment corrected 2026-09-07 to match the wire format (see Known Issues + `CHANGELOG.md` `[Unreleased] / Fixed`). Switching the wire format to actual Rice coding is still pending and would be a breaking change to the v0.1 packet format
 * [x] block structure
-* [ ] checksum/integrity
+* [x] checksum/integrity — every packet ends with a CRC-32 trailer (`crc32`, `CRC_TRAILER_BYTES = 4`) over all preceding payload bytes; the decoder verifies before parsing and rejects mismatches as `MalformedPacket`. Tests: trailer-round-trip, body-bit-flip rejected, checksum-bit-flip rejected, undersized packet rejected (2026-09-09). Note: this is a v0.1 wire-format addition — packets encoded before this change lack the trailer and are rejected by the new decoder
 * [x] bit-exact round trip
 
 ## Lossy
@@ -1641,9 +1641,9 @@ Avoid cyclic dependencies.
 Before 0.1:
 
 * [x] workspace builds — `cargo check --workspace` is clean
-* [ ] CI operational — workflows exist but `cargo test --workspace` currently fails 2 of 12 test binaries; would be red today
+* [x] CI operational — `.github/workflows/ci.yml` gates (`fmt --check`, clippy `--all-targets -- -D warnings`, `cargo build/test --workspace --locked`) all pass, and the no_std `tpt-audio-vox` job (`--target thumbv7em-none-eabi --no-default-features`) now builds: workspace `default-features = false` on `tpt-media-{core,bitstream,codec}` with members opting back into `std`, thiserror 1.x→2.x (1.x hard-requires `std`), `String`/no_std-gate fixes in `tpt-media-codec`, and `libm` for the required float math (2026-09-09)
 * [x] basic media model
-* [ ] timestamp model — blocked on the `rescale` overflow bug, see Known Issues
+* [x] timestamp model — rational timebase, `rescale` overflow bug fixed 2026-09-07 (see Known Issues), signed-duration saturation + `checked_{add,sub}_duration`, disciplined `ClockDomain`/`SyncMap` (§16 all green)
 * [x] bitstream primitives — the range coder finding was corrected 2026-09-07 (all bitstream tests pass); this gate item was blocked only on that
 * [x] container prototype
 * [x] one working codec — Pulse and Aura both have real, signal-preserving encode/decode round trips

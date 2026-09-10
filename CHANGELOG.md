@@ -191,6 +191,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   drift), and `SyncError`. Includes a realistic
   audio-video sync end-to-end test (48 kHz audio × 90 kHz video
   with two pins at t=0 and t=60 s).
+- `tpt-media-bitstream`: `entropy` module (`shannon_entropy_bits` /
+  `shannon_entropy_nats`, `normalize`, `histogram`) wired into `lib.rs`
+  (§17, 2026-09-09).
+- `tpt-audio-pulse` §29 tests: `plc_conceals_mid_stream_packet_loss`
+  (real drop-and-conceal stream scenario — encode a 4-frame tone, drop
+  the middle packet, substitute `conceal()`, assert sample-count/PTS
+  continuity and non-silent concealed output with clean decode before
+  and after the gap) and `jittered_pts_are_preserved_not_reordered`
+  (deliver valid packets out of PTS order without panic or
+  self-reordering; output frames echo their own packet's PTS)
+  (2026-09-09).
+- `tpt-audio-aura` §30: per-packet CRC-32 integrity. Every packet now
+  ends with a 4-byte CRC-32 (`crc32`, `CRC_TRAILER_BYTES`) over all
+  preceding payload bytes; `AuraDecoder` verifies the checksum before
+  parsing and rejects a mismatch (or a packet shorter than the trailer)
+  as `CodecError::MalformedPacket`. Tests: trailer round-trip,
+  body-bit-flip rejection, checksum-bit-flip rejection, undersized
+  packet rejection. **Wire-format impact:** this is a v0.1 packet-format
+  addition — packets produced before this change carry no trailer and
+  are rejected by the new decoder (2026-09-09).
+- `tpt-media-codec`/codecs §19: `ResourceLimits` are now enforced by
+  real decoders. `tpt-audio-pulse` checks `check_allocation` (decoded
+  spectrum buffer) and `check_frame_bytes` (output) during decode;
+  `tpt-audio-aura` checks `check_frame_bytes` and per-mode
+  `check_allocation` (lossless LPC coefficient/sample buffers, lossy
+  MDCT spec/synthesis buffers) before allocating. Both codecs have a
+  test proving a structurally valid packet plus a tight budget yields
+  `CodecError::ResourceLimit(Allocation)` (2026-09-09).
+
+### Fixed
+
+- CI's `no_std` Vox build (`cargo build -p tpt-audio-vox --target
+  thumbv7em-none-eabi --no-default-features`) now compiles. The
+  failure was hidden twice over: (1) member-level `default-features =
+  false` on the workspace-shared `tpt-media-{core,bitstream,codec}`
+  dependencies was silently *ignored* because Cargo only honours it
+  when the `workspace.dependencies` entry declares it — so the `std`
+  feature stayed on for the bare-metal target; and (2) `thiserror
+  1.0.69` has no Cargo features and unconditionally requires `std`, so
+  the `default-features = false` on it was a no-op. Fixed: workspace
+  deps now declare `default-features = false` (std-consuming members
+  opt back in via `features = ["std"]`, forwarding the feature
+  transitively), `thiserror` bumped to 2.x (std optional), and
+  `tpt-media-codec` gained the missing `#![cfg_attr(not(feature =
+  "std"), no_std)]` gate plus an `alloc::string::String` import.
+- `tpt-media-bitstream` / `tpt-media-core`: `f64` methods (`ln`,
+  `log2`, `round`) are not available in `core` for `no_std` targets;
+  the float math now routes through `libm` instead (2.13.1-era
+  `bitflags` compiles clean for the bare-metal target once its `std`
+  feature is not unified in).
 
 ## [0.0.0] — 2026-09-04
 

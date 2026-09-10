@@ -12,13 +12,14 @@ categories.workspace = true
 description = "Shared media data types for the tpt-media stack (timestamps, packets, frames, tracks, metadata)."
 
 [dependencies]
-tpt-media-bitstream = { workspace = true }
+tpt-media-bitstream = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 bitflags = { workspace = true }
+libm = "0.2"
 
 [features]
 default = ["std"]
-std = []
+std = ["tpt-media-bitstream/std", "thiserror/std", "bitflags/std"]
 
 [lib]
 path = "src/lib.rs"

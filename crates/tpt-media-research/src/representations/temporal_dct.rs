@@ -69,8 +69,8 @@ impl Representation for TemporalDct {
         let mut residual = vec![0.0f32; (d.frames - 1) * frame_len];
         let mut resid_frame = vec![0.0f32; frame_len];
         for t in 1..d.frames {
-            for i in 0..frame_len {
-                resid_frame[i] = signal.frame(t)[i] - signal.frame(t - 1)[i];
+            for (i, rf) in resid_frame.iter_mut().enumerate() {
+                *rf = signal.frame(t)[i] - signal.frame(t - 1)[i];
             }
             dct.forward(
                 &resid_frame,

@@ -245,7 +245,7 @@ impl SyncMap {
         } else if ticks_f <= i64::MIN as f64 {
             i64::MIN
         } else {
-            ticks_f.round() as i64
+            libm::round(ticks_f) as i64
         };
 
         Some(Ok(Timestamp {

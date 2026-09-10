@@ -147,15 +147,13 @@ impl Encoder for PulseEncoder {
                 "not enough samples for one frame",
             ));
         }
-        let mut x = vec![0f32; two_n];
-        for i in 0..two_n {
-            let v = i16::from_le_bytes([frame.samples[2 * i], frame.samples[2 * i + 1]]) as f32
-                / i16::MAX as f32;
-            x[i] = v;
-        }
+        let mut x: Vec<f32> = frame.samples[..two_n * 2]
+            .chunks_exact(2)
+            .map(|s| i16::from_le_bytes([s[0], s[1]]) as f32 / i16::MAX as f32)
+            .collect();
         let w = sine_window(two_n);
-        for i in 0..two_n {
-            x[i] *= w[i];
+        for (xi, wi) in x.iter_mut().zip(w.iter()) {
+            *xi *= *wi;
         }
         let mut spec = vec![0f32; fs];
         self.mdct_plan.forward(&x, &mut spec);
@@ -181,8 +179,8 @@ impl Encoder for PulseEncoder {
                 let end = ((band + 1) * band_size).min(spec.len());
                 w.write(8, (end - start) as u64)
                     .map_err(|_| CodecError::Internal)?;
-                for i in start..end {
-                    let q = quantize(spec[i], self.enc.band_steps[band].max(1e-9)).clamp(-127, 127);
+                for &s in &spec[start..end] {
+                    let q = quantize(s, self.enc.band_steps[band].max(1e-9)).clamp(-127, 127);
                     w.write(self.enc.bits_per_coef as u32, (q + 128) as u64)
                         .map_err(|_| CodecError::Internal)?;
                 }
@@ -309,6 +307,10 @@ impl PulseDecoder {
         if frame_size != 128 && frame_size != 256 {
             return Err(CodecError::MalformedPacket);
         }
+        self.cfg
+            .limits
+            .check_allocation(frame_size as usize * core::mem::size_of::<f32>())?;
+        self.cfg.limits.check_frame_bytes(4 * frame_size as usize)?;
         let n_bands = r.read(8).map_err(|_| CodecError::MalformedPacket)? as u8;
         let band_size = (frame_size as usize / n_bands as usize).max(1);
         let mut spec = vec![0f32; frame_size as usize];
@@ -588,9 +590,157 @@ mod tests {
     }
 
     #[test]
+    fn decode_respects_logical_allocation_limits() {
+        // §19: a decoder must refuse work whose internal buffers exceed the
+        // caller's configured `ResourceLimits`, not just packet size. Same
+        // packet as the passing round-trip, but a tight allocation budget.
+        let enc_cfg = PulseEncoderConfig {
+            frame_size: 128,
+            n_bands: 4,
+            band_steps: alloc::vec![1.0; 4],
+            ..Default::default()
+        };
+        let mut encoder = PulseEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
+        let mut frame = make_silence_frame(256);
+        frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
+        let packets = encoder.encode(&frame).unwrap();
+        assert_eq!(packets.len(), 1);
+
+        let tight = CodecConfig {
+            limits: tpt_media_codec::ResourceLimits {
+                max_allocation_bytes: 128,
+                ..tpt_media_codec::ResourceLimits::default()
+            },
+            ..CodecConfig::default()
+        };
+        let mut dec = PulseDecoder::new(tight, enc_cfg).unwrap();
+        assert_eq!(
+            dec.decode(&packets[0]).unwrap_err(),
+            CodecError::ResourceLimit(tpt_media_codec::ResourceLimitKind::Allocation)
+        );
+    }
+
+    #[test]
     fn factory_builds_encoder() {
         let f = PulseEncoderFactory;
         let enc = f.build(&CodecConfig::default()).unwrap();
         assert_eq!(enc.info().codec_id, CODEC_ID);
+    }
+
+    fn make_tone_audio_frame(n: usize, pts_ticks: u64) -> AudioFrame {
+        let mut f = AudioFrame::alloc(n as u32, SampleFormat::S16, ChannelLayout::Mono, 48_000);
+        for (i, s) in f.samples.chunks_mut(2).enumerate() {
+            let v = (0.9 * (i as f32 * 0.11).sin() * i16::MAX as f32) as i16;
+            s.copy_from_slice(&v.to_le_bytes());
+        }
+        f.frame.pts = Timestamp {
+            ticks: pts_ticks as i64,
+            timebase: timebase_48k(),
+        };
+        f
+    }
+
+    fn timebase_48k() -> Timebase {
+        Timebase::new(1, 48_000)
+    }
+
+    fn frame_s16_energy(frame: &AudioFrame) -> i64 {
+        (0..frame.sample_count as usize)
+            .map(|i| {
+                let v = frame.s16(0, i).unwrap() as i64;
+                v * v
+            })
+            .sum()
+    }
+
+    #[test]
+    fn plc_conceals_mid_stream_packet_loss() {
+        // End-to-end drop-and-conceal: encode a steady tone, lose the
+        // middle packet, substitute `conceal()` at its slot, and confirm
+        // the stream survives — concealed frame has the right size/PTS and
+        // carries energy (it reuses the last decoded spectrum), and both
+        // the packet before and after the gap still decode cleanly.
+        let cfg = CodecConfig::default();
+        let enc_cfg = PulseEncoderConfig {
+            frame_size: 128,
+            n_bands: 8,
+            band_steps: alloc::vec![12.0; 8],
+            bits_per_coef: 8,
+            ..Default::default()
+        };
+        let fs = 128usize;
+        let frame_len = 2 * fs;
+        let mut dec = PulseDecoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut encoder = PulseEncoder::new(cfg, enc_cfg).unwrap();
+
+        let mut packets = alloc::vec![];
+        for frame_idx in 0..4 {
+            let pts = frame_idx as u64 * frame_len as u64;
+            let frame = make_tone_audio_frame(frame_len, pts);
+            packets.extend(encoder.encode(&frame).unwrap());
+        }
+        assert_eq!(packets.len(), 4);
+
+        for (idx, pkt) in packets.iter().enumerate() {
+            if idx == 1 {
+                continue;
+            }
+            let decoded = dec.decode(pkt).unwrap();
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(decoded[0].sample_count as usize, frame_len);
+            assert_eq!(decoded[0].frame.pts, pkt.pts);
+        }
+
+        let lost_pts = packets[1].pts;
+        let concealed = dec.conceal(lost_pts).unwrap();
+        assert_eq!(concealed.sample_count as usize, frame_len);
+        assert_eq!(concealed.frame.pts, lost_pts);
+        assert!(
+            frame_s16_energy(&concealed) > 0,
+            "concealed frame must carry energy (realised from last decoded spectrum)"
+        );
+
+        let tail = dec.decode(&packets[2]).unwrap();
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].sample_count as usize, frame_len);
+        assert_eq!(tail[0].frame.pts, packets[2].pts);
+    }
+
+    #[test]
+    fn jittered_pts_are_preserved_not_reordered() {
+        // Deliver valid packets out of PTS order (arrival: 0, 2, 3, 1) as a
+        // jitter-bound real-time transport might. The decoder must not
+        // panic, must not reorder or drop on its own, and must echo each
+        // packet's own PTS back on its output frame.
+        let cfg = CodecConfig::default();
+        let enc_cfg = PulseEncoderConfig {
+            frame_size: 128,
+            n_bands: 8,
+            band_steps: alloc::vec![12.0; 8],
+            bits_per_coef: 8,
+            ..Default::default()
+        };
+        let fs = 128usize;
+        let frame_len = 2 * fs;
+        let mut dec = PulseDecoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut encoder = PulseEncoder::new(cfg, enc_cfg).unwrap();
+
+        let mut packets = alloc::vec![];
+        for frame_idx in 0..4 {
+            let pts = frame_idx as u64 * frame_len as u64;
+            let frame = make_tone_audio_frame(frame_len, pts);
+            packets.extend(encoder.encode(&frame).unwrap());
+        }
+        let arrival_order = [0usize, 2, 3, 1];
+        for &idx in &arrival_order {
+            let decoded = dec.decode(&packets[idx]).unwrap();
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(decoded[0].frame.pts, packets[idx].pts);
+            assert_eq!(decoded[0].sample_count as usize, frame_len);
+            assert!(
+                frame_s16_energy(&decoded[0]) > 0,
+                "frame {idx} must decode with energy despite out-of-order arrival"
+            );
+        }
     }
 }

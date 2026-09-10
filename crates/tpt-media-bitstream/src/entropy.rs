@@ -15,7 +15,8 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Natural log of 2, pre-computed for the bits-vs-nats choice below.
+/// Natural log of 2, pre-computed for the bits-vs-nats consistency test.
+#[cfg(test)]
 const LN2: f64 = core::f64::consts::LN_2;
 
 /// Compute the Shannon entropy of a discrete distribution, in **bits
@@ -66,7 +67,7 @@ pub fn shannon_entropy_nats(counts: &[u64]) -> f64 {
             continue;
         }
         let p = c as f64 / total_f;
-        h -= p * p.ln();
+        h -= p * libm::log(p);
     }
     h
 }
@@ -111,12 +112,11 @@ where
     hist
 }
 
-/// log2 helper that avoids pulling in the nightly-only `f64::log2` in
-/// `core` (which is stable as of Rust 1.84, but this crate targets
-/// MSRV 1.75 — keep the explicit `ln/ln2` form).
+/// log2 helper — `f64::log2`/`f64::ln` are not available in `core`, so
+/// this crate (no_std-capable) routes the math through `libm`.
 #[inline]
 fn log2(x: f64) -> f64 {
-    x.ln() / LN2
+    libm::log2(x)
 }
 
 #[cfg(test)]

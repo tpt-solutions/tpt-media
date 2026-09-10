@@ -210,7 +210,7 @@ impl Duration {
 
     /// Build a duration from a floating-point seconds count.
     pub fn from_seconds(seconds: f64) -> Self {
-        let nanos = (seconds * 1e9).round() as i64;
+        let nanos = libm::round(seconds * 1e9) as i64;
         Duration {
             ticks: nanos,
             timebase: Timebase::MICROSECONDS,

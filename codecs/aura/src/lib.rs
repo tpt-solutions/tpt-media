@@ -18,6 +18,9 @@
 //!   the doc is being brought into line with the code rather than vice
 //!   versa).
 //! - MDCT analysis and synthesis.
+//! - Per-packet integrity: every packet ends with a CRC-32 over its
+//!   payload (`crc32` + [`CRC_TRAILER_BYTES`]); the decoder verifies it
+//!   before parsing anything.
 //!
 //! See `docs/provenance.md` for algorithm sources.
 
@@ -40,6 +43,29 @@ pub const CODEC_ID: [u8; 4] = *b"AURA";
 
 /// Bitstream version.
 pub const VERSION: u16 = 1;
+
+/// Size in bytes of the per-packet CRC-32 trailer.
+pub const CRC_TRAILER_BYTES: usize = 4;
+
+/// CRC-32 (IEEE 802.3, polynomial `0xEDB88320`, reflected) — the same
+/// check used by `tpt-container`'s per-cluster integrity (`crc32.rs` in
+/// that crate), kept here so the codec layer can verify granular,
+/// packet-sized integrity without depending on the container crate.
+///
+/// Every Aura packet ends with this 4-byte value over all preceding
+/// bytes of the packet data; [`AuraDecoder`] refuses to parse a packet
+/// whose CRC does not match.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in bytes {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
 
 fn static_info(caps: Capabilities) -> CodecInfo {
     CodecInfo {
@@ -137,11 +163,10 @@ impl Encoder for AuraEncoder {
                 "not enough samples for one block",
             ));
         }
-        let mut x = vec![0f64; fs];
-        for i in 0..fs {
-            x[i] = i16::from_le_bytes([frame.samples[2 * i], frame.samples[2 * i + 1]]) as f64
-                / i16::MAX as f64;
-        }
+        let x: Vec<f64> = frame.samples[..fs * 2]
+            .chunks_exact(2)
+            .map(|s| i16::from_le_bytes([s[0], s[1]]) as f64 / i16::MAX as f64)
+            .collect();
         let order = self.enc.lpc_order as usize;
         // Upper bound: ~64 bits of header slack, `order` 16-bit LPC
         // coefficients, and up to 96 bits/sample (a generous bound on the
@@ -205,6 +230,8 @@ impl Encoder for AuraEncoder {
             w.finish().map_err(|_| CodecError::Internal)?
         };
         buf.truncate(written);
+        let crc = crc32(&buf[..written]);
+        buf.extend_from_slice(&crc.to_le_bytes());
         Ok(vec![Packet {
             data: buf,
             pts: frame.frame.pts,
@@ -327,7 +354,15 @@ impl Decoder for AuraDecoder {
 
 impl AuraDecoder {
     fn decode_inner(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
-        let mut r = BitReader::new(&packet.data);
+        if packet.data.len() < CRC_TRAILER_BYTES {
+            return Err(CodecError::MalformedPacket);
+        }
+        let (body, checksum) = packet.data.split_at(packet.data.len() - CRC_TRAILER_BYTES);
+        let expected = u32::from_le_bytes(checksum.try_into().expect("4-byte slice"));
+        if crc32(body) != expected {
+            return Err(CodecError::MalformedPacket);
+        }
+        let mut r = BitReader::new(body);
         let mode_bit = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
         let mode = if mode_bit == 1 {
             AuraMode::Lossless
@@ -337,8 +372,13 @@ impl AuraDecoder {
         let lpc_order = r.read(5).map_err(|_| CodecError::MalformedPacket)? as u8;
         let _mdct_size_bits = r.read(8).map_err(|_| CodecError::MalformedPacket)?;
         let fs = self.enc.block_size as usize;
+        self.cfg.limits.check_frame_bytes(fs * 2)?;
         let samples = match mode {
             AuraMode::Lossless => {
+                self.cfg.limits.check_allocation(
+                    (fs * core::mem::size_of::<i32>())
+                        .max(lpc_order as usize * core::mem::size_of::<i32>()),
+                )?;
                 let mut coeffs_q = vec![0i32; lpc_order as usize];
                 for c in coeffs_q.iter_mut() {
                     let bits = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
@@ -375,6 +415,9 @@ impl AuraDecoder {
                     return Err(CodecError::MalformedPacket);
                 }
                 let n_half = fs / 2;
+                self.cfg
+                    .limits
+                    .check_allocation(n_half * core::mem::size_of::<f64>() * 2)?;
                 let mut spec = vec![0f64; n_half];
                 for s in spec.iter_mut() {
                     let q = r.read(16).map_err(|_| CodecError::MalformedPacket)? as i16;
@@ -635,5 +678,110 @@ mod tests {
             ..Default::default()
         };
         assert!(AuraEncoder::new(cfg, enc_cfg).is_err());
+    }
+
+    fn encode_single_packet(mode: AuraMode) -> Packet {
+        let cfg = CodecConfig::default();
+        let enc_cfg = AuraConfig {
+            mode,
+            block_size: 256,
+            lpc_order: 8,
+            ..Default::default()
+        };
+        let mut enc = AuraEncoder::new(cfg, enc_cfg).unwrap();
+        let mut frame = tone_frame(256, 48_000);
+        frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
+        let packets = enc.encode(&frame).unwrap();
+        packets.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn packet_carries_crc_trailer() {
+        let pkt = encode_single_packet(AuraMode::Lossless);
+        assert!(pkt.data.len() > CRC_TRAILER_BYTES);
+        let (body, checksum) = pkt.data.split_at(pkt.data.len() - CRC_TRAILER_BYTES);
+        assert_eq!(
+            crc32(body),
+            u32::from_le_bytes(checksum.try_into().unwrap()),
+            "trailing 4 bytes must be the CRC-32 of the body"
+        );
+    }
+
+    #[test]
+    fn decode_rejects_corrupted_body() {
+        let mut pkt = encode_single_packet(AuraMode::Lossless);
+        assert!(pkt.data.len() > CRC_TRAILER_BYTES + 1);
+        let flip = pkt.data.len() / 2;
+        pkt.data[flip] ^= 0x40;
+        let mut dec = AuraDecoder::new(
+            CodecConfig::default(),
+            AuraConfig {
+                mode: AuraMode::Lossless,
+                block_size: 256,
+                lpc_order: 8,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            dec.decode(&pkt).unwrap_err(),
+            CodecError::MalformedPacket,
+            "a body bit flip must be caught by the per-packet CRC"
+        );
+    }
+
+    #[test]
+    fn decode_rejects_corrupted_checksum() {
+        let mut pkt = encode_single_packet(AuraMode::Lossy);
+        let last = pkt.data.len() - 1;
+        pkt.data[last] ^= 0x01;
+        let mut dec = AuraDecoder::new(
+            CodecConfig::default(),
+            AuraConfig {
+                mode: AuraMode::Lossy,
+                block_size: 256,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(dec.decode(&pkt).unwrap_err(), CodecError::MalformedPacket);
+    }
+
+    #[test]
+    fn decode_rejects_undersized_packet() {
+        let mut dec = AuraDecoder::new(CodecConfig::default(), AuraConfig::default()).unwrap();
+        let mut pkt = encode_single_packet(AuraMode::Lossless);
+        pkt.data.clear();
+        assert_eq!(dec.decode(&pkt).unwrap_err(), CodecError::MalformedPacket);
+    }
+
+    #[test]
+    fn decode_enforces_resource_limits() {
+        // §19: with a tight allocation budget, a structurally valid packet
+        // must be refused as a resource-limit error rather than decodes
+        // fully. Lossy: the decoder's spec + synthesis buffers for a 256
+        // block need more than the 512-byte budget granted here.
+        let enc_cfg_block = AuraConfig {
+            mode: AuraMode::Lossy,
+            block_size: 256,
+            ..Default::default()
+        };
+        let mut enc = AuraEncoder::new(CodecConfig::default(), enc_cfg_block.clone()).unwrap();
+        let mut frame = tone_frame(256, 48_000);
+        frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
+        let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
+
+        let tight = CodecConfig {
+            limits: tpt_media_codec::ResourceLimits {
+                max_allocation_bytes: 512,
+                ..tpt_media_codec::ResourceLimits::default()
+            },
+            ..CodecConfig::default()
+        };
+        let mut dec = AuraDecoder::new(tight, enc_cfg_block).unwrap();
+        assert_eq!(
+            dec.decode(&packet).unwrap_err(),
+            CodecError::ResourceLimit(tpt_media_codec::ResourceLimitKind::Allocation)
+        );
     }
 }

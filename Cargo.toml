@@ -46,10 +46,14 @@ exclude = [
 ]
 
 [workspace.dependencies]
-# Internal crates
-tpt-media-core = { path = "crates/tpt-media-core", version = "0.1.0" }
-tpt-media-bitstream = { path = "crates/tpt-media-bitstream", version = "0.1.0" }
-tpt-media-codec = { path = "crates/tpt-media-codec", version = "0.1.0" }
+# Internal crates. `default-features = false` is set here (not at the
+# member level — Cargo only honors member-level `default-features` when
+# the workspace dependency declares it) so members explicitly opt into
+# "std" via `features = ["std"]`; `tpt-audio-vox` instead builds these
+# crates no_std for its bare-metal target (todo.md §31).
+tpt-media-core = { path = "crates/tpt-media-core", version = "0.1.0", default-features = false }
+tpt-media-bitstream = { path = "crates/tpt-media-bitstream", version = "0.1.0", default-features = false }
+tpt-media-codec = { path = "crates/tpt-media-codec", version = "0.1.0", default-features = false }
 tpt-media-container = { path = "crates/tpt-media-container", version = "0.1.0" }
 tpt-media-pipeline = { path = "crates/tpt-media-pipeline", version = "0.1.0" }
 tpt-media-io = { path = "crates/tpt-media-io", version = "0.1.0" }
@@ -82,7 +86,7 @@ tpt-dsp-io = { path = "../tpt-dsp/tpt-dsp-io", version = "0.1" }
 
 # External dependencies — kept minimal per todo.md §1
 bitflags = { version = "2.4", default-features = false }
-thiserror = { version = "1.0", default-features = false }
+thiserror = { version = "2", default-features = false }
 log = { version = "0.4", default-features = false }
 cfg-if = { version = "1.0", default-features = false }
 

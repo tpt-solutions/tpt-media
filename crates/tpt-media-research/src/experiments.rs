@@ -22,7 +22,9 @@
 use tpt_media_representation::{Quantizer, Representation, SignalBuffer, SignalView};
 
 use crate::diagnostics::SecondaryDiagnostics;
-use crate::harness::{interpolated_distortion, validate_curve, LabeledCurve, RdPoint};
+use crate::harness::{
+    interpolated_distortion, validate_curve, LabeledCurve, MatchedRateRow, RdPoint,
+};
 use crate::representations::baseline::BaselineCoeffs;
 use crate::representations::block_dct::BlockDctCoeffs;
 use crate::representations::motion_aligned::{
@@ -48,7 +50,7 @@ pub struct ExperimentReport {
     pub targets: Vec<f64>,
     /// Matched-rate distortion (MSE) per target, per representation. A valid
     /// experiment has no `None` cells.
-    pub table: Vec<(f64, Vec<(String, Option<f64>)>)>,
+    pub table: Vec<(f64, MatchedRateRow)>,
     /// Secondary diagnostics at one mid-sweep operating point (never primary;
     /// present only for linear-coefficient curves — `patch_vq` has no linear
     /// coefficient stream and is omitted).
@@ -269,7 +271,7 @@ fn baseline_curve(signal: SignalView<'_>, steps: &[f32], out: &mut SignalBuffer)
         &Baseline,
         &BaselineConfig,
         steps,
-        |s| LinearQuantizer::<BaselineCoeffs>::new(s),
+        LinearQuantizer::<BaselineCoeffs>::new,
         &EntropyRate,
         out,
     )
@@ -286,7 +288,7 @@ fn block_dct_curve(
         &BlockDct,
         &BlockDctConfig { block_size: block },
         steps,
-        |s| LinearQuantizer::<BlockDctCoeffs>::new(s),
+        LinearQuantizer::<BlockDctCoeffs>::new,
         &EntropyRate,
         out,
     )
@@ -303,7 +305,7 @@ fn temporal_dct_curve(
         &TemporalDct,
         &TemporalDctConfig { block_size: block },
         steps,
-        |s| TemporalDctQuantizer::new(s),
+        TemporalDctQuantizer::new,
         &TemporalDctRate,
         out,
     )
@@ -321,7 +323,7 @@ fn motion_aligned_curve(
         &MotionAligned::with_velocity(v[0], v[1]),
         &MotionAlignedConfig { block_size: block },
         steps,
-        |s| MotionAlignedQuantizer::new(s),
+        MotionAlignedQuantizer::new,
         &MotionAlignedRate,
         out,
     )
@@ -525,8 +527,8 @@ fn common_targets(curves: &[LabeledCurve], count: usize) -> Option<Vec<f64>> {
     if (high - low).abs() < 1e-6 || count <= 1 {
         return Some(vec![low]);
     }
-    let log_low = low.log10().max(-6.0).min(6.0);
-    let log_high = high.log10().max(-6.0).min(6.0);
+    let log_low = low.log10().clamp(-6.0, 6.0);
+    let log_high = high.log10().clamp(-6.0, 6.0);
     Some(
         (0..count)
             .map(|i| {
@@ -566,7 +568,7 @@ mod tests {
         assert_eq!(report.curves.len(), 4, "four conditions");
         assert!(!report.targets.is_empty(), "targets must be chosen");
         for (name, pts) in &report.curves {
-            validate_curve(pts).ok().expect(name);
+            validate_curve(pts).expect(name);
             assert!(
                 pts.iter()
                     .all(|p| p.mse.is_finite() && p.bits_per_sample.is_finite()),

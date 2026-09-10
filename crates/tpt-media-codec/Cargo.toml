@@ -12,11 +12,11 @@ categories.workspace = true
 description = "Generic codec framework: Encoder, Decoder, Codec traits, capabilities, resource limits."
 
 [dependencies]
-tpt-media-core = { workspace = true }
-tpt-media-bitstream = { workspace = true }
+tpt-media-core = { workspace = true, default-features = false }
+tpt-media-bitstream = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 bitflags = { workspace = true }
 
 [features]
 default = ["std"]
-std = []
+std = ["tpt-media-core/std", "tpt-media-bitstream/std", "thiserror/std"]

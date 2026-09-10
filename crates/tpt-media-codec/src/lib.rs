@@ -6,9 +6,12 @@
 //!
 //! See `ARCHITECTURE.md` §6 and `docs/codec-design.md`.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 use tpt_media_core::Packet;
