@@ -76,6 +76,8 @@ pub enum ResourceLimitKind {
     RecursionDepth,
     /// Decoder CPU-time budget exceeded (best-effort).
     CpuBudget,
+    /// Metadata size exceeds the configured maximum.
+    MetadataSize,
 }
 
 /// Resource limits enforced by a decoder.
@@ -93,6 +95,9 @@ pub struct ResourceLimits {
     pub max_recursion_depth: u8,
     /// Optional CPU-time budget per decode call, in microseconds (0 = disabled).
     pub max_decode_micros: u32,
+    /// Maximum size in bytes of a single metadata chunk/record (e.g. a
+    /// container's per-track `TMTA` block) before it is even parsed.
+    pub max_metadata_bytes: u32,
 }
 
 impl ResourceLimits {
@@ -105,6 +110,7 @@ impl ResourceLimits {
             max_allocation_bytes: 512 * 1024 * 1024,
             max_recursion_depth: 16,
             max_decode_micros: 0,
+            max_metadata_bytes: 16 * 1024 * 1024,
         }
     }
 
@@ -117,6 +123,7 @@ impl ResourceLimits {
             max_allocation_bytes: 32 * 1024 * 1024,
             max_recursion_depth: 6,
             max_decode_micros: 50_000,
+            max_metadata_bytes: 64 * 1024,
         }
     }
 
@@ -160,6 +167,14 @@ impl ResourceLimits {
     pub fn check_recursion_depth(&self, depth: u8) -> CodecResult<()> {
         if depth > self.max_recursion_depth {
             return Err(CodecError::ResourceLimit(ResourceLimitKind::RecursionDepth));
+        }
+        Ok(())
+    }
+
+    /// Check that a metadata block size is within the configured maximum.
+    pub fn check_metadata(&self, bytes: usize) -> CodecResult<()> {
+        if bytes > self.max_metadata_bytes as usize {
+            return Err(CodecError::ResourceLimit(ResourceLimitKind::MetadataSize));
         }
         Ok(())
     }

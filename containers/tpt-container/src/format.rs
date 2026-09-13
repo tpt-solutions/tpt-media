@@ -612,11 +612,17 @@ pub fn decode_tmta(body: &[u8]) -> Option<(u8, Vec<(String, MetadataValue)>)> {
                 }
                 let len = u32::from_le_bytes(body[p..p + 4].try_into().ok()?) as usize;
                 p += 4;
-                if p + len > body.len() {
+                // `len` is a fully attacker-controlled `u32` (up to
+                // ~4.29 billion); `checked_add` (rather than `+`) keeps
+                // this bounds check correct even on 32-bit `usize`
+                // targets, where `p + len` could otherwise wrap around
+                // and pass a check it should have failed.
+                let end = p.checked_add(len)?;
+                if end > body.len() {
                     return None;
                 }
-                let b = body[p..p + len].to_vec();
-                p += len;
+                let b = body[p..end].to_vec();
+                p = end;
                 MetadataValue::Bytes(b)
             }
             _ => return None,
@@ -696,6 +702,16 @@ pub fn decode_idx(body: &[u8]) -> Option<IndexFile> {
         }
         let entry_count = u32::from_le_bytes(body[p..p + 4].try_into().ok()?) as usize;
         p += 4;
+        // §47: `entry_count` is a fully attacker-controlled `u32` (up to
+        // ~4.29 billion); each entry is a fixed 17 bytes, so an
+        // `entry_count` claiming more entries than could possibly fit in
+        // the remaining body is malformed. Reject it before
+        // pre-allocating for it, rather than attempting a
+        // decompression-bomb-style multi-gigabyte allocation from a
+        // tiny input buffer.
+        if entry_count > body.len().saturating_sub(p) / 17 {
+            return None;
+        }
         let mut entries = Vec::with_capacity(entry_count);
         for _ in 0..entry_count {
             if p + 17 > body.len() {

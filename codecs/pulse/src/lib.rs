@@ -4,9 +4,28 @@
 //!
 //! - Frame sizes: 128 or 256 samples (default 256).
 //! - Transform: MDCT with sine window.
-//! - Quantisation: uniform scalar with per-band step size.
+//! - Quantisation: uniform scalar with per-band step size, with an
+//!   optional perceptual reweighting (see [`PulseEncoderConfig::perceptual_weighting`]).
 //! - Entropy: fixed-width bit fields (uniform quantiser index).
 //! - PLC: phase-randomised sign perturbation of previous frame's MDCT.
+//!
+//! ## Optional perceptual weighting
+//!
+//! Unlike Aura's lossy mode (full simultaneous-masking model, §10 of
+//! `todo.md`), Pulse is a low-latency, low-complexity real-time codec, so
+//! it deliberately uses only the cheapest piece of that toolkit: the
+//! absolute threshold of hearing
+//! ([`tpt_dsp_core::threshold_in_quiet`]), evaluated once per band at
+//! construction time (not per frame — it depends only on the fixed
+//! band layout, so there is nothing to recompute per packet). Each band's
+//! configured step is scaled by that band's threshold relative to a 1kHz
+//! reference, so bands the ear is objectively less sensitive to (relative
+//! to 1kHz) get proportionally coarser steps for the same nominal
+//! `band_steps` input. The scaling only ever *coarsens* a band's step,
+//! never sharpens it below its configured value, since the wire format's
+//! step field is an integer with no sub-configured granularity to
+//! sharpen into. Zero added real-time cost, no wire-format change, since
+//! Pulse already transmits the actual per-band step used.
 //!
 //! See `docs/provenance.md` for algorithm sources.
 
@@ -14,7 +33,7 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use tpt_dsp_core::{mdct_sine_window, FastMdctPlan};
+use tpt_dsp_core::{db_to_power, mdct_sine_window, threshold_in_quiet, FastMdctPlan};
 use tpt_media_bitstream::{BitReader, BitWriter};
 use tpt_media_codec::{
     Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, Decoder, DynDecoder,
@@ -86,6 +105,12 @@ pub struct PulseEncoderConfig {
     pub n_bands: u8,
     pub band_steps: Vec<f32>,
     pub bits_per_coef: u8,
+    /// When `true`, each band's step from `band_steps` is scaled by that
+    /// band's absolute threshold of hearing relative to a 1kHz reference
+    /// (see the module doc's "Optional perceptual weighting" section).
+    /// Defaults to `false` (every existing caller keeps its exact
+    /// previous behavior).
+    pub perceptual_weighting: bool,
 }
 
 impl Default for PulseEncoderConfig {
@@ -96,8 +121,45 @@ impl Default for PulseEncoderConfig {
             n_bands: 16,
             band_steps: alloc::vec![1.0; 16],
             bits_per_coef: 8,
+            perceptual_weighting: false,
         }
     }
+}
+
+/// Reference frequency (Hz) the per-band perceptual weight is normalized
+/// against: a band's weight is 1.0 at 1kHz, `>1` where the ear is less
+/// sensitive than at 1kHz (coarser step), `<1` where it's more sensitive
+/// (finer step). Purely relative, so it needs no dBFS/SPL calibration
+/// assumption — see the module doc.
+const PERCEPTUAL_REFERENCE_HZ: f32 = 1000.0;
+
+/// Precompute a per-band perceptual weight multiplier for `n_bands` bands
+/// spanning `frame_size` MDCT bins at `sample_rate`, from the absolute
+/// threshold of hearing alone (see the module doc's "Optional perceptual
+/// weighting" section). Returns all-`1.0` (a no-op) when `enabled` is
+/// `false`.
+fn perceptual_band_weights(
+    enabled: bool,
+    frame_size: usize,
+    n_bands: usize,
+    sample_rate: u32,
+) -> Vec<f32> {
+    let mut weights = vec![1.0f32; n_bands];
+    if !enabled || n_bands == 0 {
+        return weights;
+    }
+    let band_size = (frame_size / n_bands).max(1);
+    let nyquist = sample_rate as f32 / 2.0;
+    let reference_db = threshold_in_quiet(PERCEPTUAL_REFERENCE_HZ);
+    for (band, w) in weights.iter_mut().enumerate() {
+        let start = band * band_size;
+        let end = ((band + 1) * band_size).min(frame_size).max(start + 1);
+        let mid_bin = (start + end - 1) / 2;
+        let bin_hz = (mid_bin as f32 + 0.5) * nyquist / frame_size as f32;
+        let quiet_db = threshold_in_quiet(bin_hz.max(1.0));
+        *w = db_to_power(quiet_db - reference_db);
+    }
+    weights
 }
 
 /// Pulse encoder.
@@ -107,6 +169,11 @@ pub struct PulseEncoder {
     enc: PulseEncoderConfig,
     last_spectrum: Vec<f32>,
     mdct_plan: FastMdctPlan,
+    /// Per-band perceptual weight multiplier (all `1.0` when
+    /// `enc.perceptual_weighting` is `false`); precomputed once here since
+    /// it depends only on the fixed band layout, not per-frame signal
+    /// content — see [`perceptual_band_weights`].
+    perceptual_weights: Vec<f32>,
 }
 
 impl PulseEncoder {
@@ -120,6 +187,12 @@ impl PulseEncoder {
             ));
         }
         let mdct_plan = FastMdctPlan::new(enc.frame_size as usize);
+        let perceptual_weights = perceptual_band_weights(
+            enc.perceptual_weighting,
+            enc.frame_size as usize,
+            enc.n_bands as usize,
+            enc.sample_rate,
+        );
         Ok(PulseEncoder {
             info: static_info(Capabilities {
                 real_time_encoder: true,
@@ -129,6 +202,7 @@ impl PulseEncoder {
             enc,
             last_spectrum: Vec::new(),
             mdct_plan,
+            perceptual_weights,
         })
     }
 }
@@ -161,18 +235,34 @@ impl Encoder for PulseEncoder {
         let band_size = (spec.len() / self.enc.n_bands as usize).max(1);
         // Upper bound: 2-byte header + per band (2-byte step + 1-byte
         // count + up to `bits_per_coef` bits per coefficient), plus the
-        // trailing keyframe bit, rounded up to whole bytes.
-        let max_bits =
-            16 + self.enc.n_bands as usize * (24 + self.enc.bits_per_coef as usize * band_size) + 8;
+        // trailing keyframe bit and the leading wire-version field,
+        // rounded up to whole bytes.
+        let max_bits = 16
+            + self.enc.n_bands as usize * (24 + self.enc.bits_per_coef as usize * band_size)
+            + 8
+            + 16;
         let mut buf = vec![0u8; max_bits.div_ceil(8)];
         let written = {
             let mut w = BitWriter::new(&mut buf);
+            // §35: a versioned bitstream, checked first on decode so an
+            // unrecognized version fails cleanly instead of being
+            // misparsed as this decoder's own layout.
+            w.write(16, VERSION as u64)
+                .map_err(|_| CodecError::Internal)?;
             w.write(1, (self.enc.frame_size as u64 / 128) - 1)
                 .map_err(|_| CodecError::Internal)?;
             w.write(8, self.enc.n_bands as u64)
                 .map_err(|_| CodecError::Internal)?;
             for band in 0..self.enc.n_bands as usize {
-                let step_bits = self.enc.band_steps[band].clamp(0.0, 65535.0) as u16;
+                // The wire format's step field is an integer `u16` (no
+                // fractional granularity), so perceptual weighting can
+                // only ever *coarsen* a band's step (weight > 1, for
+                // less-sensitive bands), never sharpen an already
+                // integer-quantized one below its own configured value —
+                // floor at the configured step itself.
+                let effective_step = (self.enc.band_steps[band] * self.perceptual_weights[band])
+                    .max(self.enc.band_steps[band]);
+                let step_bits = effective_step.clamp(0.0, 65535.0) as u16;
                 w.write(16, step_bits as u64)
                     .map_err(|_| CodecError::Internal)?;
                 let start = band * band_size;
@@ -180,7 +270,7 @@ impl Encoder for PulseEncoder {
                 w.write(8, (end - start) as u64)
                     .map_err(|_| CodecError::Internal)?;
                 for &s in &spec[start..end] {
-                    let q = quantize(s, self.enc.band_steps[band].max(1e-9)).clamp(-127, 127);
+                    let q = quantize(s, effective_step.max(1e-9)).clamp(-127, 127);
                     w.write(self.enc.bits_per_coef as u32, (q + 128) as u64)
                         .map_err(|_| CodecError::Internal)?;
                 }
@@ -302,6 +392,12 @@ impl Decoder for PulseDecoder {
 impl PulseDecoder {
     fn decode_inner(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
         let mut r = BitReader::new(&packet.data);
+        // §35: reject an unrecognized wire version before interpreting
+        // any further bits as if they were this decoder's own layout.
+        let wire_version = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
+        if wire_version != VERSION {
+            return Err(CodecError::Unsupported("unsupported Pulse packet version"));
+        }
         let fs_code = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
         let frame_size = 128 * (fs_code as u16 + 1);
         if frame_size != 128 && frame_size != 256 {
@@ -312,6 +408,9 @@ impl PulseDecoder {
             .check_allocation(frame_size as usize * core::mem::size_of::<f32>())?;
         self.cfg.limits.check_frame_bytes(4 * frame_size as usize)?;
         let n_bands = r.read(8).map_err(|_| CodecError::MalformedPacket)? as u8;
+        if n_bands == 0 {
+            return Err(CodecError::MalformedPacket);
+        }
         let band_size = (frame_size as usize / n_bands as usize).max(1);
         let mut spec = vec![0f32; frame_size as usize];
         for band in 0..n_bands as usize {
@@ -319,6 +418,18 @@ impl PulseDecoder {
             let step = step_bits as f32;
             let n_coeffs = r.read(8).map_err(|_| CodecError::MalformedPacket)? as usize;
             let start = band * band_size;
+            // `n_bands`/`n_coeffs` come straight from the packet, so a
+            // malformed or adversarial stream can claim more coefficients
+            // than actually fit in `spec` (e.g. `n_bands` far exceeding
+            // `frame_size`, or a `band`/`n_coeffs` combination that runs
+            // past the end) — bounds-check before writing instead of
+            // indexing out of range.
+            let end = start
+                .checked_add(n_coeffs)
+                .ok_or(CodecError::MalformedPacket)?;
+            if end > spec.len() {
+                return Err(CodecError::MalformedPacket);
+            }
             for i in 0..n_coeffs {
                 let q = r
                     .read(self.enc.bits_per_coef as u32)
@@ -742,5 +853,253 @@ mod tests {
                 "frame {idx} must decode with energy despite out-of-order arrival"
             );
         }
+    }
+
+    /// Parse a Pulse packet's header far enough to recover the transmitted
+    /// per-band step values (skipping over each band's coefficients),
+    /// without going through a full decode.
+    fn extract_band_steps(pkt: &Packet, bits_per_coef: u32) -> alloc::vec::Vec<u16> {
+        let mut r = BitReader::new(&pkt.data);
+        let _wire_version = r.read(16).unwrap();
+        let _fs_code = r.read(1).unwrap();
+        let n_bands = r.read(8).unwrap() as usize;
+        let mut steps = alloc::vec::Vec::with_capacity(n_bands);
+        for _ in 0..n_bands {
+            let step_bits = r.read(16).unwrap() as u16;
+            steps.push(step_bits);
+            let n_coeffs = r.read(8).unwrap() as u32;
+            r.skip(n_coeffs * bits_per_coef).unwrap();
+        }
+        steps
+    }
+
+    #[test]
+    fn perceptual_weighting_off_by_default_leaves_step_unchanged() {
+        let cfg = CodecConfig::default();
+        let enc_cfg = PulseEncoderConfig {
+            frame_size: 128,
+            n_bands: 8,
+            band_steps: alloc::vec![12.0; 8],
+            bits_per_coef: 8,
+            ..Default::default()
+        };
+        assert!(!enc_cfg.perceptual_weighting);
+        let mut enc = PulseEncoder::new(cfg, enc_cfg.clone()).unwrap();
+        let frame = make_tone_audio_frame(256, 0);
+        let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
+        let steps = extract_band_steps(&packet, enc_cfg.bits_per_coef as u32);
+        assert_eq!(
+            steps,
+            alloc::vec![12u16; 8],
+            "with perceptual_weighting off, every band must keep its configured step exactly"
+        );
+    }
+
+    #[test]
+    fn perceptual_weighting_coarsens_less_sensitive_bands_never_below_configured() {
+        // §29: "optional perceptual weighting". A band covering ~22kHz
+        // (far less sensitive than the 1kHz reference) must end up with a
+        // coarser step than the configured baseline, while no band is
+        // ever sharpened below what was configured (the wire format's
+        // step field is an integer, so there's no sub-configured
+        // granularity to sharpen into) — see `perceptual_band_weights`.
+        let cfg = CodecConfig::default();
+        let enc_cfg = PulseEncoderConfig {
+            frame_size: 128,
+            n_bands: 8,
+            band_steps: alloc::vec![12.0; 8],
+            bits_per_coef: 8,
+            perceptual_weighting: true,
+            ..Default::default()
+        };
+        let mut enc = PulseEncoder::new(cfg, enc_cfg.clone()).unwrap();
+        let frame = make_tone_audio_frame(256, 0);
+        let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
+        let steps = extract_band_steps(&packet, enc_cfg.bits_per_coef as u32);
+
+        assert!(
+            steps.iter().all(|&s| s >= 12),
+            "perceptual weighting must never coarsen below the configured step: {steps:?}"
+        );
+        assert!(
+            steps.iter().any(|&s| s != steps[0]),
+            "perceptual weighting must actually vary the step across a wide frequency span: {steps:?}"
+        );
+    }
+
+    #[test]
+    fn perceptual_weighting_round_trip_carries_signal() {
+        let cfg = CodecConfig::default();
+        let enc_cfg = PulseEncoderConfig {
+            frame_size: 128,
+            n_bands: 8,
+            band_steps: alloc::vec![12.0; 8],
+            bits_per_coef: 8,
+            perceptual_weighting: true,
+            ..Default::default()
+        };
+        let mut enc = PulseEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = PulseDecoder::new(cfg, enc_cfg).unwrap();
+        let frame = make_tone_audio_frame(256, 0);
+        let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
+        let decoded = dec.decode(&packet).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert!(
+            frame_s16_energy(&decoded[0]) > 0,
+            "decoded tone must not be silent with perceptual weighting enabled"
+        );
+    }
+
+    #[test]
+    fn decode_rejects_unsupported_wire_version() {
+        // §35: a decoder must fail cleanly on a wire version it doesn't
+        // understand, rather than silently misinterpreting the rest of
+        // the packet as if it were this decoder's own layout.
+        let mut buf = alloc::vec![0u8; 4];
+        let written = {
+            let mut w = BitWriter::new(&mut buf);
+            w.write(16, 99).unwrap(); // bogus/future version
+            w.write(1, 0).unwrap(); // frame-size selector; never reached
+            w.write(8, 0).unwrap();
+            w.finish().unwrap()
+        };
+        buf.truncate(written);
+        let pkt = Packet {
+            data: buf,
+            pts: Timestamp::zero(Timebase::new(1, 48_000)),
+            dts: Timestamp::zero(Timebase::new(1, 48_000)),
+            flags: PacketFlags::KEYFRAME,
+            track_id: 0,
+            duration: None,
+        };
+        let mut dec =
+            PulseDecoder::new(CodecConfig::default(), PulseEncoderConfig::default()).unwrap();
+        assert_eq!(
+            dec.decode(&pkt).unwrap_err(),
+            CodecError::Unsupported("unsupported Pulse packet version")
+        );
+    }
+
+    #[test]
+    fn decode_rejects_n_coeffs_that_would_overrun_the_spectrum() {
+        // Regression: `n_coeffs` (and `n_bands`) come straight from the
+        // packet with no bound relative to `frame_size`. A single band
+        // claiming more coefficients than fit in the whole spectrum used
+        // to index `spec` out of bounds and panic instead of returning
+        // `MalformedPacket`. Buffer is sized generously so the failure
+        // path being tested is the bounds check itself, not an
+        // incidental end-of-input a few bits earlier.
+        let mut buf = alloc::vec![0u8; 8];
+        let written = {
+            let mut w = BitWriter::new(&mut buf);
+            w.write(16, VERSION as u64).unwrap();
+            w.write(1, 0).unwrap(); // frame_size = 128
+            w.write(8, 1).unwrap(); // n_bands = 1 (band_size = 128)
+            w.write(16, 12).unwrap(); // step
+            w.write(8, 200).unwrap(); // n_coeffs: far more than band_size
+            w.finish().unwrap()
+        };
+        buf.truncate(written);
+        let pkt = Packet {
+            data: buf,
+            pts: Timestamp::zero(timebase_48k()),
+            dts: Timestamp::zero(timebase_48k()),
+            flags: PacketFlags::KEYFRAME,
+            track_id: 0,
+            duration: None,
+        };
+        let mut dec =
+            PulseDecoder::new(CodecConfig::default(), PulseEncoderConfig::default()).unwrap();
+        assert_eq!(dec.decode(&pkt).unwrap_err(), CodecError::MalformedPacket);
+    }
+
+    #[test]
+    fn decode_rejects_zero_bands() {
+        let mut buf = alloc::vec![0u8; 4];
+        let written = {
+            let mut w = BitWriter::new(&mut buf);
+            w.write(16, VERSION as u64).unwrap();
+            w.write(1, 0).unwrap();
+            w.write(8, 0).unwrap(); // n_bands = 0
+            w.finish().unwrap()
+        };
+        buf.truncate(written);
+        let pkt = Packet {
+            data: buf,
+            pts: Timestamp::zero(timebase_48k()),
+            dts: Timestamp::zero(timebase_48k()),
+            flags: PacketFlags::KEYFRAME,
+            track_id: 0,
+            duration: None,
+        };
+        let mut dec =
+            PulseDecoder::new(CodecConfig::default(), PulseEncoderConfig::default()).unwrap();
+        assert_eq!(dec.decode(&pkt).unwrap_err(), CodecError::MalformedPacket);
+    }
+
+    #[test]
+    fn decode_never_panics_on_corrupted_or_arbitrary_packets() {
+        // §38 "codec fuzzing" / "malformed input": a deterministic
+        // corruption sweep, in the same spirit as `tpt-container`'s
+        // `corruption_never_panics_and_truncation_never_panics` (§24) —
+        // no external fuzz-harness dependency. Every call must return a
+        // `Result`, never panic.
+        let cfg = CodecConfig::default();
+        let enc_cfg = PulseEncoderConfig {
+            frame_size: 128,
+            n_bands: 8,
+            band_steps: alloc::vec![12.0; 8],
+            bits_per_coef: 8,
+            ..Default::default()
+        };
+        let mut encoder = PulseEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = PulseDecoder::new(cfg, enc_cfg).unwrap();
+        let mut state = 0xC0FF_EE12_3456_789Au64;
+        let mut lcg = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let pts = Timestamp::zero(timebase_48k());
+
+        // Arbitrary bytes of varying length, unrelated to any real packet.
+        for _ in 0..500 {
+            let len = (lcg() % 300) as usize;
+            let data: Vec<u8> = (0..len).map(|_| lcg() as u8).collect();
+            let pkt = Packet {
+                data,
+                pts,
+                dts: pts,
+                flags: PacketFlags::KEYFRAME,
+                track_id: 0,
+                duration: None,
+            };
+            let _ = dec.decode(&pkt);
+        }
+
+        // A real valid packet, truncated at every length.
+        let frame = make_tone_audio_frame(256, 0);
+        let valid = encoder.encode(&frame).unwrap().into_iter().next().unwrap();
+        for cut in 0..=valid.data.len() {
+            let pkt = Packet {
+                data: valid.data[..cut].to_vec(),
+                ..valid.clone()
+            };
+            let _ = dec.decode(&pkt);
+        }
+        // Bit-flip sweep over the valid packet.
+        for _ in 0..256 {
+            if valid.data.is_empty() {
+                break;
+            }
+            let pos = (lcg() as usize) % valid.data.len();
+            let bit = 1u8 << (lcg() % 8);
+            let mut corrupt = valid.clone();
+            corrupt.data[pos] ^= bit;
+            let _ = dec.decode(&corrupt);
+        }
+        // The pristine packet still decodes after the sweep.
+        assert!(dec.decode(&valid).is_ok());
     }
 }

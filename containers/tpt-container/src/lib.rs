@@ -253,6 +253,76 @@ mod tests {
     }
 
     #[test]
+    fn oversized_tmta_metadata_is_rejected_by_default_but_allowed_with_permissive_limits() {
+        // §19 "maximum metadata size": a `TMTA` chunk larger than
+        // `ResourceLimits::max_metadata_bytes` must be rejected up front
+        // (before its entries are even parsed), not silently allocated for.
+        let mut m = TptMuxer::new(Timebase::MILLISECONDS);
+        let mut track = Track::new(
+            0,
+            MediaType::Audio,
+            CodecId::new(*b"PULS"),
+            Timebase::new(1, 48_000),
+        );
+        // `ResourceLimits::strict()`'s default max_metadata_bytes is 64KiB;
+        // this single entry's body alone is ~100KB, comfortably over.
+        track.metadata = vec![(
+            "blob".to_string(),
+            MetadataValue::Bytes(alloc::vec![0xAB; 100_000]),
+        )];
+        m.register_track(&track);
+        let bytes = m.finish();
+
+        // Default (strict) limits reject it.
+        assert!(matches!(
+            TptDemuxer::new(&bytes),
+            Err(TptError::ResourceExceeded)
+        ));
+
+        // Permissive limits (16MiB default) accept the same bytes and
+        // recover the metadata intact.
+        let d =
+            TptDemuxer::with_limits(&bytes, tpt_media_codec::ResourceLimits::permissive()).unwrap();
+        assert_eq!(d.stream().tracks.len(), 1);
+        assert_eq!(d.stream().tracks[0].metadata.len(), 1);
+    }
+
+    #[test]
+    fn decode_idx_rejects_entry_count_that_would_overrun_the_body() {
+        // §47 "decompression-bomb protection": `entry_count` is a fully
+        // attacker-controlled `u32` (up to ~4.29 billion) with no
+        // relationship to the actual (tiny) body here. It used to be
+        // passed straight to `Vec::with_capacity`, which would attempt a
+        // multi-gigabyte allocation from a handful of input bytes.
+        // `decode_idx` must reject it instead of trying to allocate.
+        let mut body = alloc::vec![0u8; 7];
+        body[0] = INDEX_VERSION; // version
+        body[1] = 1; // track_count
+        body[2] = 0; // track_id
+        body[3..7].copy_from_slice(&u32::MAX.to_le_bytes()); // entry_count
+        assert!(decode_idx(&body).is_none());
+    }
+
+    #[test]
+    fn decode_tmta_rejects_bytes_value_length_that_would_overrun_the_body() {
+        // §47 "integer-overflow audit": `len` (META_BYTES) is a fully
+        // attacker-controlled `u32`. The bounds check `p + len >
+        // body.len()` used plain `usize` addition, which is correct on
+        // 64-bit but can wrap around on a 32-bit `usize` target when
+        // `len` is close to `u32::MAX` — this test can't reproduce the
+        // wraparound itself on a 64-bit host, but it does lock in the
+        // universally-correct behavior (reject, don't allocate) that the
+        // `checked_add`-based fix guarantees regardless of pointer width.
+        let mut body = alloc::vec![0u8; 12];
+        body[0] = 0; // track_id
+        body[1..3].copy_from_slice(&1u16.to_le_bytes()); // count = 1
+        body[3] = 0; // key length-prefix: 0-length key
+        body[4] = 0x03; // META_BYTES tag (see format.rs's META_BYTES const)
+        body[5..9].copy_from_slice(&u32::MAX.to_le_bytes()); // len
+        assert!(decode_tmta(&body).is_none());
+    }
+
+    #[test]
     fn trak_defaults_when_fields_absent() {
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
         m.add_track(0, b"PULS", &[1, 2, 3]);

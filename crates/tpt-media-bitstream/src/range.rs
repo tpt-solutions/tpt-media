@@ -154,8 +154,19 @@ impl<'a> RangeDecoder<'a> {
 
     /// Decode one symbol, returning its cumulative frequency (the caller
     /// maps that back to a symbol using the same model given to `encode`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BitstreamError::EndOfInput`] if `total` is `0`, if
+    /// `total > range` (which would otherwise divide by zero below), or
+    /// if the input runs out during renormalization. Once this returns
+    /// `Err`, `range` may be left below `TOP` (a previous renormalization
+    /// pass had to give up partway through for lack of input) — the
+    /// `total > self.range` guard here is what keeps a *subsequent* call
+    /// on the same (already-failed) decoder returning `Err` again rather
+    /// than dividing by zero.
     pub fn decode(&mut self, total: u32) -> Result<u32, BitstreamError> {
-        if total == 0 {
+        if total == 0 || total > self.range {
             return Err(BitstreamError::EndOfInput);
         }
         let r = self.range / total;
@@ -244,5 +255,21 @@ mod tests {
             RangeDecoder::new(&[0u8; 4]),
             Err(BitstreamError::EndOfInput)
         ));
+    }
+
+    #[test]
+    fn decode_keeps_returning_err_after_running_out_of_input_instead_of_panicking() {
+        // Regression: once renormalization runs out of input bytes partway
+        // through, `range` is left below `total` (and possibly below
+        // `TOP`) without ever being restored. A later call on the same
+        // (already-failed) decoder used to divide by that leftover
+        // near-zero `range`, panicking instead of returning `Err` again.
+        // Just enough input for `new` to succeed but not enough to
+        // renormalize even once.
+        let bytes = [0u8; 5];
+        let mut dec = RangeDecoder::new(&bytes).unwrap();
+        for _ in 0..8 {
+            assert!(dec.decode(256).is_err(), "must keep failing, never panic");
+        }
     }
 }

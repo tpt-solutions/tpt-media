@@ -3,6 +3,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
+use tpt_media_codec::ResourceLimits;
 use tpt_media_container::{Container, ContainerError, ContainerResult};
 use tpt_media_core::{Packet, PacketFlags, Stream, Timestamp, Track};
 
@@ -45,25 +46,49 @@ pub struct TptDemuxer<'a> {
     cursor: usize,
     seek_to: Option<u64>,
     strict: bool,
+    limits: ResourceLimits,
 }
 
 impl<'a> TptDemuxer<'a> {
     /// Parse a complete `.tpt` buffer. A truncated trailing chunk is an error.
+    ///
+    /// Uses [`ResourceLimits::default`] (i.e. [`ResourceLimits::strict`]);
+    /// use [`TptDemuxer::with_limits`] to configure different limits (e.g.
+    /// [`ResourceLimits::permissive`] for trusted input).
     pub fn new(bytes: &'a [u8]) -> Result<Self, TptError> {
-        Self::create(bytes, true)
+        Self::create(bytes, true, ResourceLimits::default())
+    }
+
+    /// Like [`TptDemuxer::new`], with explicit [`ResourceLimits`] (e.g. a
+    /// per-track `TMTA` metadata chunk larger than
+    /// `limits.max_metadata_bytes` is rejected as
+    /// [`TptError::ResourceExceeded`] before it is even parsed).
+    pub fn with_limits(bytes: &'a [u8], limits: ResourceLimits) -> Result<Self, TptError> {
+        Self::create(bytes, true, limits)
     }
 
     /// Parse a `.tpt` buffer that may end in the middle of a chunk.
     ///
     /// Scanning stops at the first incomplete chunk; call [`feed`] with the
-    /// extended buffer once more bytes are available.
+    /// extended buffer once more bytes are available. Uses
+    /// [`ResourceLimits::default`]; use
+    /// [`TptDemuxer::new_streaming_with_limits`] to configure different
+    /// limits.
     ///
     /// [`feed`]: TptDemuxer::feed
     pub fn new_streaming(bytes: &'a [u8]) -> Result<Self, TptError> {
-        Self::create(bytes, false)
+        Self::create(bytes, false, ResourceLimits::default())
     }
 
-    fn create(bytes: &'a [u8], strict: bool) -> Result<Self, TptError> {
+    /// Like [`TptDemuxer::new_streaming`], with explicit [`ResourceLimits`].
+    pub fn new_streaming_with_limits(
+        bytes: &'a [u8],
+        limits: ResourceLimits,
+    ) -> Result<Self, TptError> {
+        Self::create(bytes, false, limits)
+    }
+
+    fn create(bytes: &'a [u8], strict: bool, limits: ResourceLimits) -> Result<Self, TptError> {
         let header = FileHeader::from_bytes(bytes)?;
         if header.header_size as usize > bytes.len() {
             return if strict {
@@ -71,7 +96,7 @@ impl<'a> TptDemuxer<'a> {
             } else {
                 // Streaming: nothing can be parsed yet, but the buffer may
                 // grow to hold the header.
-                Ok(TptDemuxer::blank(header, bytes, strict))
+                Ok(TptDemuxer::blank(header, bytes, strict, limits))
             };
         }
         let mut d = TptDemuxer {
@@ -87,12 +112,13 @@ impl<'a> TptDemuxer<'a> {
             cursor: 0,
             seek_to: None,
             strict,
+            limits,
         };
         d.scan()?;
         Ok(d)
     }
 
-    fn blank(header: FileHeader, bytes: &'a [u8], strict: bool) -> Self {
+    fn blank(header: FileHeader, bytes: &'a [u8], strict: bool, limits: ResourceLimits) -> Self {
         TptDemuxer {
             bytes,
             pos: header.header_size as usize,
@@ -106,6 +132,7 @@ impl<'a> TptDemuxer<'a> {
             cursor: 0,
             seek_to: None,
             strict,
+            limits,
         }
     }
 
@@ -191,6 +218,12 @@ impl<'a> TptDemuxer<'a> {
     }
 
     fn index_tmta(&mut self, body: &[u8]) -> Result<(), TptError> {
+        // §19: bound metadata size before parsing it, so an oversized
+        // `TMTA` chunk (however many entries it claims) is rejected up
+        // front rather than after allocating for its contents.
+        if self.limits.check_metadata(body.len()).is_err() {
+            return Err(TptError::ResourceExceeded);
+        }
         let (track_id, entries) = decode_tmta(body).ok_or(TptError::BadChunk)?;
         if let Some(&idx) = self.track_indices.get(&track_id) {
             self.stream.tracks[idx].metadata = entries;

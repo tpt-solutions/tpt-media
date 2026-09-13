@@ -1090,4 +1090,57 @@ mod tests {
         }
         false
     }
+
+    #[test]
+    fn probe_never_panics_on_corrupted_or_arbitrary_bytes() {
+        // §38 "probe fuzzing": a deterministic corruption sweep, in the
+        // same spirit as `tpt-container`'s
+        // `corruption_never_panics_and_truncation_never_panics` (§24) —
+        // no external fuzz-harness dependency. `probe()` never returns a
+        // `Result` (corruption is reported *in* `ProbeReport`, e.g.
+        // `integrity_ok()`), so the only thing to check here is that it
+        // never panics.
+        let valid = build_container();
+        assert!(valid.len() > 32, "fixture too small: {}", valid.len());
+
+        // Truncation sweep: every prefix length.
+        for cut in 0..valid.len() {
+            let _ = probe(&valid[..cut]);
+        }
+
+        // Deterministic LCG bit-flip sweep.
+        let mut state: u64 = 0x1656_67B1_9E37_79F9;
+        for _ in 0..512 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let pos = (state as usize) % valid.len();
+            let bit = 1u8 << ((state >> 32) % 8);
+            let mut corrupt = valid.clone();
+            corrupt[pos] ^= bit;
+            let _ = probe(&corrupt);
+        }
+
+        // Arbitrary bytes entirely unrelated to any real container.
+        let mut state: u64 = 0xC0FF_EE12_3456_789A;
+        for _ in 0..256 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let len = (state % 200) as usize;
+            let mut bytes = Vec::with_capacity(len);
+            for _ in 0..len {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                bytes.push(state as u8);
+            }
+            let _ = probe(&bytes);
+        }
+
+        // The pristine container still probes cleanly after the sweep.
+        let report = probe(&valid);
+        assert_eq!(report.container, ContainerKind::Tpt);
+        assert_eq!(report.track_count(), 2);
+    }
 }

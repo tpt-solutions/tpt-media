@@ -125,18 +125,26 @@ impl<'a> BitReader<'a> {
             self.acc &= mask64(self.bits_in_acc);
             return Ok(());
         }
-        let extra = n - self.bits_in_acc;
-        let bytes_to_skip = extra.div_ceil(8);
-        if bytes_to_skip as usize > self.remaining_bytes() {
-            return Err(BitstreamError::EndOfInput);
-        }
-        self.pos += bytes_to_skip as usize;
+        // Everything currently buffered is skipped outright; `remaining`
+        // is how many more bits beyond that still need to go.
+        let mut remaining = n - self.bits_in_acc;
         self.acc = 0;
         self.bits_in_acc = 0;
-        let overshoot = bytes_to_skip * 8 - extra;
-        if overshoot < 8 && !self.bytes.is_empty() {
+        // Whole bytes can be skipped by advancing `pos` directly, with no
+        // need to load them into the accumulator at all.
+        let whole_bytes = (remaining / 8) as usize;
+        if whole_bytes > self.remaining_bytes() {
+            return Err(BitstreamError::EndOfInput);
+        }
+        self.pos += whole_bytes;
+        remaining -= whole_bytes as u32 * 8;
+        if remaining > 0 {
+            // A partial byte remains: its leading `remaining` bits are
+            // skipped, but its trailing bits belong to the *next* read,
+            // so the byte must be loaded (not skipped over) and only its
+            // leading bits dropped.
             self.refill_one()?;
-            self.bits_in_acc -= overshoot;
+            self.bits_in_acc -= remaining;
             self.acc &= mask64(self.bits_in_acc);
         }
         Ok(())
@@ -222,6 +230,52 @@ mod tests {
         r.read(4).unwrap();
         r.skip(20).unwrap();
         assert!(r.at_end());
+    }
+
+    #[test]
+    fn skip_past_a_fresh_reader_leaves_trailing_bits_of_the_last_byte_readable() {
+        // Regression: a fresh reader (nothing yet buffered) skipping a
+        // non-byte-multiple of bits must still leave the *trailing* bits
+        // of the last partially-skipped byte available to the next
+        // read — the old implementation instead read one byte too far
+        // (the byte *after* the skip region) for that leftover, silently
+        // corrupting every read that followed a multi-byte `skip`. Here:
+        // skip the top 4 bits of byte 0 plus all of... no, skip 12 bits
+        // total (byte 0 entirely is 8 bits, plus the top 4 of byte 1),
+        // so the remaining low nibble of byte 1 (`0xC` here) must be what
+        // `read(4)` returns next, not anything from byte 2.
+        let bytes = [0b1111_1111u8, 0b1010_1100, 0b0000_0000];
+        let mut r = BitReader::new(&bytes);
+        r.skip(12).unwrap();
+        assert_eq!(r.read(4).unwrap(), 0b1100, "must read byte 1's low nibble");
+        assert_eq!(
+            r.read(8).unwrap(),
+            0,
+            "must continue into byte 2, not skip it"
+        );
+        assert!(r.at_end());
+    }
+
+    #[test]
+    fn skip_an_exact_multiple_of_8_bits_consumes_no_extra_byte() {
+        // Regression: when the skip lands exactly on a byte boundary
+        // (no partial trailing byte), the old implementation still
+        // speculatively loaded and partially retained one extra byte it
+        // had no business touching. Skipping exactly 8 bits (one whole
+        // byte) from a fresh reader must leave the *next* byte fully
+        // intact for the following read.
+        let bytes = [0xFFu8, 0b1010_0101];
+        let mut r = BitReader::new(&bytes);
+        r.skip(8).unwrap();
+        assert_eq!(r.read(8).unwrap(), 0b1010_0101);
+        assert!(r.at_end());
+    }
+
+    #[test]
+    fn skip_beyond_available_bits_is_end_of_input() {
+        let bytes = [0xFFu8, 0xFF];
+        let mut r = BitReader::new(&bytes);
+        assert_eq!(r.skip(17), Err(BitstreamError::EndOfInput));
     }
 
     #[test]

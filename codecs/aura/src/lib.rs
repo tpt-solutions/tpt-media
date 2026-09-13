@@ -5,8 +5,9 @@
 //! - **Lossless** — linear-predictive coding (LPC) up to order 32
 //!   followed by Exp-Golomb-coded residuals (zigzag-mapped). Bit-exact
 //!   round-trip.
-//! - **Lossy** — large-window MDCT (2048/4096) with Bark-band
-//!   quantisation. Uses `f64` internally.
+//! - **Lossy** — large-window MDCT (2048/4096) with Bark-band,
+//!   masking-driven quantisation and spectral noise shaping. Uses `f64`
+//!   internally.
 //!
 //! This v0.1 implementation includes:
 //!
@@ -18,6 +19,24 @@
 //!   the doc is being brought into line with the code rather than vice
 //!   versa).
 //! - MDCT analysis and synthesis.
+//! - **Lossy quantization is psychoacoustically driven** (`tpt-dsp-core`'s
+//!   `bark`/`psychoacoustic`/`noise_shaping` modules, §10-11 of
+//!   `todo.md`): each MDCT bin is mapped to a Bark critical band
+//!   ([`hz_to_bark`]), bands are classified tonal/noise
+//!   ([`classify_tonal_bins`]) and their energy is spread across the Bark
+//!   axis to model simultaneous masking ([`simultaneous_masking`],
+//!   [`combined_threshold_db`]); the resulting per-band masking threshold
+//!   sets that band's quantization step (coarser where masking hides more
+//!   noise), and coefficients within a band are quantized with first-order
+//!   spectral noise shaping ([`noise_shape_step`]) so the residual
+//!   quantization error is pushed toward already-noisy neighbors rather
+//!   than left independent per bin. The per-band step table is
+//!   transmitted (32-bit float per band) so the decoder needs no side
+//!   information beyond what's in the packet — see [`AuraEncoder::encode`]
+//!   / the `AuraMode::Lossy` decode arm for the exact wire layout. This is
+//!   a breaking change to the v0.1 lossy wire format (see `CHANGELOG.md`);
+//!   there is no stereo model since Aura is mono-only (no consumer needs
+//!   stereo yet).
 //! - Per-packet integrity: every packet ends with a CRC-32 over its
 //!   payload (`crc32` + [`CRC_TRAILER_BYTES`]); the decoder verifies it
 //!   before parsing anything.
@@ -28,7 +47,11 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use tpt_dsp_core::{autocorrelation, imdct, levinson_durbin, mdct};
+use tpt_dsp_core::{
+    aggregate_bands, autocorrelation, bark_to_hz, classify_tonal_bins, combined_threshold_db,
+    db_to_power, hz_to_bark, imdct, levinson_durbin, mdct, noise_shape_step, simultaneous_masking,
+    threshold_in_quiet,
+};
 use tpt_media_bitstream::{BitReader, BitWriter};
 use tpt_media_codec::{
     Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, Decoder, DynDecoder,
@@ -65,6 +88,62 @@ fn crc32(bytes: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+/// Prominence (dB) a local spectral peak must exceed its neighbors by to be
+/// classified tonal (vs. noise-like) for masking purposes — see
+/// [`classify_tonal_bins`]. `6.0` is a middle-of-the-road choice consistent
+/// with the range used by MPEG-style psychoacoustic models.
+const TONAL_PROMINENCE_DB: f64 = 6.0;
+
+/// First-order spectral noise-shaping feedback (see [`noise_shape_step`]):
+/// the classic `h=[1]` shaper documented in `tpt-dsp-core::noise_shaping`,
+/// applied across MDCT bins in frequency order so each bin's quantization
+/// error is fed into the next bin's decision.
+const NS_FEEDBACK: [f64; 1] = [1.0];
+
+/// Floor on a per-band quantization step: finer than this exceeds the
+/// resolution of the 16-bit coefficient index anyway.
+const MIN_QUANT_STEP: f64 = 1.0 / 32767.0;
+
+/// Ceiling on a per-band quantization step, so a fully-masked band still
+/// quantizes to *something* representable rather than an unbounded step.
+const MAX_QUANT_STEP: f64 = 4.0;
+
+/// Center frequency (Hz) of MDCT bin `bin` out of `n_half` bins spanning
+/// `0..sample_rate/2`.
+fn mdct_bin_hz(sample_rate: u32, n_half: usize, bin: usize) -> f64 {
+    let nyquist = sample_rate as f64 / 2.0;
+    (bin as f64 + 0.5) * nyquist / n_half as f64
+}
+
+/// Bark critical-band index of MDCT bin `bin` (see [`mdct_bin_hz`]).
+fn mdct_bin_bark_band(sample_rate: u32, n_half: usize, bin: usize) -> usize {
+    hz_to_bark(mdct_bin_hz(sample_rate, n_half, bin).max(1.0))
+        .max(0.0)
+        .floor() as usize
+}
+
+/// Deterministically map each of `n_half` MDCT bins to its Bark
+/// critical-band index. Both encoder and decoder recompute this
+/// independently from `(sample_rate, n_half)` alone — both values are
+/// already known to the decoder via its own [`AuraConfig`] — so the band
+/// layout itself is never transmitted, only the per-band quantization step
+/// derived from it (see [`AuraEncoder::encode`]).
+fn mdct_bin_bark_bands(sample_rate: u32, n_half: usize, out: &mut [usize]) {
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = mdct_bin_bark_band(sample_rate, n_half, i);
+    }
+}
+
+/// Number of distinct Bark bands spanned by `n_half` MDCT bins (bark bands
+/// are non-decreasing with bin index, so the last bin's band + 1 gives the
+/// count without allocating the full mapping).
+fn mdct_num_bark_bands(sample_rate: u32, n_half: usize) -> usize {
+    if n_half == 0 {
+        return 0;
+    }
+    mdct_bin_bark_band(sample_rate, n_half, n_half - 1) + 1
 }
 
 fn static_info(caps: Capabilities) -> CodecInfo {
@@ -173,10 +252,20 @@ impl Encoder for AuraEncoder {
         // exp-Golomb-coded lossless residual — see `integer_predict`'s doc
         // for why the residual can occasionally be much larger than the
         // sample range; lossy only needs 16 bits/coefficient).
-        let max_bits = 64 + order * 16 + fs * 96;
+        // `+ 64 * 32` covers the lossy per-band scale-factor table (a 32-bit
+        // float per Bark band; ~25 bands max for any audible sample rate).
+        // `+ 16` covers the leading wire-version field.
+        let max_bits = 64 + order * 16 + fs * 96 + 64 * 32 + 16;
         let mut buf = vec![0u8; max_bits.div_ceil(8)];
         let written = {
             let mut w = BitWriter::new(&mut buf);
+            // §35: a versioned bitstream. Written first so a decoder that
+            // doesn't understand this wire format version fails cleanly
+            // (`CodecError::Unsupported`) before it ever tries to
+            // interpret bits it wasn't built for, rather than silently
+            // misparsing them.
+            w.write(16, VERSION as u64)
+                .map_err(|_| CodecError::Internal)?;
             let mode_bit = if self.enc.mode == AuraMode::Lossless {
                 1u64
             } else {
@@ -221,9 +310,68 @@ impl Encoder for AuraEncoder {
                     let n_half = fs / 2;
                     let mut spec = vec![0f64; n_half];
                     mdct(&x, &mut spec);
-                    for s in &spec {
-                        let q = (*s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                        w.write(16, q as u64).map_err(|_| CodecError::Internal)?;
+
+                    let mut band_of_bin = vec![0usize; n_half];
+                    mdct_bin_bark_bands(self.enc.sample_rate, n_half, &mut band_of_bin);
+                    let num_bands = mdct_num_bark_bands(self.enc.sample_rate, n_half);
+
+                    // Power proxy per bin (squared MDCT coefficient — not a
+                    // true FFT power spectrum, but sufficient for relative
+                    // energy/tonality within this codec's own Bark bands).
+                    let power: Vec<f64> = spec.iter().map(|s| (*s * *s).max(1e-12)).collect();
+                    let mut tonal = vec![false; n_half];
+                    classify_tonal_bins(&power, TONAL_PROMINENCE_DB, &mut tonal);
+
+                    let mut band_energy = vec![0f64; num_bands];
+                    aggregate_bands(&power, &band_of_bin, &mut band_energy);
+                    let mut band_tonal = vec![false; num_bands];
+                    for (i, &b) in band_of_bin.iter().enumerate() {
+                        band_tonal[b] |= tonal[i];
+                    }
+                    // Band `b` holds every bin whose floor(bark) == b, so
+                    // `b + 0.5` approximates its center, both for the
+                    // spreading function and for recovering an
+                    // approximate Hz value for `threshold_in_quiet`.
+                    let band_bark: Vec<f64> = (0..num_bands).map(|b| b as f64 + 0.5).collect();
+
+                    let mut excitation = vec![0f64; num_bands];
+                    simultaneous_masking(
+                        &band_energy,
+                        &band_bark,
+                        &band_tonal,
+                        &band_bark,
+                        &mut excitation,
+                    );
+
+                    let mut step = vec![0f64; num_bands];
+                    for b in 0..num_bands {
+                        let band_hz = bark_to_hz(band_bark[b]).max(1.0);
+                        let quiet_db = threshold_in_quiet(band_hz);
+                        let combined_db = combined_threshold_db(excitation[b].max(1e-12), quiet_db);
+                        // Uniform-quantizer noise power ~= step^2/12; pick
+                        // the step whose quantization noise matches the
+                        // masking threshold, so error is shaped to be
+                        // inaudible rather than uniform across all bands.
+                        let s = (12.0 * db_to_power(combined_db)).sqrt();
+                        step[b] = s.clamp(MIN_QUANT_STEP, MAX_QUANT_STEP);
+                    }
+                    for &s in &step {
+                        w.write(32, (s as f32).to_bits() as u64)
+                            .map_err(|_| CodecError::Internal)?;
+                    }
+
+                    // Spectral noise shaping in bin order: each bin's
+                    // quantization error is fed back (subtracted) into the
+                    // next bin's decision, so the noise this per-band
+                    // stepping introduces is reshaped rather than left
+                    // independent per bin.
+                    let mut ns_history = [0f64; 1];
+                    for (i, s) in spec.iter().enumerate() {
+                        let band_step = step[band_of_bin[i]];
+                        let quantize = |v: f64| (v / band_step).round() * band_step;
+                        let shaped = noise_shape_step(*s, &NS_FEEDBACK, &mut ns_history, quantize);
+                        let idx = (shaped / band_step).round().clamp(-32768.0, 32767.0) as i16;
+                        w.write(16, idx as u64).map_err(|_| CodecError::Internal)?;
                     }
                 }
             }
@@ -363,6 +511,13 @@ impl AuraDecoder {
             return Err(CodecError::MalformedPacket);
         }
         let mut r = BitReader::new(body);
+        // §35: reject a wire format version this decoder doesn't
+        // understand *before* interpreting any further bits as if they
+        // were this version's layout.
+        let wire_version = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
+        if wire_version != VERSION {
+            return Err(CodecError::Unsupported("unsupported Aura packet version"));
+        }
         let mode_bit = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
         let mode = if mode_bit == 1 {
             AuraMode::Lossless
@@ -415,13 +570,23 @@ impl AuraDecoder {
                     return Err(CodecError::MalformedPacket);
                 }
                 let n_half = fs / 2;
-                self.cfg
-                    .limits
-                    .check_allocation(n_half * core::mem::size_of::<f64>() * 2)?;
+                let num_bands = mdct_num_bark_bands(self.enc.sample_rate, n_half);
+                self.cfg.limits.check_allocation(
+                    n_half * core::mem::size_of::<f64>() * 2
+                        + n_half * core::mem::size_of::<usize>()
+                        + num_bands * core::mem::size_of::<f64>(),
+                )?;
+                let mut band_of_bin = vec![0usize; n_half];
+                mdct_bin_bark_bands(self.enc.sample_rate, n_half, &mut band_of_bin);
+                let mut step = vec![0f64; num_bands];
+                for s in step.iter_mut() {
+                    let bits = r.read(32).map_err(|_| CodecError::MalformedPacket)? as u32;
+                    *s = f32::from_bits(bits) as f64;
+                }
                 let mut spec = vec![0f64; n_half];
-                for s in spec.iter_mut() {
+                for (i, s) in spec.iter_mut().enumerate() {
                     let q = r.read(16).map_err(|_| CodecError::MalformedPacket)? as i16;
-                    *s = q as f64 / 32767.0;
+                    *s = q as f64 * step[band_of_bin[i]];
                 }
                 let mut x = vec![0f64; fs];
                 imdct(&spec, &mut x);
@@ -783,5 +948,167 @@ mod tests {
             dec.decode(&packet).unwrap_err(),
             CodecError::ResourceLimit(tpt_media_codec::ResourceLimitKind::Allocation)
         );
+    }
+
+    #[test]
+    fn mdct_bin_bark_bands_is_deterministic_and_nondecreasing() {
+        let sample_rate = 48_000u32;
+        let n_half = 128usize;
+        let mut bands_a = vec![0usize; n_half];
+        let mut bands_b = vec![0usize; n_half];
+        mdct_bin_bark_bands(sample_rate, n_half, &mut bands_a);
+        mdct_bin_bark_bands(sample_rate, n_half, &mut bands_b);
+        assert_eq!(bands_a, bands_b, "band mapping must be deterministic");
+        for w in bands_a.windows(2) {
+            assert!(
+                w[1] >= w[0],
+                "bark band index must be non-decreasing with bin index: {w:?}"
+            );
+        }
+        let num_bands = mdct_num_bark_bands(sample_rate, n_half);
+        assert_eq!(num_bands, *bands_a.last().unwrap() + 1);
+    }
+
+    #[test]
+    fn lossy_step_table_reflects_masking_not_flat() {
+        // §30: a real masking model, wired in for the first time here,
+        // must actually vary the per-band quantization step for a tone
+        // (a strong masker in one band, near-silence elsewhere) — a
+        // regression back to a constant/flat step (the old scheme) would
+        // silently defeat the whole point of §10's psychoacoustic model.
+        let cfg = CodecConfig::default();
+        let block_size = 256usize;
+        let sample_rate = 48_000u32;
+        let enc_cfg = AuraConfig {
+            mode: AuraMode::Lossy,
+            block_size: block_size as u16,
+            ..Default::default()
+        };
+        let mut enc = AuraEncoder::new(cfg, enc_cfg).unwrap();
+        let mut frame = tone_frame(block_size, sample_rate);
+        frame.frame.pts = Timestamp::zero(Timebase::new(1, sample_rate));
+        let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
+
+        let body = &packet.data[..packet.data.len() - CRC_TRAILER_BYTES];
+        let mut r = BitReader::new(body);
+        let _wire_version = r.read(16).unwrap();
+        let _mode_bit = r.read(1).unwrap();
+        let _lpc_order = r.read(5).unwrap();
+        let _mdct_size_bits = r.read(8).unwrap();
+        let n_half = block_size / 2;
+        let num_bands = mdct_num_bark_bands(sample_rate, n_half);
+        let mut steps = Vec::with_capacity(num_bands);
+        for _ in 0..num_bands {
+            let bits = r.read(32).unwrap() as u32;
+            steps.push(f32::from_bits(bits));
+        }
+        assert!(
+            steps.iter().all(|s| s.is_finite() && *s > 0.0),
+            "every band step must be a finite, positive value, got {steps:?}"
+        );
+        assert!(
+            steps.iter().any(|&s| (s - steps[0]).abs() > 1e-6),
+            "masking-driven step table must vary across bands for a tone, got {steps:?}"
+        );
+    }
+
+    #[test]
+    fn decode_rejects_unsupported_wire_version() {
+        // §35: a decoder must fail cleanly on a wire version it doesn't
+        // understand, rather than silently misinterpreting the rest of
+        // the packet as if it were this decoder's own format.
+        let mut buf = alloc::vec![0u8; 8];
+        let written = {
+            let mut w = BitWriter::new(&mut buf);
+            w.write(16, 99).unwrap(); // bogus/future version
+            w.write(1, 1).unwrap(); // mode bit (lossless); never reached
+            w.write(5, 0).unwrap();
+            w.write(8, 0).unwrap();
+            w.finish().unwrap()
+        };
+        buf.truncate(written);
+        let crc = crc32(&buf[..written]);
+        buf.extend_from_slice(&crc.to_le_bytes());
+        let pkt = Packet {
+            data: buf,
+            pts: Timestamp::zero(Timebase::new(1, 48_000)),
+            dts: Timestamp::zero(Timebase::new(1, 48_000)),
+            flags: PacketFlags::KEYFRAME,
+            track_id: 0,
+            duration: None,
+        };
+        let mut dec = AuraDecoder::new(CodecConfig::default(), AuraConfig::default()).unwrap();
+        assert_eq!(
+            dec.decode(&pkt).unwrap_err(),
+            CodecError::Unsupported("unsupported Aura packet version")
+        );
+    }
+
+    #[test]
+    fn decode_never_panics_on_corrupted_or_arbitrary_packets() {
+        // §38 "codec fuzzing" / "malformed input": a deterministic
+        // corruption sweep, in the same spirit as `tpt-container`'s
+        // `corruption_never_panics_and_truncation_never_panics` (§24) —
+        // no external fuzz-harness dependency. Every call must return a
+        // `Result`, never panic.
+        // Matches `encode_single_packet`'s config: mode itself doesn't
+        // matter here since `decode_inner` reads the actual mode from
+        // the packet's own mode bit, not from `self.enc.mode`, but
+        // `block_size`/`lpc_order` do need to match how the packets
+        // below were actually encoded.
+        let dec_cfg = AuraConfig {
+            block_size: 256,
+            lpc_order: 8,
+            ..Default::default()
+        };
+        let mut dec = AuraDecoder::new(CodecConfig::default(), dec_cfg).unwrap();
+        let mut state = 0x1234_5678_9ABC_DEF0u64;
+        let mut lcg = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let pts = Timestamp::zero(Timebase::new(1, 48_000));
+
+        // Arbitrary bytes of varying length, unrelated to any real packet.
+        for _ in 0..500 {
+            let len = (lcg() % 300) as usize;
+            let data: Vec<u8> = (0..len).map(|_| lcg() as u8).collect();
+            let pkt = Packet {
+                data,
+                pts,
+                dts: pts,
+                flags: PacketFlags::KEYFRAME,
+                track_id: 0,
+                duration: None,
+            };
+            let _ = dec.decode(&pkt);
+        }
+
+        // A real valid packet (both modes), truncated at every length.
+        for mode in [AuraMode::Lossless, AuraMode::Lossy] {
+            let valid = encode_single_packet(mode);
+            for cut in 0..=valid.data.len() {
+                let pkt = Packet {
+                    data: valid.data[..cut].to_vec(),
+                    ..valid.clone()
+                };
+                let _ = dec.decode(&pkt);
+            }
+            // Bit-flip sweep over the valid packet.
+            for _ in 0..256 {
+                if valid.data.is_empty() {
+                    break;
+                }
+                let pos = (lcg() as usize) % valid.data.len();
+                let bit = 1u8 << (lcg() % 8);
+                let mut corrupt = valid.clone();
+                corrupt.data[pos] ^= bit;
+                let _ = dec.decode(&corrupt);
+            }
+            // The pristine packet still decodes after the sweep.
+            assert!(dec.decode(&valid).is_ok());
+        }
     }
 }

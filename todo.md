@@ -87,6 +87,48 @@
   producing a measurably wrong spectrum before this fix — worth a mental
   note if `tpt-dsp`'s version isn't yet bumped/pulled everywhere this
   workspace's `Cargo.lock` might have cached the old code.
+* **2026-09-11 — a real bug in `tpt-media-bitstream`'s `BitReader::skip`,
+  caught by a new Pulse test, not by review.** Skipping a non-byte-aligned
+  span of bits that crossed multiple bytes computed the right number of
+  bytes to advance past, but then re-fetched the *following* byte (one
+  past the skip region) to recover the last skipped byte's unconsumed
+  trailing bits, instead of the correct byte — silently corrupting every
+  read after the first multi-byte `skip` in a stream. It went unnoticed
+  because the only production caller (Aura's `read_exp_golomb`) only ever
+  calls `skip(1)`, which never takes the multi-byte code path, and the
+  crate's own pre-existing `skip_across_bytes` test happened to skip
+  exactly the number of bits already sitting in the accumulator, also
+  never exercising the buggy path. Found while adding a Pulse test that
+  parses a real encoded packet's header by skipping over each band's
+  coefficients with `skip(n_coeffs * bits_per_coef)` — a genuine
+  multi-byte, non-aligned skip. Fixed by rewriting `skip` to advance
+  `pos` past whole bytes directly (no accumulator involvement) and only
+  reload one byte for a genuine partial-byte remainder, discarding its
+  already-skipped leading bits rather than fetching the wrong byte
+  entirely. New regression tests:
+  `skip_past_a_fresh_reader_leaves_trailing_bits_of_the_last_byte_readable`,
+  `skip_an_exact_multiple_of_8_bits_consumes_no_extra_byte`,
+  `skip_beyond_available_bits_is_end_of_input`.
+* **2026-09-11 — two more real bugs, both caught by new §38 fuzz sweeps,
+  not by review.** (1) `tpt-media-bitstream::range::RangeDecoder::decode`
+  divides by zero on a *second* call after an earlier call already
+  returned `EndOfInput`: running out of input partway through
+  renormalization leaves `range` below `TOP` (and potentially below
+  `total`) without ever restoring it, so `range/total` on the next call
+  can be `0`. Fixed by rejecting `total > self.range` up front (which
+  also covers the general case of a caller-supplied `total` genuinely
+  exceeding `range`, not just this poisoned-state case). (2)
+  `tpt-audio-pulse`'s decoder read `n_bands` and each band's `n_coeffs`
+  directly from the packet with no bound relative to `frame_size`, so a
+  malformed/adversarial packet claiming more bands/coefficients than
+  actually fit in the decoded spectrum buffer indexed it out of bounds
+  and panicked instead of returning `CodecError::MalformedPacket`. Fixed
+  by bounds-checking `start + n_coeffs <= spec.len()` (and rejecting
+  `n_bands == 0`) before writing. Neither bug was reachable by any
+  existing unit test — both were found by the first fuzz-style
+  corruption sweep written for their respective crates, underscoring why
+  §38's fuzzing checklist matters even for code that already has
+  conventional unit tests.
 
 ---
 
@@ -767,7 +809,19 @@ All decoders must support bounded resources.
 
 * [x] maximum frame dimensions — Pulse/Aura decode paths now call `limits.check_frame_bytes(...)` before producing output (2026-09-09)
 * [x] maximum packet size
-* [ ] maximum metadata size
+* [x] maximum metadata size — 2026-09-11: `tpt_media_codec::ResourceLimits`
+  gained `max_metadata_bytes` (`permissive()` 16MiB, `strict()`/`Default`
+  64KiB) + `ResourceLimitKind::MetadataSize` + `check_metadata`, following
+  the existing `check_packet`/`check_allocation` pattern. Wired into
+  `tpt-container`'s `TptDemuxer`: a new `limits: ResourceLimits` field
+  (new `with_limits`/`new_streaming_with_limits` constructors alongside
+  the existing `new`/`new_streaming`, which now default to
+  `ResourceLimits::default()`), checked in `index_tmta` against the raw
+  `TMTA` chunk body length *before* parsing it, returning the
+  pre-existing-but-previously-unused `TptError::ResourceExceeded`. Test:
+  `oversized_tmta_metadata_is_rejected_by_default_but_allowed_with_permissive_limits`
+  (a ~100KB metadata entry is rejected under strict/default limits but
+  accepted and recovered intact under permissive limits).
 * [x] maximum allocation — Pulse (`check_allocation` on the decoded spectrum buffer) and Aura (lossless coefficient/sample buffers, lossy MDCT spec+synthesis buffers) now call `limits.check_allocation(...)` before allocating; both have tests asserting a tight budget yields `ResourceLimit(Allocation)` on a structurally valid packet (2026-09-09)
 * [ ] maximum reference frames — still no video codec to exercise it
 * [ ] maximum recursion depth — no recursive codec decode paths yet
@@ -978,7 +1032,26 @@ Target:
 * [x] MDCT via `tpt-dsp`
 * [x] windowing via `tpt-dsp`
 * [x] quantisation
-* [ ] optional perceptual weighting
+* [x] optional perceptual weighting — 2026-09-11:
+  `PulseEncoderConfig::perceptual_weighting` (default `false`, so every
+  existing caller keeps its exact previous behavior). Unlike Aura's full
+  simultaneous-masking model (§10), Pulse deliberately uses only the
+  cheapest piece of that toolkit — the absolute threshold of hearing
+  (`tpt-dsp-core::threshold_in_quiet`) — evaluated once per band at
+  construction time (not per frame, since it depends only on the fixed
+  band layout), consistent with Pulse's low-latency/low-complexity
+  design goal. Each band's configured step is scaled by that band's
+  threshold relative to a 1kHz reference; the scaling only ever coarsens
+  a step, never sharpens below the configured value, since the wire
+  format's step field is an integer with no sub-configured granularity.
+  No wire-format change (Pulse already transmits the actual per-band
+  step used). Tests: `perceptual_weighting_off_by_default_leaves_step_unchanged`,
+  `perceptual_weighting_coarsens_less_sensitive_bands_never_below_configured`,
+  `perceptual_weighting_round_trip_carries_signal`. Writing a test that
+  inspects the transmitted per-band steps surfaced a real, previously
+  latent bug in `tpt-media-bitstream`'s `BitReader::skip` (multi-byte
+  skips silently corrupted all subsequent reads) — fixed separately, see
+  `CHANGELOG.md`.
 
 ## Codec
 
@@ -1026,12 +1099,32 @@ lossy
 ## Lossy
 
 * [x] MDCT
-* [ ] psychoacoustic model
-* [ ] Bark bands
-* [ ] masking
+* [x] psychoacoustic model — 2026-09-11: `codecs/aura/src/lib.rs`'s lossy
+  path now consumes `tpt-dsp-core`'s §10 psychoacoustic toolkit
+  end-to-end (`hz_to_bark`, `classify_tonal_bins`, `simultaneous_masking`,
+  `combined_threshold_db`, `threshold_in_quiet`) to derive a per-band
+  quantization step, replacing the previous flat 16-bit-per-coefficient
+  scheme. See `CHANGELOG.md` `[Unreleased] / Added` for the exact
+  pipeline; this is a breaking change to the v0.1 lossy wire format
+  (pre-existing lossy packets are not decodable by the new decoder).
+* [x] Bark bands — same change: each MDCT bin is mapped to a Bark
+  critical band via a new `mdct_bin_bark_bands`/`mdct_num_bark_bands`
+  pair, deterministic from `(sample_rate, n_half)` alone so the mapping
+  itself needs no wire representation; tested by
+  `mdct_bin_bark_bands_is_deterministic_and_nondecreasing`
+* [x] masking — `simultaneous_masking`/`combined_threshold_db` set each
+  band's quantization step from its masking threshold; tested
+  structurally by `lossy_step_table_reflects_masking_not_flat` (a tone's
+  per-band step table must vary, not stay flat)
 * [x] quantisation
-* [ ] noise shaping
-* [ ] stereo model if required
+* [x] noise shaping — first-order spectral noise shaping
+  (`tpt-dsp-core::noise_shape_step`, feedback `[1.0]`) applied across
+  MDCT bins in frequency order during lossy quantization, shaping the
+  residual error from the per-band step above rather than leaving it
+  independent per bin
+* [ ] stereo model if required — not applicable yet: Aura is mono-only
+  (`ChannelLayout::Mono` in `static_info`'s `supported_formats`); no
+  consumer requires stereo, so left unimplemented rather than speculative
 * [x] encoder
 * [x] decoder
 
@@ -1188,12 +1281,40 @@ The bandwidth target must be benchmark-defined rather than treated as a universa
 
 Native TPT codecs need:
 
-* [ ] versioned bitstreams
-* [ ] codec identification
-* [ ] configuration serialization
-* [ ] decoder capability negotiation
-* [ ] graceful unsupported-mode handling
-* [ ] forward-compatible extension mechanism
+* [x] versioned bitstreams — 2026-09-11: Aura and Pulse packets both now
+  lead with a 16-bit wire-format version field (`VERSION`, already
+  existed as a constant but was never actually written to either
+  codec's stream before this). A decoder reads it first and returns
+  `CodecError::Unsupported` immediately on any mismatch, before
+  interpreting any further bits as if they were its own layout — this is
+  itself a breaking change to both v0.1 wire formats (packets from
+  before this change have no version field and are misread as such;
+  see `CHANGELOG.md`), but it's the last one that *can't* be handled
+  gracefully — every future version bump can now be. Tests:
+  `decode_rejects_unsupported_wire_version` (both codecs).
+* [x] codec identification — each native codec has a fixed 4-byte
+  `CODEC_ID` (`AURA`, `PULS`, ...), carried in the container's `TRAK`
+  chunk (§21) and used by `Registry::find_decoder`/`find_encoder` (§18)
+  to look up the right factory
+* [x] configuration serialization — `CodecConfig::extra` (framework
+  config) plus `TRAK`'s codec-private `data` + `codec_version` fields
+  (§21) round-trip codec-specific configuration through the container
+* [x] decoder capability negotiation — `CodecInfo::supported_formats` +
+  `Capabilities` + `CodecInfo::supports_format()` (§18), consumed by
+  `tpt-media-probe`'s capability table (§44)
+* [x] graceful unsupported-mode handling — `Registry::find_decoder`/
+  `find_encoder` return `Option` (no panic on an unknown codec ID);
+  `DynEncoder::encode` returns `CodecError::Unsupported` for a
+  frame/format a codec doesn't handle (e.g. Aura/Pulse reject
+  non-audio `DynFrame`s); and the new versioned-bitstream check above
+  extends this to unrecognized wire versions
+* [ ] forward-compatible extension mechanism — the container format has
+  one (reserved chunk ID ranges, §24), but the native codecs'
+  *packet-level* bitstreams do not: every Aura/Pulse wire-format change
+  so far (CRC trailer, lossy Bark-band quantization, the version field
+  above) has been a breaking change with no reserved/extension bits.
+  Left honestly unchecked rather than retrofitting an unused mechanism
+  with no real requirement driving its shape yet.
 
 ---
 
@@ -1266,13 +1387,54 @@ Video:
 
 ## Fuzzing
 
-* [ ] bitstream fuzzing
-* [ ] container fuzzing
-* [ ] codec fuzzing
-* [ ] probe fuzzing
-* [ ] malformed metadata
-* [ ] truncated packets
-* [ ] random packet ordering
+**Strategy note (2026-09-11):** this project's established fuzzing
+approach — set by `tpt-container`'s
+`corruption_never_panics_and_truncation_never_panics` (§24) — is a
+deterministic, dependency-free corruption/truncation sweep (a fixed-seed
+LCG driving bit-flips and truncation over a real fixture, asserting
+`Result`/no-panic, never `cargo-fuzz`/libFuzzer) rather than an external
+fuzz harness, so results are reproducible without extra tooling. The
+items below extend that same approach to every crate that parses
+untrusted input; none of them add an external fuzz-harness dependency.
+
+* [x] bitstream fuzzing — 2026-09-11: `tpt-media-bitstream::fuzz_like`
+  (new module) sweeps `BitReader::{read,peek,skip}`, `HuffmanTable::decode`,
+  `rice::decode_riced`, and `RangeDecoder::{new,decode}` over arbitrary/
+  corrupted bytes and widths. **Found and fixed a real bug**: `RangeDecoder::decode`
+  divided by zero on a *second* call after a prior call had already
+  returned `EndOfInput` (renormalization can leave `range` below `total`
+  without restoring it) — see `CHANGELOG.md` `[Unreleased] / Fixed` and
+  the new `decode_keeps_returning_err_after_running_out_of_input_instead_of_panicking`
+  regression test.
+* [x] container fuzzing — already done 2026-09-08, see §24
+  (`corruption_never_panics_and_truncation_never_panics`); this item was
+  just never checked off here
+* [x] codec fuzzing — 2026-09-11: `decode_never_panics_on_corrupted_or_arbitrary_packets`
+  added to both `tpt-audio-aura` and `tpt-audio-pulse` (arbitrary bytes +
+  full truncation sweep + bit-flip sweep of a real packet). **Found and
+  fixed a real out-of-bounds write in Pulse**: `n_bands`/`n_coeffs` are
+  read straight from the packet with no bound relative to `frame_size`,
+  so a malformed/adversarial packet could index the decoded spectrum
+  buffer out of range and panic instead of returning
+  `CodecError::MalformedPacket` — see `CHANGELOG.md` and the new
+  `decode_rejects_n_coeffs_that_would_overrun_the_spectrum` /
+  `decode_rejects_zero_bands` regression tests
+* [x] probe fuzzing — 2026-09-11: `probe_never_panics_on_corrupted_or_arbitrary_bytes`
+  in `tpt-media-probe` (truncation sweep, bit-flip sweep, arbitrary
+  bytes); no new bugs found (`probe()` is built on the already-hardened
+  `TptDemuxer`)
+* [x] malformed metadata — covered by §19's
+  `oversized_tmta_metadata_is_rejected_by_default_but_allowed_with_permissive_limits`
+  plus the container-level corruption sweep (§24), which includes `TMTA`
+  chunks in its fixture
+* [x] truncated packets — covered by the container truncation sweep (§24)
+  and the new per-codec truncation sweeps above (Aura/Pulse)
+* [x] random packet ordering — `tpt-audio-pulse`'s
+  `jittered_pts_are_preserved_not_reordered` (§29, added 2026-09-09)
+  delivers packets out of PTS order and asserts no reordering/panic;
+  Aura has no cross-packet decode state at all (`AuraDecoder` holds no
+  mutable state between `decode()` calls), so packet ordering is
+  structurally a non-issue there, not just untested
 
 ---
 
@@ -1455,13 +1617,53 @@ Muxer
 
 * [ ] threat model
 * [ ] hostile media-input model
-* [ ] integer-overflow audit
-* [ ] bounds-check audit
-* [ ] allocation exhaustion protection
-* [ ] recursion limits
-* [ ] decompression-bomb protection
-* [ ] malformed timestamp handling
-* [ ] fuzzing CI
+* [x] integer-overflow audit — 2026-09-11: audited every length-prefixed
+  field decoded from untrusted bytes in `tpt-container/src/format.rs`
+  (`decode_tmta`/`decode_idx`/`decode_trak`/`decode_clus`) for
+  wraparound-prone `usize` arithmetic on attacker-controlled `u32`/`u64`
+  lengths. Found and fixed one real gap: `decode_tmta`'s `META_BYTES`
+  branch used plain `p + len` (`len` a full attacker-controlled `u32`),
+  which is safe on 64-bit `usize` but can wrap on a 32-bit target (this
+  workspace explicitly builds/targets 32-bit — `thumbv7em-none-eabi` for
+  Vox, and wasm32 for the planned §45 WASM target) and pass a bounds
+  check it should have failed. Fixed with `checked_add`. Every other
+  length field in that file is either itself narrow enough (`u8`/`u16`)
+  to make wraparound unreachable on any realistic target, or already
+  goes through `checked_add` (the chunk-size field in `read_chunk_header`
+  / `TptDemuxer::scan`). Test:
+  `decode_tmta_rejects_bytes_value_length_that_would_overrun_the_body`
+* [x] bounds-check audit — 2026-09-11: covered together with §38's fuzz
+  sweeps (Aura/Pulse OOB write fix) and the integer-overflow audit above;
+  see `CHANGELOG.md` for the full list of fixes this produced
+* [x] allocation exhaustion protection — 2026-09-11: found and fixed a
+  real gap in `tpt-container`'s `decode_idx`: `entry_count` is a fully
+  attacker-controlled `u32` (up to ~4.29 billion) that was passed
+  straight to `Vec::with_capacity` with no check against the actual
+  (possibly tiny) input size, so a malformed `IDX ` chunk of only a few
+  bytes could trigger a multi-gigabyte allocation attempt. Fixed by
+  rejecting `entry_count` up front unless it could actually fit in the
+  remaining body (each entry is a fixed 17 bytes). Test:
+  `decode_idx_rejects_entry_count_that_would_overrun_the_body`. §19's
+  `max_metadata_bytes` (added earlier this session) covers the same class
+  of risk for `TMTA` at the chunk-size level.
+* [ ] recursion limits — still no recursive codec decode paths to bound
+  (same status as §19's own recursion-depth item)
+* [x] decompression-bomb protection — the `decode_idx` fix above *is* a
+  decompression-bomb fix (a few input bytes claiming a multi-gigabyte
+  logical size); §19's metadata/allocation/packet/frame size limits
+  cover the rest of this surface
+* [ ] malformed timestamp handling — `Timestamp::rescale` overflow
+  handling (§16) covers arithmetic overflow during timebase conversion,
+  but no decode path currently validates a PTS/DTS read from a `CLUS`
+  chunk against any sanity bound (e.g. absurdly large values that are
+  merely *stored* correctly but would misbehave in a downstream
+  consumer) — left honestly unchecked, no concrete bug found here this
+  session, just not yet audited
+* [x] fuzzing CI — `cargo test --workspace --locked` (already the
+  existing CI gate, `.github/workflows/ci.yml`) runs every `#[test]`
+  including all of §38's new fuzz-style sweeps; no separate workflow
+  step needed since these are plain deterministic unit tests, not an
+  external fuzz-harness job
 * [ ] security disclosure process
 
 ---
@@ -1647,7 +1849,12 @@ Before 0.1:
 * [x] bitstream primitives — the range coder finding was corrected 2026-09-07 (all bitstream tests pass); this gate item was blocked only on that
 * [x] container prototype
 * [x] one working codec — Pulse and Aura both have real, signal-preserving encode/decode round trips
-* [ ] fuzz infrastructure
+* [x] fuzz infrastructure — 2026-09-11: §38's deterministic
+  corruption/truncation sweeps now cover `tpt-media-bitstream` (new,
+  found a real bug), `tpt-container` (pre-existing, §24),
+  `tpt-audio-aura`/`tpt-audio-pulse` (new, found a real bug), and
+  `tpt-media-probe` (new). No external fuzz-harness dependency; see §38's
+  strategy note for why
 * [ ] documentation baseline — substantial docs exist but describe the aspirational architecture, not current state; not yet audited for accuracy
 
 Before 0.2:
