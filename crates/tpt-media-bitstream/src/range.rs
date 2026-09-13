@@ -152,8 +152,18 @@ impl<'a> RangeDecoder<'a> {
         })
     }
 
-    /// Decode one symbol, returning its cumulative frequency (the caller
-    /// maps that back to a symbol using the same model given to `encode`).
+    /// Decode one symbol under a **uniform** static model (every symbol
+    /// has frequency 1), returning the symbol's cumulative frequency.
+    ///
+    /// For models with `freq > 1` use [`RangeDecoder::decode_peek`] +
+    /// [`RangeDecoder::update`] instead: a single call cannot narrow the
+    /// coder by a symbol's sub-interval it was never told, and narrowing
+    /// by `range/total` regardless of `freq` — what this method's
+    /// predecessor silently did — desynchronizes the decoder from the
+    /// encoder after the first non-uniform symbol (found by the §38
+    /// randomized round-trip property tests, 2026-09-14; every previous
+    /// test used `freq = 1`, which is exactly the special case this
+    /// method implements correctly).
     ///
     /// # Errors
     ///
@@ -166,6 +176,26 @@ impl<'a> RangeDecoder<'a> {
     /// on the same (already-failed) decoder returning `Err` again rather
     /// than dividing by zero.
     pub fn decode(&mut self, total: u32) -> Result<u32, BitstreamError> {
+        let cum = self.decode_peek(total)?;
+        self.update(cum, 1, total)?;
+        Ok(cum)
+    }
+
+    /// Return the cumulative-frequency bin `code` currently falls in for
+    /// a model of size `total`, **without** advancing the coder state.
+    ///
+    /// The caller maps `cum` back to a symbol with its own model, then
+    /// commits the choice with [`RangeDecoder::update`], passing the
+    /// chosen symbol's own `(cum, freq)` interval. Between the two calls
+    /// the decoder's state is untouched, so `update` must be given the
+    /// `cum` this call returned (or any interval containing it — commit
+    /// with the symbol's canonical interval).
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`RangeDecoder::decode`]: `total == 0` or
+    /// `total > range`.
+    pub fn decode_peek(&mut self, total: u32) -> Result<u32, BitstreamError> {
         if total == 0 || total > self.range {
             return Err(BitstreamError::EndOfInput);
         }
@@ -174,8 +204,30 @@ impl<'a> RangeDecoder<'a> {
         if cum >= total {
             cum = total - 1;
         }
+        Ok(cum)
+    }
+
+    /// Narrow the coder to the sub-interval `[cum, cum+freq)` of a model
+    /// of size `total` — the interval of the symbol selected from
+    /// [`RangeDecoder::decode_peek`]'s return value.
+    ///
+    /// This is the decode-side counterpart of [`RangeEncoder::encode`]:
+    /// the state advances by exactly the same `range = (range/total)·freq`
+    /// narrowing, so encoder and decoder stay in lockstep for any
+    /// frequency distribution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BitstreamError::EndOfInput`] for a malformed interval
+    /// (`freq == 0`, `cum + freq > total`, `total == 0`, `total > range`)
+    /// or if the input runs out during renormalization.
+    pub fn update(&mut self, cum: u32, freq: u32, total: u32) -> Result<(), BitstreamError> {
+        if total == 0 || total > self.range || freq == 0 || cum + freq > total {
+            return Err(BitstreamError::EndOfInput);
+        }
+        let r = self.range / total;
         self.code -= cum * r;
-        self.range = r;
+        self.range = r * freq;
         while self.range < TOP {
             if self.pos >= self.input.len() {
                 return Err(BitstreamError::EndOfInput);
@@ -184,7 +236,7 @@ impl<'a> RangeDecoder<'a> {
             self.pos += 1;
             self.range <<= 8;
         }
-        Ok(cum)
+        Ok(())
     }
 
     /// Number of bytes consumed.
@@ -246,6 +298,35 @@ mod tests {
         let mut dec = RangeDecoder::new(&buf[..n]).unwrap();
         for &s in &symbols {
             assert_eq!(dec.decode(1000).unwrap(), s);
+        }
+    }
+
+    #[test]
+    fn decode_peek_update_round_trips_skewed_frequencies() {
+        // Regression: `decode` used to narrow by `range/total` regardless
+        // of the decoded symbol's frequency, desynchronizing the decoder
+        // from the encoder after the first `freq > 1` symbol. The
+        // peek/update pair must mirror the encoder's interval narrowing
+        // exactly.
+        let mut buf = [0u8; 256];
+        let freqs = [32u32, 16, 8, 8];
+        let cums = [0u32, 32, 48, 56];
+        let symbols = [0usize, 3, 1, 2, 0, 3, 3, 0, 2, 1];
+        let mut enc = RangeEncoder::new(&mut buf);
+        for &s in &symbols {
+            enc.encode(cums[s], freqs[s], 64).unwrap();
+        }
+        let n = enc.finish().unwrap();
+        let mut dec = RangeDecoder::new(&buf[..n]).unwrap();
+        for &s in &symbols {
+            let cum = dec.decode_peek(64).unwrap();
+            assert!(
+                cum >= cums[s] && cum < cums[s] + freqs[s],
+                "peeked {cum} outside symbol {s}'s interval [{}, {})",
+                cums[s],
+                cums[s] + freqs[s]
+            );
+            dec.update(cums[s], freqs[s], 64).unwrap();
         }
     }
 

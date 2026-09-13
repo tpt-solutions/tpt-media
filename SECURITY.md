@@ -38,12 +38,16 @@ within 30 days for critical issues, 90 days for others.
 
 ## Audits
 
-The following audits are scheduled for the 1.0 release:
+Scheduled for the 1.0 release; completed ones are recorded with the date
+they landed and what they found:
 
-- [ ] Integer-overflow audit (every public API).
-- [ ] Bounds-check audit (every reader).
-- [ ] Allocation-exhaustion audit (every decoder entry point).
-- [ ] Decompression-bomb protection test (every codec).
-- [ ] Fuzzing CI operational for bitstream, container, codec, and probe targets.
+- [x] Integer-overflow audit (every public API) — done 2026-09-11; fixed a 32-bit wrap in `decode_tmta`.
+- [x] Bounds-check audit (every reader) — done 2026-09-11; fixed an out-of-bounds spectrum write in Pulse.
+- [x] Allocation-exhaustion audit (every decoder entry point) — done 2026-09-11; fixed the `decode_idx` entry-count bomb.
+- [x] Decompression-bomb protection test (every codec) — done 2026-09-11 (same fix + §19 resource limits).
+- [x] Fuzzing CI operational for bitstream, container, codec, and probe targets — done: deterministic, seeded corruption/truncation sweeps run as ordinary tests in CI (see `docs/security.md`).
+- [x] Malformed-timestamp audit — done 2026-09-14; extreme/duplicate/descending PTS handled without panic (one unsigned-envelope quirk documented).
+- [ ] External security review (pre-1.0).
 
-See `docs/security.md` for the full threat model and audit checklist.
+See `docs/security.md` for the full threat model, audit details, and the
+fuzzing strategy.

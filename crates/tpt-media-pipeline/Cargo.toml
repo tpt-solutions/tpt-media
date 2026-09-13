@@ -17,8 +17,12 @@ tpt-media-codec = { workspace = true, features = ["std"] }
 tpt-media-container = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
+criterion = "0.8"
 tpt-container = { workspace = true }
 
 [features]
 default = ["std"]
 std = ["tpt-media-core/std", "tpt-media-codec/std", "tpt-media-container/std"]
+[[bench]]
+name = "pipeline_bench"
+harness = false

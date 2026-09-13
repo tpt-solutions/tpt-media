@@ -18,3 +18,9 @@ libm = "0.2"
 [features]
 default = ["std"]
 std = ["thiserror/std"]
+[[bench]]
+name = "bitstream_bench"
+harness = false
+
+[dev-dependencies]
+criterion = "0.8"

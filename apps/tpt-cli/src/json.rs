@@ -34,32 +34,41 @@ impl J {
     }
 
     /// Open an object (`{`).
+    ///
+    /// Emits no separator of its own: a nested container is either the
+    /// value of a [`field`](Self::field) (which already separated) or an
+    /// array element (separated by [`elem`](Self::elem)). `object()` used
+    /// to call `sep()` as well, producing invalid JSON like
+    /// `"key":,{...}` — see
+    /// `json_nested_containers_do_not_emit_stray_commas`.
     pub fn object(&mut self) {
-        self.sep();
         self.buf.push('{');
         self.stack.push(false);
         self.first.push(true);
     }
 
-    /// Open an object (`[`).
+    /// Open an array (`[`); no separator, for the same reason as
+    /// [`object`](Self::object).
     pub fn arr(&mut self) {
-        self.sep();
         self.buf.push('[');
         self.stack.push(true);
         self.first.push(true);
     }
 
     /// Close the current object/array.
+    ///
+    /// The bracket is chosen by the container being closed, not its
+    /// parent: `close()` used to inspect the *parent* kind, so an object
+    /// nested inside an array closed with `]` (invalid JSON like
+    /// `[{...]`) — exactly the shape every probe track list emits. See
+    /// `json_nested_containers_do_not_emit_stray_commas`.
     pub fn close(&mut self) {
-        self.stack.pop();
+        let was_array = self
+            .stack
+            .pop()
+            .expect("close() without a matching object()/arr()");
         self.first.pop();
-        if self.stack.is_empty() {
-            self.buf.push('}');
-        } else if *self.stack.last().expect("non-empty after pop") {
-            self.buf.push(']');
-        } else {
-            self.buf.push('}');
-        }
+        self.buf.push(if was_array { ']' } else { '}' });
     }
 
     /// Begin an object field `"key":`.

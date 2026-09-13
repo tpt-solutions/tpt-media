@@ -41,7 +41,7 @@ real filesystem or stdin.
 | 0 | success |
 | 1 | runtime / I/O error (missing input, unreadable/unsupported media, codec mismatch, write failure) |
 | 2 | usage error (unknown command, unknown option, bad value, missing required) |
-| 3 | requested operation is not wired yet (`transcode`, `benchmark`, the skeletal `vox` codec) |
+| 3 | requested operation is not wired yet (the skeletal `vox` codec) |
 
 ## Wiring status
 
@@ -69,8 +69,22 @@ real filesystem or stdin.
 - `--quality` maps `0..=100` onto the codec coefficient bit depth
   (Pulse/Aura `bits_per_coef`, 4–12 bits). `--bitrate` is parsed and
   validated but has no effect yet (neither codec has rate control).
-- `transcode` and `benchmark` fully validate their configuration, then
-  exit 3.
+- `transcode` is live (2026-09-14): decodes the input `.tpt` (first
+  audio track, padding trimmed via `tpt.io.sample_count`), re-encodes
+  with the `--codec` target through the same encode path as `encode`,
+  and muxes a fresh `.tpt`. The source track's metadata tags are
+  carried over; a `--set-meta` pair replaces a carried tag of the same
+  key, and the sample-count key is refreshed to the decoded count.
+  Requires a `.tpt` input (a WAV input suggests `tpt encode`) and a
+  44.1/48 kHz source track.
+- `benchmark` is live (2026-09-14): reads the same WAV shape `encode`
+  accepts, runs one untimed warm-up pass plus `--runs` (default 5)
+  measured encode+decode passes, and reports median/min wall time,
+  real-time factors, payload bytes / bits-per-sample / bitrate, and the
+  §37 quality metrics (SNR + log-spectral distance from
+  `tpt_cli::quality`) of the round trip. `--json` emits the same data
+  structurally; a bit-exact round trip reports `"bit_exact": true`
+  instead of an unrepresentable infinite `snr_db`.
 
 ## Testability
 

@@ -21,3 +21,9 @@ thiserror = { workspace = true }
 [features]
 default = ["std"]
 std = ["tpt-media-core/std", "tpt-media-bitstream/std", "tpt-media-codec/std", "tpt-media-container/std"]
+[[bench]]
+name = "container_bench"
+harness = false
+
+[dev-dependencies]
+criterion = "0.8"

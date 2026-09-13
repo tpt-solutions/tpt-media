@@ -4,12 +4,63 @@
 **Organization:** TPT Solutions
 **Language:** Rust
 **Status:** Early Implementation
-**Document version:** 2.1
-**Last updated:** 2026-09-09
+**Document version:** 2.2
+**Last updated:** 2026-09-14
 
 ---
 
 ## Known issues (as of 2026-09-07)
+
+* **2026-09-14 — Pulse has a structural ≈3 dB SNR ceiling on every
+  signal** (found by the new §36/§37 corpus quality tests, not by
+  review). The encoder MDCTs *non-overlapping* 2N-sample windows (input
+  hop = 2N) and the decoder emits a windowed IMDCT per packet with no
+  overlap-add, so the TDAC reconstruction that a Princen–Bradley
+  sine-window MDCT requires never happens: half of each window's
+  samples time-alias away and every input — silence-except-edges, tone,
+  noise, clicks — decodes at ≈1.5–3 dB SNR regardless of quantization
+  quality (measured: sine 3.01, square 3.03, sweep 2.93, noise 2.95,
+  clicks 1.59, mixed 3.00, DC 2.67, alternating 2.69 dB). This is not
+  fixable decoder-side (the edge regions of each window exist only in
+  that window's own coefficients); a real fix means re-establishing hop-N
+  analysis (2× packet rate) plus decoder OLA and reworking the
+  frame/packet semantics and the tests that pin them (`§29`'s tests
+  currently assert 2N-sample frames in → one packet → 2N samples out).
+  Recorded as a known defect with the §37 corpus floors pinned at
+  measured values as regression guards; the redesign is its own future
+  change, not something to slip in unnoticed.
+* **2026-09-14 — `RangeDecoder` desynchronized from the encoder for any
+  `freq > 1` symbol — found and fixed by the new §38 property tests.**
+  `decode(total)` narrowed by `range/total` regardless of the decoded
+  symbol's frequency, while `encode(cum, freq, total)` narrows by
+  `(range/total)·freq`; every non-uniform model diverged after the
+  first symbol. Uncaught because every pre-existing range-coder test
+  used `freq = 1` and the §38 fuzz sweep only fed corrupted bytes
+  (never an encode→decode *pair*). Fixed with the standard two-phase
+  API (`decode_peek(total)` + `update(cum, freq, total)`), with
+  `decode(total)` retained for the uniform `freq = 1` case it got
+  right. No production consumer existed (Aura's lossless path is
+  Exp-Golomb), so this is not a wire-format change. See
+  `CHANGELOG.md [Unreleased] / Fixed`.
+* **2026-09-14 — `tpt-cli`'s JSON writer emitted invalid JSON for every
+  probe with tracks** (found while adding `benchmark --json`). Three
+  related defects: `object()`/`arr()` double-emitted the field
+  separator (`"key":,{...}`), `close()` picked its bracket from the
+  *parent* container (an object inside an array closed with `]`), and
+  the track-list serializers never opened the array they populated
+  (`"audio":,{...}`, empty lists as `"video":,`). All fixed with
+  exact-shape regression tests; `probe --json` output changed (for the
+  better) — anything that parsed the old output was parsing garbage.
+* **2026-09-14 — probe's first/last PTS envelope is computed on
+  *unsigned* ticks** (found by the §47 malformed-timestamp audit, kept
+  as documented behavior): `Acc` stores `u64`, so a stream mixing
+  negative and positive timestamps reports its min/max envelope in
+  unsigned order (a `-1` tick PTS sorts above every positive one).
+  Overflow-safe and panic-free either way — for such hostile inputs the
+  duration/bitrate numbers are absurd-but-finite, which is considered
+  an acceptable answer to nonsense. If real mixed-sign timestamps ever
+  matter, switching `Acc` to `i64` with `saturating_sub` in the
+  duration math is the fix.
 
 * ~~**Range coder is broken.**~~ **Correction (2026-09-07, later same day):**
   re-ran `cargo test -p tpt-media-bitstream --lib range` 5× — all 4 range
@@ -1064,8 +1115,8 @@ Target:
 * [x] implement PLC
 * [x] test packet loss — `plc_conceals_mid_stream_packet_loss` (2026-09-09): encodes a 4-frame tone, drops the middle packet, substitutes `conceal()` at its slot, and asserts the concealed frame carries the right sample count/PTS and non-zero energy (realised from the last decoded spectrum), with clean decode before and after the gap
 * [x] test jitter — `jittered_pts_are_preserved_not_reordered` (2026-09-09): delivers valid packets in arrival order 0,2,3,1; the decoder must not panic/reorder on its own and each output frame echoes its own packet's PTS with full-length, non-silent output
-* [ ] benchmark latency
-* [ ] benchmark CPU usage
+* [x] benchmark latency — 2026-09-14: `tpt benchmark` (§43) reports median/min encode+decode wall time and real-time factor per input, and `codecs/pulse/benches/codec_bench.rs` (criterion) pins the per-block cost; release numbers in `docs/performance.md` (encode ≈ 9.4 µs, decode ≈ 10.6 µs per 512-sample block ≈ 3 orders of magnitude inside the real-time budget)
+* [x] benchmark CPU usage — same two tools: the criterion bench is the CPU-cost source (`docs/performance.md`), and `codecs/pulse/tests/realtime_alloc.rs` (§42) additionally pins the hot path's allocation behavior, the other half of the real-time cost model
 
 Initial frame targets:
 
@@ -1324,12 +1375,26 @@ Create reference corpora.
 
 ## Audio
 
-* [ ] speech
-* [ ] music
-* [ ] transient-heavy material
-* [ ] synthetic signals
-* [ ] silence
-* [ ] pathological inputs
+* [ ] speech — no real speech corpus is available in this environment;
+      not approximated synthetically (consistent with §7's honest
+      pitch-corpus stance)
+* [ ] music — same: no real recordings; `signals::mixed` is labelled as
+      a synthetic stand-in, not a substitute
+* [x] transient-heavy material — 2026-09-14: synthetic click trains
+      (`signals::click_train`, sparse impulses with exponential
+      ring-down) driven through both codecs in the §37 corpus tests;
+      synthetic rather than recorded, noted as such
+* [x] synthetic signals — 2026-09-14: `apps/tpt-cli/src/signals.rs`
+      generates the corpus deterministically (SplitMix64 + closed-form
+      signals; no committed binary fixtures), and
+      `apps/tpt-cli/tests/quality.rs` drives every signal through real
+      Pulse and Aura round trips (Aura bit-exact on all of them,
+      including full-range noise)
+* [x] silence — 2026-09-14: corpus case; both codecs must decode it
+      back to exact digital silence (asserted)
+* [x] pathological inputs — 2026-09-14: full-scale DC and full-scale
+      alternating (Nyquist) square, plus full-range random noise as the
+      worst-case lossless input; all finite, full-length, no panics
 
 ## Video
 
@@ -1346,13 +1411,30 @@ Create reference corpora.
 
 # 37. Objective Quality Metrics
 
-Audio:
+Audio (all in `apps/tpt-cli/src/quality.rs`, 2026-09-14; pure
+deterministic functions, unit-tested, and consumed by `tpt benchmark`
+and the §36 corpus tests):
 
-* [ ] SNR
-* [ ] spectral error
-* [ ] perceptual metrics where practical
-* [ ] bitrate/quality curves
-* [ ] CPU/quality curves
+* [x] SNR — `snr_db`: classic 10·log10(Σref²/Σerr²), `None` for silent
+      references (undefined, not infinite), `Some(inf)` for bit-exact
+      round trips (callers report `bit_exact` instead, since JSON
+      cannot carry `inf`)
+* [x] spectral error — `log_spectral_distance_db`: per-frame
+      Hann-windowed FFT magnitude comparison in dB (RMS per bin,
+      averaged over 50%-overlapped frames), via `tpt-dsp-core`'s FFT;
+      self-tests verify identical signals → ~0 and that heavier
+      spectral damage scores strictly worse
+* [ ] perceptual metrics where practical — deliberately not attempted:
+      `tpt-dsp`'s masking toolkit is available, but a real perceptual
+      metric (weighting, spreading integration, AOD) is a design task
+      with no consumer driving its shape yet; SNR + LSD are the honest
+      current measurement
+* [x] bitrate/quality curves — `tpt benchmark --quality q` emits the
+      (payload bitrate, bits/sample, SNR, spectral distance) point as
+      JSON per run; a curve is the sequence over q = 0..100 (points,
+      no plotting)
+* [x] CPU/quality curves — same mechanism: `encode_ms`/`decode_ms`
+      alongside the quality numbers in the same JSON record
 
 Video:
 
@@ -1379,11 +1461,32 @@ Video:
 
 ## Property tests
 
-* [ ] encode/decode invariants
-* [ ] timestamp invariants
-* [ ] bitstream invariants
-* [ ] container invariants
-* [ ] transform properties
+All five, 2026-09-14, following the project's dependency-free seeded
+LCG strategy (§38 note above) rather than a property-framework crate:
+
+* [x] encode/decode invariants — `codecs/{pulse,aura}/tests/property.rs`:
+      full-range random audio round trips (Aura lossless bit-exact on
+      arbitrary S16 including worst-case noise; Pulse within its
+      measured floors), silence stays silent, length preserved, finite
+      output
+* [x] timestamp invariants — `crates/tpt-media-core/tests/property.rs`:
+      rescale identity, weak monotonicity, finer-then-back round trip
+      within 2 ticks (the truncation bound), checked-vs-saturating
+      duration agreement, overflow → `None`
+* [x] bitstream invariants — `crates/tpt-media-bitstream/tests/property.rs`:
+      seeded-random write/read round trips through `BitWriter`/
+      `BitReader` (mixed widths), `peek` ≡ next `read`, Rice/Huffman/
+      range round trips (the range one found the `freq > 1` decoder
+      desync — see Known Issues)
+* [x] container invariants — `containers/tpt-container/tests/property.rs`:
+      seeded-random packet streams (payloads, flags, PTS) round-trip
+      exactly through mux→demux, including extreme/duplicate
+      `i64::MAX`-scale timestamps (§47)
+* [x] transform properties — owned by `tpt-dsp`, where the transform
+      tests live: FFT vs naive DFT, MDCT/DCT-IV fast-vs-direct
+      equivalence and TDAC round trips, DCT orthogonality, LPC/LSP
+      round trips (§5, §6, §9, §12 there); `tpt-media`'s codec-level
+      property tests pin the composed result end-to-end
 
 ## Fuzzing
 
@@ -1440,48 +1543,94 @@ untrusted input; none of them add an external fuzz-harness dependency.
 
 # 39. Determinism
 
-* [ ] deterministic decoding
-* [ ] deterministic container generation where practical
-* [ ] deterministic scalar DSP
-* [ ] document SIMD differences
-* [ ] deterministic test corpus
-* [ ] reproducible benchmark configuration
+All six, 2026-09-14:
+
+* [x] deterministic decoding — `encoding_and_decoding_are_deterministic`
+      in `codecs/{pulse,aura}/tests/property.rs`: independent
+      encoder/decoder instances produce byte-identical packets and
+      byte-identical decodes; both codecs are pure functions of
+      (bytes, config) — no RNG, wall-clock, or thread state
+* [x] deterministic container generation where practical —
+      `muxing_is_deterministic`
+      (`containers/tpt-container/tests/property.rs`): the muxer writes
+      no timestamps, counters, or padding entropy; same stream in,
+      byte-identical `.tpt` out
+* [x] deterministic scalar DSP — `tpt-dsp`'s kernels are pure functions
+      over fixed iteration orders (§12/§13 there); this workspace pins
+      that end-to-end at the media layer via the codec determinism
+      tests above
+* [x] document SIMD differences — `docs/performance.md` §Determinism
+      records the build-time-dispatch story and points at
+      `tpt-dsp/ARCHITECTURE.md` §10's support matrix; same-binary
+      results are deterministic, cross-`target-cpu` results may differ
+      within documented tolerances
+* [x] deterministic test corpus — §36's `apps/tpt-cli/src/signals.rs`:
+      every corpus signal is closed-form or SplitMix64-seeded; same
+      seed, same bytes, no committed binary fixtures
+* [x] reproducible benchmark configuration — the criterion benches fix
+      `sample_size`/`warm_up_time`/`measurement_time` in code so plain
+      `cargo bench` reproduces the configuration; `docs/performance.md`
+      records the measured tables, their machine caveat, and the
+      same-CPU/same-toolchain reproducibility policy
 
 ---
 
 # 40. Scalar / SIMD Equivalence
 
-For all optimized DSP kernels:
+For all optimized DSP kernels. All the kernels live in `tpt-dsp` (§3),
+and §13 there already records the scalar reference + equivalence-test
+work — this section was silently re-asking for it; reconciled
+2026-09-14, with the two genuinely-open items left open:
 
-* [ ] scalar reference
-* [ ] SIMD implementation
-* [ ] same-input comparison
-* [ ] tolerance definition
-* [ ] randomized testing
-* [ ] architecture-specific CI
+* [x] scalar reference — `tpt-dsp-core/src/simd_scalar.rs`, the default
+      fallback path (§13)
+* [x] SIMD implementation — `tpt-dsp-core/src/simd.rs` (`core::simd`
+      complex mul/add/magnitude, FFT butterfly; §13)
+* [x] same-input comparison — `simd_mul_matches_scalar`,
+      `simd_add_matches_scalar`, `simd_magnitude_matches_scalar`,
+      `simd_fft_matches_scalar_fft` (§13)
+* [x] tolerance definition — per-kernel-family tolerances stated in
+      each module's `# Numerical contract` section (§12 there: ~1e-3/
+      1e-4 `f32`, ~1e-9/1e-10 `f64` for the FFT-backed transforms)
+* [ ] randomized testing — the equivalence tests use fixed vectors;
+      seeded-random scalar-vs-SIMD sweeps are the remaining gap
+      (recorded in `docs/performance.md` §SIMD Equivalence)
+* [ ] architecture-specific CI — today's CI is x86_64-only; an
+      AArch64 (and cross-`target-feature`) matrix is still open
 
 ---
 
 # 41. Performance
 
-Benchmark:
+Benchmarked 2026-09-14 (criterion benches added to this workspace;
+results + machine caveats recorded in `docs/performance.md`):
 
-* [ ] MDCT
-* [ ] IMDCT
-* [ ] FFT
-* [ ] DCT
-* [ ] LPC
-* [ ] VQ
-* [ ] psychoacoustics
-* [ ] entropy coding
-* [ ] Pulse encode/decode
-* [ ] Aura encode/decode
-* [ ] Vox encode/decode
-* [ ] Livelink encode/decode
-* [ ] Vault encode/decode
-* [ ] Whisper encode/decode
-* [ ] container mux/demux
-* [ ] pipeline throughput
+* [x] MDCT — `tpt-dsp-core/benches/dsp_bench.rs::bench_mdct` (direct vs
+      `FastMdctPlan`, all 6 target sizes; §5.1)
+* [x] IMDCT — same bench, inverse direction (§5.1)
+* [x] FFT — `tpt-dsp-core/benches/dsp_bench.rs` (§5.1's FFT backing)
+* [x] DCT — `bench_dct` (DCT-II/III/IV; §5.2)
+* [x] LPC — `bench_lpc` at Aura's orders 8/16/32 (§6)
+* [x] VQ — `bench_vq`, linear vs accelerated at Vox/Whisper codebook
+      sizes (§8)
+* [x] psychoacoustics — `bench_psychoacoustic`: masking + tonal
+      classification (§10)
+* [x] entropy coding — `crates/tpt-media-bitstream/benches/
+      bitstream_bench.rs`: bit I/O, Rice, range (peek/update), Huffman
+      at codec batch sizes
+* [x] Pulse encode/decode — `codecs/pulse/benches/codec_bench.rs`
+      (64×512-sample blocks @ 48 kHz; also `tpt benchmark` for
+      end-to-end wall time on a real WAV — §29)
+* [x] Aura encode/decode — `codecs/aura/benches/codec_bench.rs`
+      (lossless, 32×1024-sample blocks @ 48 kHz)
+* [ ] Vox encode/decode — no implementation yet (§31)
+* [ ] Livelink encode/decode — no implementation yet (§32)
+* [ ] Vault encode/decode — no implementation yet (§33)
+* [ ] Whisper encode/decode — no implementation yet (§34)
+* [x] container mux/demux — `containers/tpt-container/benches/
+      container_bench.rs` (200-packet stream both directions)
+* [x] pipeline throughput — `crates/tpt-media-pipeline/benches/
+      pipeline_bench.rs` (1000 packets through source→map→sink)
 
 Record:
 
@@ -1497,12 +1646,30 @@ allocations
 
 # 42. Memory Testing
 
-* [ ] allocation profiling
-* [ ] real-time allocation assertions
-* [ ] peak memory measurements
-* [ ] hostile-input memory tests
-* [ ] maximum-frame tests
-* [ ] maximum-packet tests
+* [ ] allocation profiling — systematic profiling (criterion
+      allocator hooks / tracing) not yet set up; only the Pulse bound
+      below exists
+* [x] real-time allocation assertions — 2026-09-14:
+      `codecs/pulse/tests/realtime_alloc.rs` runs the steady-state
+      encode/decode path under a counting global allocator and asserts
+      peak allocations stay within 512 KiB over 31 blocks (~25× the
+      measured working set) — catches per-frame allocation growth or
+      accidental multi-MB scratch, which is the property the real-time
+      claim actually needs
+* [ ] peak memory measurements — per-codec working-set tables in
+      `docs/performance.md` are still design targets, not measured
+* [x] hostile-input memory tests — covered: the §38 corruption/
+      truncation/bit-flip sweeps (asserting no panic on hostile bytes)
+      plus the §19/§47 resource-limit and bomb tests (asserting hostile
+      *sizes* are rejected before allocation) are exactly these
+* [x] maximum-frame tests — §19: Pulse/Aura `check_frame_bytes` /
+      `check_allocation` tests assert a tight budget yields
+      `ResourceLimit(Allocation)` on structurally valid packets;
+      `docs/security.md` records the limit table
+* [x] maximum-packet tests — §19 `check_packet` (decoders) and the
+      container-side `TMTA`/`IDX ` body-length rejections
+      (`oversized_tmta_metadata_is_rejected_by_default...`,
+      `decode_idx_rejects_entry_count_that_would_overrun_the_body`)
 
 ---
 
@@ -1530,13 +1697,18 @@ tpt benchmark
 * [x] machine-readable output
 * [x] error reporting
 
-Done 2026-09-08. `apps/tpt-cli` (`tpt` binary + lib core). `probe` /
-`inspect` / `list-codecs` / `--help` fully implemented; `encode` and
-`decode` are now live end-to-end (WAV → `pulse`/`aura` codec → `.tpt`, and
-back), using the §27 media I/O (`decode_wav`/`write_wav`) and the native
-codec encoder/decoder plumbing. Remaining: `transcode` and `benchmark`
-validate their config then exit 3. Design: `docs/cli-design.md`. Added to
-workspace members (`apps/` now enabled).
+Done 2026-09-08, completed 2026-09-14. `apps/tpt-cli` (`tpt` binary +
+lib core). `probe` / `inspect` / `list-codecs` / `--help` fully
+implemented; `encode`/`decode` live end-to-end (WAV → `pulse`/`aura` →
+`.tpt` and back) since 2026-09-08. **2026-09-14: `transcode` and
+`benchmark` are live too** — `transcode` decodes the input `.tpt` and
+re-encodes with the `--codec` target (metadata carried, `--set-meta`
+overrides); `benchmark` measures encode/decode wall time (median/min
+over `--runs` passes after an untimed warm-up), payload bitrate, and
+§37 quality (SNR + spectral distance), with `--json`. Both use the
+shared `EncodeJob`/`demux_and_decode` paths that `encode`/`decode` use,
+so the four commands stay behaviorally identical where they overlap.
+Design: `docs/cli-design.md`.
 
 ---
 
@@ -1615,8 +1787,12 @@ Muxer
 
 # 47. Security
 
-* [ ] threat model
-* [ ] hostile media-input model
+* [x] threat model — `SECURITY.md` (hostile-input assumptions, attacker
+      goals/mitigations table, supported versions) plus the
+      implementation-level mitigations in `docs/security.md`
+* [x] hostile media-input model — same documents: the input media file
+      is the trust boundary, with the boundary crossings enumerated
+      (demux `next_packet`, `BitReader` reads, codec `decode`)
 * [x] integer-overflow audit — 2026-09-11: audited every length-prefixed
   field decoded from untrusted bytes in `tpt-container/src/format.rs`
   (`decode_tmta`/`decode_idx`/`decode_trak`/`decode_clus`) for
@@ -1652,19 +1828,22 @@ Muxer
   decompression-bomb fix (a few input bytes claiming a multi-gigabyte
   logical size); §19's metadata/allocation/packet/frame size limits
   cover the rest of this surface
-* [ ] malformed timestamp handling — `Timestamp::rescale` overflow
-  handling (§16) covers arithmetic overflow during timebase conversion,
-  but no decode path currently validates a PTS/DTS read from a `CLUS`
-  chunk against any sanity bound (e.g. absurdly large values that are
-  merely *stored* correctly but would misbehave in a downstream
-  consumer) — left honestly unchecked, no concrete bug found here this
-  session, just not yet audited
+* [x] malformed timestamp handling — audited 2026-09-14 (see Known
+      Issues for the unsigned-envelope quirk found there): the demuxer
+      does no timestamp arithmetic at all and any representable `i64`
+      PTS/DTS round-trips exactly (`extreme_and_duplicate_pts...` in
+      `tpt-container/tests/property.rs`); the probe — the first
+      consumer that computes with timestamps — produces finite,
+      non-negative reports or none on extreme/duplicated/descending/
+      mixed-sign inputs (`tpt-media-probe/tests/timestamps.rs`);
+      conclusion recorded in `docs/security.md` §Malformed Timestamps
 * [x] fuzzing CI — `cargo test --workspace --locked` (already the
   existing CI gate, `.github/workflows/ci.yml`) runs every `#[test]`
   including all of §38's new fuzz-style sweeps; no separate workflow
   step needed since these are plain deterministic unit tests, not an
   external fuzz-harness job
-* [ ] security disclosure process
+* [x] security disclosure process — `SECURITY.md`: private reporting
+      channel, acknowledgement/fix timelines, supported-version table
 
 ---
 
@@ -1859,22 +2038,35 @@ Before 0.1:
 
 Before 0.2:
 
-* [ ] MDCT
-* [ ] LPC
-* [ ] VQ
-* [ ] improved DSP APIs
-* [ ] Pulse prototype
-* [ ] Vox prototype
-* [ ] container streaming
-* [ ] basic pipeline
+* [x] MDCT — in `tpt-dsp` (§5.1: reference + `FastMdctPlan` + TDAC
+      round-trip tests + benchmarks)
+* [x] LPC — in `tpt-dsp` (§6: analyzer, Levinson-Durbin, stability
+      tests, benchmarks)
+* [x] VQ — in `tpt-dsp` (§8: search/encode/decode, accelerated search
+      proven bit-identical, benchmarks)
+* [ ] improved DSP APIs — open-ended; nothing driving a specific
+      improvement right now
+* [x] Pulse prototype — §29: encoder/decoder/PLC with round-trip,
+      packet-loss, jitter tests; ≈3 dB structural ceiling recorded
+      (Known Issues); real-time benchmarks recorded (§41)
+* [ ] Vox prototype — §31 not started
+* [x] container streaming — §25 all green (fragmented writing,
+      incremental parsing, live append, missing trailer, reconstruction)
+* [x] basic pipeline — §26 all green (nodes, negotiation, backpressure,
+      executors, realtime profile + integration test)
 
 Before 0.3:
 
-* [ ] Aura prototype
+* [x] Aura prototype — §30: lossless (LPC + Exp-Golomb + CRC trailer)
+      and lossy (MDCT + Bark masking + noise shaping) paths with
+      bit-exact lossless round trips, benchmarks (§41), and the §36
+      corpus property tests
 * [ ] Livelink prototype
 * [ ] WASM decoder
 * [ ] stable container specification
-* [ ] benchmark suite
+* [ ] benchmark suite — the workspace now has one (§41, 2026-09-14)
+      but Livelink/Vault/Whisper-era benches and CI-recording are
+      still ahead of this gate's original intent
 
 Before 0.4:
 
@@ -1926,19 +2118,39 @@ Before 1.0:
 
 The architecture must satisfy:
 
-* [ ] no duplicated DSP implementations
-* [ ] no codec-specific DSP in `tpt-dsp`
-* [ ] no media/container abstractions in `tpt-dsp`
-* [ ] no cyclic dependencies
-* [ ] real-time paths are allocation-free
-* [ ] malformed media cannot cause unbounded resource consumption
+* [x] no duplicated DSP implementations — Pulse/Aura/Vox consume
+      `tpt-dsp` for MDCT/LPC/psychoacoustics/noise shaping (§3); the
+      codecs' own code (entropy coding, packetization, band mapping)
+      is codec logic, not DSP
+* [x] no codec-specific DSP in `tpt-dsp` — verified §3.1: its public
+      API is entirely generic, no Pulse/Aura/Vox-specific types
+* [x] no media/container abstractions in `tpt-dsp` — §3.1: no
+      `tpt-media` dependency anywhere in `tpt-dsp`'s manifests
+* [x] no cyclic dependencies — cargo forbids workspace cycles by
+      construction; the declared graph (core/bitstream/codec →
+      container → pipeline → apps, probe → container, everything on
+      tpt-dsp) builds clean
+* [ ] real-time paths are allocation-free — Pulse's hot path is
+      *bounded*-allocation (§42 test), not strictly zero; the strict
+      reading stays open until caller-buffer APIs exist
+* [x] malformed media cannot cause unbounded resource consumption —
+      §19 limits + §47 audits + §38 sweeps + §42 hostile-input memory
+      tests, with the three real overflow/OOB/bomb bugs they found
+      fixed (2026-09-11/14)
 * [ ] native codecs have explicit versioned specifications
 * [ ] `.tpt` is independently implementable
 * [ ] public APIs have documented contracts
-* [ ] numerical algorithms have documented conventions
-* [ ] optimized implementations have reference implementations
+* [x] numerical algorithms have documented conventions — §12 in
+      `tpt-dsp` (all 8 families carry `# Numerical contract` +
+      `# Panics` sections, audited)
+* [x] optimized implementations have reference implementations — every
+      fast path in `tpt-dsp` (`FastMdctPlan`, `FastDctIvPlan`,
+      accelerated VQ, SIMD) is tested against a direct scalar reference
+      (§5.1, §5.2, §8, §13)
 * [ ] provenance is recorded
-* [ ] security testing is continuous
+* [ ] security testing is continuous — CI runs the deterministic
+      sweeps today; "continuous" in the §38/§47 sense (long-running
+      coverage-guided fuzzing) is still pre-1.0 work
 * [ ] the resulting crates are reusable outside `tpt-media`
 
 ---

@@ -24,17 +24,20 @@
 //! | bitrate configuration | `--bitrate <n>[k\|m]` (parsed, `k`=`1e3`,`m`=`1e6`) |
 //! | metadata manipulation | `--set-meta key=value` (repeatable) |
 //! | streaming stdin/stdout | `-` as `<input>` / `<output>` |
-//! | machine-readable output | `--json` on [`probe`] |
+//! | machine-readable output | `--json` on [`probe`] and `benchmark` |
 //! | error reporting | stable exit codes (0 ok, 1 I/O, 2 usage, 3 not wired) |
 //!
-//! `probe`/`inspect`/`list-codecs` are fully implemented. The encode
-//! family validates its full configuration then reports the not-wired
-//! component state (exit 3) until §27 media I/O and the codec plumbing
-//! land.
+//! `probe`/`inspect`/`list-codecs`/`encode`/`decode`/`transcode`/
+//! `benchmark` are fully implemented (vox is rejected with exit 3 until
+//! its codec lands). Objective quality metrics (§37) live in
+//! [`quality`]; the deterministic synthetic corpus they are validated
+//! against (§36, audio subset) lives in [`signals`].
 
 pub mod args;
 pub mod commands;
 pub mod json;
+pub mod quality;
+pub mod signals;
 
 use args::Command;
 
@@ -518,5 +521,52 @@ mod tests {
         j.value_str("line\nbreak");
         j.close();
         assert_eq!(j.finish(), "{\"a\\\"b\":\"line\\nbreak\"}");
+    }
+
+    #[test]
+    fn json_nested_containers_do_not_emit_stray_commas() {
+        // Regression: `object()`/`arr()` used to call `sep()` themselves,
+        // so a container appearing as a *field value* produced invalid
+        // JSON like `"key":,{...}`. This is exactly the shape `probe
+        // --json` (timebase, tracks) and `benchmark --json` (encode_ms)
+        // emit.
+        let mut j = json::J::new();
+        j.object();
+        j.field("first");
+        j.value_u64(1);
+        j.field("nested");
+        j.object();
+        j.field("deep");
+        j.object();
+        j.close();
+        j.close();
+        j.field("list");
+        j.arr();
+        j.elem();
+        j.object();
+        j.field("x");
+        j.value_u64(2);
+        j.close();
+        j.elem();
+        j.value_str("y");
+        j.close();
+        j.close();
+        assert_eq!(
+            j.finish(),
+            "{\"first\":1,\"nested\":{\"deep\":{}},\"list\":[{\"x\":2},\"y\"]}"
+        );
+    }
+
+    #[test]
+    fn probe_json_is_wellformed_for_nested_fields() {
+        // `probe --json` on a container with a timebase and a track hits
+        // every nested-container path; assert none of the stray-separator
+        // shapes survive.
+        let o = run(&argv(&["probe", "--json", "-"]), &stdin_ctx(make_tpt()));
+        assert_eq!(o.code, 0, "stderr: {}", o.err);
+        for bad in [":,{", ":,[", ",,", "[,", ",]", "{,", ",}", "{\"}\""] {
+            assert!(!o.out.contains(bad), "found `{bad}` in {}", o.out);
+        }
+        assert!(o.out.contains("\"timebase\":{\"num\":1,\"den\":48000}"));
     }
 }

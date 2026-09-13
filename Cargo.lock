@@ -596,6 +596,7 @@ dependencies = [
 name = "tpt-audio-aura"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "thiserror",
  "tpt-dsp-core",
  "tpt-media-bitstream",
@@ -607,6 +608,7 @@ dependencies = [
 name = "tpt-audio-pulse"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "thiserror",
  "tpt-dsp-core",
  "tpt-media-bitstream",
@@ -630,6 +632,7 @@ dependencies = [
  "tpt-audio-aura",
  "tpt-audio-pulse",
  "tpt-container",
+ "tpt-dsp-core",
  "tpt-media-codec",
  "tpt-media-container",
  "tpt-media-core",
@@ -641,6 +644,7 @@ dependencies = [
 name = "tpt-container"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "thiserror",
  "tpt-media-bitstream",
  "tpt-media-codec",
@@ -669,6 +673,7 @@ dependencies = [
 name = "tpt-media-bitstream"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "libm",
  "thiserror",
 ]
@@ -714,6 +719,7 @@ dependencies = [
 name = "tpt-media-pipeline"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "tpt-container",
  "tpt-media-codec",
  "tpt-media-container",

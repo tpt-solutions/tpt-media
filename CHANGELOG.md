@@ -9,6 +9,103 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- `tpt-cli` §43 completion + §36/§37 quality harness (2026-09-14):
+  - `tpt transcode <in.tpt> <out.tpt> --codec <target>` is live: decodes
+    the input container's first audio track, re-encodes with the target
+    codec, and muxes a fresh `.tpt`, carrying the source track's
+    metadata tags (`--set-meta` overrides by key). `pulse→aura` output
+    decodes byte-identically to the direct decode; `aura→pulse` is
+    lossy-of-lossy as expected.
+  - `tpt benchmark <in.wav> --codec <name> [--quality q] [--runs n]
+    [--json]` is live: measures encode/decode wall time (median + min
+    over `--runs` measured passes after one untimed warm-up), payload
+    bitrate, bits/sample, real-time factors, and §37 quality (SNR +
+    log-spectral distance) of the round trip; `bit_exact: true` replaces
+    the unrepresentable `snr_db: inf` in JSON.
+  - New `quality` module (§37 audio metrics): `snr_db`,
+    `log_spectral_distance_db` (Hann-windowed FFT magnitudes via
+    `tpt-dsp-core`), `rms_db`, `bitrate_bits_per_second`; all pure
+    functions with metric-direction self-tests.
+  - New `signals` module (§36 audio corpus): deterministic SplitMix64
+    seeded generators — silence, sine, square, sweep, noise, click
+    trains (transient-heavy), a mixed "programme" signal, and the
+    pathological full-scale DC / full-scale alternating inputs.
+  - Integration tests (`apps/tpt-cli/tests/quality.rs`) drive the whole
+    corpus through real Pulse and Aura round trips: Aura is bit-exact on
+    every signal including full-range noise; Pulse floors are pinned at
+    measured values (see the Fixed-section note on the ≈3 dB ceiling).
+- Criterion benchmark suite (§41, 2026-09-14): `codec_bench.rs` in
+  `tpt-audio-pulse` and `tpt-audio-aura` (encode/decode at each codec's
+  default operating point), `container_bench.rs` in `tpt-container`
+  (200-packet mux/demux), `bitstream_bench.rs` in `tpt-media-bitstream`
+  (bit I/O, Rice, range, Huffman), `pipeline_bench.rs` in
+  `tpt-media-pipeline` (1000-packet source→map→sink drive). Results
+  recorded in `docs/performance.md`; `cargo bench` reproduces the
+  configuration (fixed in code).
+- Seeded-random property tests (§38) + determinism pins (§39) +
+  memory assertions (§42):
+  - `tpt-media-bitstream/tests/property.rs` — randomized write/read
+    round trips through `BitWriter`/`BitReader`, Rice, Huffman, and the
+    range coder, plus byte-identical re-encode determinism.
+  - `tpt-media-core/tests/property.rs` — rescale identity/monotonicity/
+    bounded-round-trip, checked-vs-saturating duration agreement,
+    overflow rejection, over seeded-random samples.
+  - `containers/tpt-container/tests/property.rs` — random packet
+    streams round-trip exactly (PTS/DTS/flags/payload), muxing is
+    byte-identical across runs, and extreme/duplicate PTS values
+    (up to `i64::MAX`) round-trip without panicking (§47).
+  - `codecs/{pulse,aura}/tests/property.rs` — full-range random audio
+    round trips (Aura bit-exact; Pulse bounded by its measured floors),
+    encoder/decoder determinism at the packet-byte level, silence
+    stays silent.
+  - `codecs/pulse/tests/realtime_alloc.rs` (§42) — a counting global
+    allocator asserts steady-state encode/decode allocations stay
+    bounded (512 KiB over 31 blocks, ~25× headroom), guarding the
+    real-time no-unbounded-allocation claim.
+  - `crates/tpt-media-probe/tests/timestamps.rs` (§47) — `probe()`
+    survives extreme, duplicated, descending, and mixed-sign PTS
+    containers with finite, non-negative reports; one unsigned-envelope
+    quirk documented rather than hidden.
+- Documentation truth pass (§47/§39/§41): `docs/security.md` now shows
+  the real `ResourceLimits` fields, describes the deterministic
+  sweep-based fuzzing strategy actually in CI (replacing the
+  not-built `cargo-fuzz` target list), records the completed audits,
+  and adds a Malformed Timestamps section; `docs/performance.md` gains
+  measured benchmark tables, the determinism/SIMD-differences section,
+  and the reproducible-benchmark configuration; `SECURITY.md`'s audit
+  checklist reflects the completed audits.
+
+### Fixed
+
+- `tpt-media-bitstream::range::RangeDecoder::decode` **desynchronized
+  from the encoder for any symbol with `freq > 1`** (found 2026-09-14
+  by the new §38 property tests, not by review): the decoder narrowed
+  its range to `range/total` and never multiplied by the decoded
+  symbol's frequency, while the encoder narrows to
+  `(range/total)·freq` — so every non-uniform model diverged after the
+  first symbol. Every pre-existing test and fuzz sweep used `freq = 1`
+  (or only fed corrupted bytes), which is why this survived. The API is
+  now the standard two-phase scheme: `decode_peek(total)` returns the
+  cumulative-frequency bin without touching state, and
+  `update(cum, freq, total)` narrows by the chosen symbol's interval,
+  mirroring `RangeEncoder::encode` exactly; `decode(total)` remains for
+  the uniform `freq = 1` case it implemented correctly. Regression
+  tests: `decode_peek_update_round_trips_skewed_frequencies` (in-crate)
+  and `range_coder_round_trips_random_symbols` (property).
+- `tpt-cli`'s hand-rolled JSON writer produced **invalid JSON for
+  probe/benchmark output** (found 2026-09-14 while adding `benchmark
+  --json`; three related defects):
+  `J::object()`/`J::arr()` emitted a separator *after* `field()` had
+  already emitted one, producing `"key":,{...}`;
+  `J::close()` chose its closing bracket from the *parent* container,
+  so an object inside an array closed with `]` (`[{...]`) — the shape
+  every probe track list takes; and the probe track-list serializers
+  emitted `elem()`-separated objects without ever opening the array,
+  producing `"audio":,{...}` and `"video":,` for empty lists. Probe
+  `--json` for any file with tracks was malformed. Fixed all three;
+  regression tests pin exact output shapes and assert probe `--json`
+  contains no stray-separator forms.
+
 - Workspace scaffolding: `crates/`, `codecs/`, `containers/` per the v2
   architecture. (`apps/` and `ffi/` are listed in `todo.md` §2 as the
   target structure but have **not** been added yet — they will be

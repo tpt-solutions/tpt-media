@@ -23,3 +23,9 @@ default = ["std"]
 std = ["tpt-media-core/std", "tpt-media-bitstream/std", "tpt-media-codec/std"]
 lossless = []
 lossy = []
+[[bench]]
+name = "codec_bench"
+harness = false
+
+[dev-dependencies]
+criterion = "0.8"

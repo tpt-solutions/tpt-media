@@ -250,8 +250,8 @@ OPTIONS:
   --quality <0..=100>  quality setting
   --bitrate <n>[k|m]   target bitrate (bits/s)
   --set-meta <k=v>     set a metadata pair (repeatable)
-  --json               machine-readable output (probe)
-  --runs <n>           benchmark repetitions
+  --json               machine-readable output (probe, benchmark)
+  --runs <n>           benchmark repetitions (default 5)
   --                    nothing else; `-` means stdin/stdout
 
 Use `-` as <input> to read from stdin. <out> defaults to stdout.";
