@@ -554,12 +554,12 @@ impl Acc {
 /// Known TPT-native codec families (identity + display name only; real
 /// capabilities come from the codec `Registry` when implementations register).
 const NATIVE_CODECS: &[(&[u8; 4], &str)] = &[
-    (b"PULS", "Pulse"),
+    (b"CIND", "Cinder"),
     (b"AURA", "Aura"),
-    (b"VOX ", "Vox"),
-    (b"LIVE", "Livelink"),
+    (b"REED", "Reed"),
+    (b"THRM", "Thrum"),
     (b"VAUL", "Vault"),
-    (b"WHSP", "Whisper"),
+    (b"MOTE", "Mote"),
 ];
 
 fn native_name(id: [u8; 4]) -> Option<&'static str> {
@@ -679,7 +679,7 @@ mod tests {
     }
 
     fn audio_track() -> Track {
-        let mut t = Track::new(0, MediaType::Audio, CodecId::new(*b"PULS"), timebase());
+        let mut t = Track::new(0, MediaType::Audio, CodecId::new(*b"CIND"), timebase());
         t.codec_config.version = 0x01_00;
         t.media.sample_rate = Some(48_000);
         t.media.channel_layout = Some(ChannelLayout::Stereo);
@@ -693,7 +693,7 @@ mod tests {
     }
 
     fn video_track() -> Track {
-        let mut t = Track::new(1, MediaType::Video, CodecId::new(*b"LIVE"), timebase());
+        let mut t = Track::new(1, MediaType::Video, CodecId::new(*b"THRM"), timebase());
         t.codec_config.version = 0x00_03;
         t.media.width = Some(1280);
         t.media.height = Some(720);
@@ -765,7 +765,7 @@ mod tests {
 
         let a = &report.audio[0];
         assert_eq!(a.id, 0);
-        assert_eq!(a.codec_id, CodecId::new(*b"PULS"));
+        assert_eq!(a.codec_id, CodecId::new(*b"CIND"));
         assert_eq!(a.codec_version, 0x01_00);
         assert_eq!(a.sample_format, None);
         assert_eq!(a.channel_layout, Some(ChannelLayout::Stereo));
@@ -792,7 +792,7 @@ mod tests {
 
         let v = &report.video[0];
         assert_eq!(v.id, 1);
-        assert_eq!(v.codec_id, CodecId::new(*b"LIVE"));
+        assert_eq!(v.codec_id, CodecId::new(*b"THRM"));
         assert_eq!(v.codec_version, 0x00_03);
         assert_eq!(v.width, Some(1280));
         assert_eq!(v.height, Some(720));
@@ -807,7 +807,7 @@ mod tests {
             .iter()
             .map(|c| c.codec_id)
             .collect();
-        assert_eq!(caps, vec![CodecId::new(*b"PULS"), CodecId::new(*b"LIVE")]);
+        assert_eq!(caps, vec![CodecId::new(*b"CIND"), CodecId::new(*b"THRM")]);
         assert!(report.codec_capabilities[0].native);
         assert!(!report.codec_capabilities[0].decoder_available);
     }

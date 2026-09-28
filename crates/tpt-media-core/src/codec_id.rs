@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 
 /// Stable codec identifier.
 ///
-/// The 4 bytes are ASCII (e.g. `b"PULS"`, `b"AURA"`, `b"VOX "`,
-/// `b"LIVE"`, `b"VAUL"`, `b"WHSP"`). Reserved codec IDs begin with
+/// The 4 bytes are ASCII (e.g. `b"CIND"`, `b"AURA"`, `b"REED"`,
+/// `b"THRM"`, `b"VAUL"`, `b"MOTE"`). Reserved codec IDs begin with
 /// `0x00`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct CodecId([u8; 4]);
@@ -121,9 +121,9 @@ mod tests {
 
     #[test]
     fn codec_id_round_trip() {
-        let id = CodecId::new(*b"PULS");
-        assert_eq!(format!("{}", id), "PULS");
-        assert_eq!(CodecId::from_str("PULS").unwrap(), id);
+        let id = CodecId::new(*b"CIND");
+        assert_eq!(format!("{}", id), "CIND");
+        assert_eq!(CodecId::from_str("CIND").unwrap(), id);
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn codec_config_default() {
-        let c = CodecConfig::empty(CodecId::new(*b"VOX "));
+        let c = CodecConfig::empty(CodecId::new(*b"REED"));
         assert!(c.is_empty());
         assert_eq!(c.version, 1);
     }

@@ -24,14 +24,14 @@ The following APIs are real-time-safe in `0.1.x`:
 - `tpt-media-bitstream::BitWriter` (allocation-free when given an
   external buffer)
 - `tpt-media-codec::Decoder::decode` for codecs in real-time mode
-  (pulse, livelink, vox)
-- `tpt-audio-pulse::Decoder::decode`
-- `tpt-audio-vox::Decoder::decode`
+  (cinder, thrum, reed)
+- `tpt-audio-cinder::Decoder::decode`
+- `tpt-audio-reed::Decoder::decode`
 
 ## Offline Profile
 
 Offline APIs may allocate, parallelize, and perform expensive RDO. The
-encoder side of `aura`, `vault`, and `whisper` is offline-only.
+encoder side of `aura`, `vault`, and `mote` is offline-only.
 
 ## Benchmark Suite
 
@@ -56,9 +56,10 @@ this repo:
 
 | crate | bench | what it measures |
 | --- | --- | --- |
-| `tpt-audio-pulse` | `benches/codec_bench.rs` | encode/decode of 64×512-sample blocks @ 48 kHz |
+| `tpt-audio-cinder` | `benches/codec_bench.rs` | encode/decode of 64×512-sample blocks @ 48 kHz |
 | `tpt-audio-aura` | `benches/codec_bench.rs` | lossless encode/decode of 32×1024-sample blocks @ 48 kHz |
-| `tpt-audio-vox` | `benches/codec_bench.rs` | encode/decode of 64×320-sample (20 ms) frames @ 16 kHz |
+| `tpt-audio-reed` | `benches/codec_bench.rs` | encode/decode of 64×320-sample (20 ms) frames @ 16 kHz |
+| `tpt-video-thrum` | `benches/codec_bench.rs` | I-frame/P-frame encode + decode of 8-frame clips, 176×144 4:2:0 and 640×480 mono |
 | `tpt-container` | `benches/container_bench.rs` | mux + demux of a 200-packet stream |
 | `tpt-media-bitstream` | `benches/bitstream_bench.rs` | bit I/O, Rice, range, Huffman at codec batch sizes |
 | `tpt-media-pipeline` | `benches/pipeline_bench.rs` | `Source→map→Sink` drive over 1 000 packets |
@@ -69,7 +70,7 @@ log-spectral distance) on a real WAV, and reports a real-time factor.
 `cargo bench` (release profile) is the source for the tables below; the
 CLI's numbers from a debug build are ~40× slower and are not comparable.
 
-### Measured results (2026-09-14; Vox added 2026-09-28)
+### Measured results (2026-09-14; Reed added 2026-09-28; Thrum added 2026-09-28)
 
 `cargo bench`, criterion (20 samples, 300 ms warm-up, 2 s measurement),
 Windows x64 dev machine, release profile. Numbers are machine-relative —
@@ -78,12 +79,12 @@ same machine when judging a change.
 
 | bench | median | per-item | realtime factor |
 | --- | ---: | ---: | ---: |
-| `pulse/encode` (64×512 samples = 0.68 s audio) | 604 µs | 9.4 µs/block | ≥1000× |
-| `pulse/decode` (64 packets) | 676 µs | 10.6 µs/packet | ≥1000× |
+| `cinder/encode` (64×512 samples = 0.68 s audio) | 604 µs | 9.4 µs/block | ≥1000× |
+| `cinder/decode` (64 packets) | 676 µs | 10.6 µs/packet | ≥1000× |
 | `aura_lossless/encode` (32×1024 samples = 0.68 s audio) | 1.80 ms | 56 µs/block | ~380× |
 | `aura_lossless/decode` (32 packets) | 2.37 ms | 74 µs/packet | ~290× |
-| `vox/encode` (64×320 samples = 1.28 s audio, alternating voiced/noise) | 17.0 ms | 266 µs/frame | ~75× |
-| `vox/decode` (64 packets) | 375 µs | 5.9 µs/packet | ~3400× |
+| `reed/encode` (64×320 samples = 1.28 s audio, alternating voiced/noise) | 17.0 ms | 266 µs/frame | ~75× |
+| `reed/decode` (64 packets) | 375 µs | 5.9 µs/packet | ~3400× |
 | `tpt_container/mux` (200 packets) | 84 µs | 0.42 µs/packet | — |
 | `tpt_container/demux` (200 packets) | 22 µs | 0.11 µs/packet | — |
 | `bitstream/bit_write` (1024 ops) | 2.6 µs | 2.5 ns/op | — |
@@ -95,24 +96,30 @@ same machine when judging a change.
 | `bitstream/huffman_encode` (512 symbols) | 2.4 µs | 4.7 ns/symbol | — |
 | `bitstream/huffman_decode` (512 symbols) | 11.0 µs | 21 ns/symbol | — |
 | `pipeline/drive` (1000 packets, source→map→sink) | 60 µs | 60 ns/packet | — |
+| `thrum/qcif/encode_i_frame` (8 frames, 176×144 4:2:0) | 46.8 ms | 5.8 ms/frame | ~57× |
+| `thrum/qcif/encode_p_frame` (8 frames) | 92.1 ms | 11.5 ms/frame | ~29× |
+| `thrum/qcif/decode` (8 packets) | 15.1 ms | 1.9 ms/packet | ~530× |
+| `thrum/vga/encode_i_frame` (8 frames, 640×480 mono) | 377 ms | 47.1 ms/frame | ~6.8× |
+| `thrum/vga/encode_p_frame` (8 frames) | 959 ms | 120 ms/frame | ~2.7× |
+| `thrum/vga/decode` (8 packets) | 84.3 ms | 10.5 ms/packet | ~95× |
 
 Readings worth recording honestly:
 
-* **Pulse clears its real-time frame budget by ~3 orders of magnitude**
+* **Cinder clears its real-time frame budget by ~3 orders of magnitude**
   (encode+decode ≈ 20 µs against a 5.3 ms frame budget at 256/48 kHz) —
   consistent with §5.2's ≤10% target and the FFT-backed MDCT switch.
-* **Aura lossless decode is ~4× more expensive than Pulse decode** —
+* **Aura lossless decode is ~4× more expensive than Cinder decode** —
   expected: LPC synthesis + Exp-Golomb per residual vs. band-quantized
   MDCT coefficients. Aura's §30 profile is archival, not real-time.
-* **Vox encode is dominated by the unvoiced shape-gain codebook search**
+* **Reed encode is dominated by the unvoiced shape-gain codebook search**
   (1024 candidate excitations regenerated and correlated per noise
   frame; the 266 µs/frame median is over a half-voiced/half-noise bench
   input — pure voiced frames skip the search entirely). Decode is one
   codebook-entry regeneration + LPC synthesis per frame: 5.9 µs against
   a 20 ms frame budget. The encoder deliberately does *not* claim
   real-time safety (`Capabilities.real_time_encoder` is false); the
-  decoder does, and `codecs/vox/tests/realtime_alloc.rs` pins its
-  bounded allocation. `--quality` (Vox's LSF bit depth) trades envelope
+  decoder does, and `codecs/reed/tests/realtime_alloc.rs` pins its
+  bounded allocation. `--quality` (Reed's LSF bit depth) trades envelope
   fidelity against packet size only — search cost is
   voicing-dependent, not quality-dependent.
 * **Rice decode is ~5× slower than range decode here** — Rice's unary
@@ -122,18 +129,52 @@ Readings worth recording honestly:
   decode table.
 * Huffman/Rice/Range relative standings match `tpt-dsp`'s entropy
   notes; nothing here contradicts them.
+* **Thrum P-frame encoding is ~2× the cost of an I-frame**, and the
+  exhaustive motion search is why: every macroblock costs
+  `(2·search_range + 1)²` full-pixel SAD evaluations (289 at the default
+  `search_range = 8`) on top of the intra path's own mode search. That
+  is the deliberate trade in §32 — bounded work and no sub-pel
+  interpolation, bought with encoder CPU. The **decoder is ~6× cheaper
+  than the encoder** (1.9 ms vs 11.5 ms/frame at QCIF), which is the
+  asymmetry that matters: only the decoder is claimed real-time
+  (`Capabilities.real_time_encoder` is false, exactly as for Reed).
+* **Thrum's latency figure is the P-frame encode + decode sum**, not
+  any buffer or reorder delay: the encoder never holds a frame back and
+  there is no reordering anywhere in the codec, so at QCIF one-way
+  latency is ~13.4 ms against a 33.3 ms frame budget at 30 fps. Decode
+  alone is ~1.9 ms. At 640×480 the P-frame encode alone (~120 ms) blows
+  a 33.3 ms budget, so this configuration is offline/smaller-frame only
+  until the search window shrinks — `search_range` is the knob, and the
+  cost is quadratic in it.
+* **Mean packet sizes** at the default `qp = 26`, from the bench's own
+  synthetic clip (a panning diagonal ramp plus noise, 8 frames so ~1
+  I-frame + 7 P-frames): 1 074 B/packet at 176×144 4:2:0 and 4 357 B at
+  640×480 mono. These are *bench-input* rates, not a claimed bitrate
+  target — a real scene, and especially a real talking head, codes
+  considerably smaller, because the skip path and intra refresh both
+  key on predicted residual being small.
 
 ### Allocations
 
-The per-frame allocation *counts* for Pulse's hot path are asserted
-bounded by `codecs/pulse/tests/realtime_alloc.rs` (a counting global
+The per-frame allocation *counts* for Cinder's hot path are asserted
+bounded by `codecs/cinder/tests/realtime_alloc.rs` (a counting global
 allocator over 31 steady-state encode+decode passes, budget 512 KiB —
-~25× the measured working set), and Vox's by
-`codecs/vox/tests/realtime_alloc.rs` (same harness; 32 steady-state
+~25× the measured working set), and Reed's by
+`codecs/reed/tests/realtime_alloc.rs` (same harness; 32 steady-state
 passes over alternating voiced/noise frames, same 512 KiB bound — the
 codebook search regenerates entries into one fixed scratch frame rather
-than allocating per candidate). Peak-memory measurement for Aura and the
-container remains `criterion`-profiler work, not yet scripted.
+than allocating per candidate). Thrum's is
+`codecs/thrum/tests/realtime_alloc.rs` (same harness, 24 steady-state
+encode+decode passes at 176×144 4:2:0, 4 MiB bound — deliberately looser
+than the audio budgets because a *video* decoder must return a whole
+frame buffer per call, which is inherently ~1.5 bytes per pixel; the
+property guarded is still order-of-magnitude stability, not a tight
+ceiling). That test is what caught the encoder retaining its
+worst-case packet capacity (2.5 MB per packet for a 176×144 frame,
+59 MB over 24 packets) instead of the few kilobytes actually written —
+`shrink_to_fit` on the emitted packet fixed it. Peak-memory measurement
+for Aura and the container remains `criterion`-profiler work, not yet
+scripted.
 
 ## SIMD Equivalence (todo.md §40)
 
@@ -160,7 +201,7 @@ stands rather than duplicating it:
 * **Decoding is deterministic.** Both native codecs are pure functions
   of (packet bytes, config): no RNG, no wall-clock, no thread state.
   Pinned by `encoding_and_decoding_are_deterministic` in
-  `codecs/{pulse,aura}/tests/property.rs` (byte-identical packets and
+  `codecs/{cinder,aura}/tests/property.rs` (byte-identical packets and
   decodes from independent encoder/decoder instances).
 * **Container generation is deterministic.** The muxer writes no
   timestamps, counters, or padding entropy; the same packet stream
@@ -201,12 +242,12 @@ Default memory budgets per codec:
 
 | Codec  | Per-frame scratch | Reference frames | Total working set |
 | ------ | ----------------- | ---------------- | ----------------- |
-| Pulse  | 4 KiB             | 0                | < 32 KiB          |
+| Cinder  | 4 KiB             | 0                | < 32 KiB          |
 | Aura   | 64 KiB            | 0                | < 256 KiB         |
-| Vox    | 1 KiB             | 0                | < 8 KiB           |
-| Livelink | 64 KiB          | 1                | < 1 MiB           |
+| Reed    | 1 KiB             | 0                | < 8 KiB           |
+| Thrum | 64 KiB          | 1                | < 1 MiB           |
 | Vault  | 4 MiB             | 16               | < 128 MiB         |
-| Whisper | 16 KiB           | 0                | < 64 KiB          |
+| Mote | 16 KiB           | 0                | < 64 KiB          |
 
 These are starting points; actual numbers are measured and recorded
 in each codec's `PROVENANCE.md`.

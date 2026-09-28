@@ -50,13 +50,13 @@ marked *(planned)* below.
 | `tpt-container`        | The native `.tpt` container format                      |
 | `tpt-media-representation` | Swappable signal-representation trait contracts (research) |
 | `tpt-media-research`   | Representation research harness (`docs/representation-research.md`) |
-| `tpt-audio-pulse`      | Real-time low-latency audio codec                       |
+| `tpt-audio-cinder`      | Real-time low-latency audio codec                       |
 | `tpt-audio-aura`       | High-fidelity / archival audio (lossless + lossy)       |
-| `tpt-audio-vox`        | Extremely low-bandwidth speech codec (`no_std` LPC vocoder) |
+| `tpt-audio-reed`        | Extremely low-bandwidth speech codec (`no_std` LPC vocoder) |
+| `tpt-video-thrum`   | Real-time video communication (I/P, intra refresh, 8x8 DCT)  |
 | `tpt-cli`              | Command-line encoder/decoder/probe                      |
-| `tpt-video-livelink`   | *(planned)* Real-time video communication               |
 | `tpt-video-vault`      | *(planned)* High-compression archival video             |
-| `tpt-video-whisper`    | *(planned)* Extreme-edge dictionary-coded video         |
+| `tpt-video-mote`    | *(planned)* Extreme-edge dictionary-coded video         |
 | `tpt-web`              | *(planned)* WASM browser player                         |
 | `tpt-media-sys`        | *(planned)* Stable C ABI                                |
 
@@ -70,11 +70,11 @@ cargo build --workspace --locked
 cargo test  --workspace --locked
 ```
 
-The `tpt-audio-vox` crate is `no_std`-compatible and can additionally be built
+The `tpt-audio-reed` crate is `no_std`-compatible and can additionally be built
 for bare-metal targets:
 
 ```bash
-cargo build -p tpt-audio-vox --target thumbv7em-none-eabi --no-default-features
+cargo build -p tpt-audio-reed --target thumbv7em-none-eabi --no-default-features
 ```
 
 ## License

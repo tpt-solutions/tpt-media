@@ -1,4 +1,4 @@
-//! §41 codec benchmarks: Pulse encode/decode throughput at the default
+//! §41 codec benchmarks: Cinder encode/decode throughput at the default
 //! operating point (frame_size 256 @ 48 kHz, 8 bits/coefficient), one
 //! 512-sample block per packet — the same shape `tpt benchmark` drives.
 
@@ -6,7 +6,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use tpt_audio_pulse::{PulseDecoder, PulseEncoder, PulseEncoderConfig};
+use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
 
@@ -52,20 +52,20 @@ fn blocks() -> Vec<AudioFrame> {
         .collect()
 }
 
-fn bench_pulse(c: &mut Criterion) {
-    let mut group = c.benchmark_group("pulse");
+fn bench_cinder(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cinder");
     group.sample_size(20);
     group.warm_up_time(Duration::from_millis(300));
     group.measurement_time(Duration::from_secs(2));
 
     let input = blocks();
-    let enc_cfg = PulseEncoderConfig {
+    let enc_cfg = CinderEncoderConfig {
         sample_rate: RATE,
-        ..PulseEncoderConfig::default()
+        ..CinderEncoderConfig::default()
     };
 
     group.bench_function("encode/64x512@48k", |b| {
-        let mut enc = PulseEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
+        let mut enc = CinderEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
         b.iter(|| {
             for frame in black_box(&input) {
                 black_box(enc.encode(frame).expect("encode"));
@@ -75,14 +75,14 @@ fn bench_pulse(c: &mut Criterion) {
 
     // Decode: packets pre-encoded once outside the timed loop.
     let packets: Vec<_> = {
-        let mut enc = PulseEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
+        let mut enc = CinderEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
         input
             .iter()
             .flat_map(|f| enc.encode(f).expect("encode"))
             .collect()
     };
     group.bench_function("decode/64_packets@48k", |b| {
-        let mut dec = PulseDecoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
         b.iter(|| {
             for pkt in black_box(&packets) {
                 black_box(dec.decode(pkt).expect("decode"));
@@ -93,5 +93,5 @@ fn bench_pulse(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_pulse);
+criterion_group!(benches, bench_cinder);
 criterion_main!(benches);

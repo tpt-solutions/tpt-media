@@ -28,16 +28,26 @@
 //! | error reporting | stable exit codes (0 ok, 1 I/O or unsupported, 2 usage) |
 //!
 //! `probe`/`inspect`/`list-codecs`/`encode`/`decode`/`transcode`/
-//! `benchmark` are fully implemented (vox is rejected with exit 3 until
-//! its codec lands). Objective quality metrics (§37) live in
-//! [`quality`]; the deterministic synthetic corpus they are validated
-//! against (§36, audio subset) lives in [`signals`].
+//! `benchmark` are all implemented. Objective quality metrics (§37)
+//! live in [`quality`]; the deterministic synthetic corpus they are
+//! validated against (§36, audio subset) lives in [`signals`].
+//!
+//! **Scope: the `encode`/`decode`/`transcode`/`benchmark` family is
+//! audio-only** (WAV in, `.tpt`/WAV out). The native *video* codec
+//! `thrum` resolves by name (`--codec thrum`, `--codec LIVE`) and
+//! is listed by `tpt list-codecs`, but passing it to one of those
+//! commands fails with an explicit "this is a video codec and these
+//! commands are audio-only" message rather than a misleading
+//! unknown-codec error. Driving it means using the
+//! `tpt-video-thrum` crate directly; wiring raw video through
+//! `tpt-media-io` is its own change (todo.md §32).
 
 pub mod args;
 pub mod commands;
 pub mod json;
 pub mod quality;
 pub mod signals;
+pub mod video;
 
 use args::Command;
 
@@ -163,7 +173,7 @@ mod tests {
         args.iter().map(|s| s.to_string()).collect()
     }
 
-    // A small valid `.tpt`: one PULS audio track, three packets.
+    // A small valid `.tpt`: one CIND audio track, three packets.
     fn make_tpt() -> Vec<u8> {
         let tb = tpt_media_core::Timebase {
             num: 1,
@@ -182,7 +192,7 @@ mod tests {
                 p
             })
             .collect::<Vec<_>>();
-        tpt_container::build_tpt(tb, &[(1, b"PULS", &[][..])], &packets)
+        tpt_container::build_tpt(tb, &[(1, b"CIND", &[][..])], &packets)
     }
 
     #[test]
@@ -212,7 +222,7 @@ mod tests {
         assert_eq!(o.code, 0);
         assert!(o.out.contains("Container: Tpt"));
         assert!(o.out.contains("Tracks: 1"));
-        assert!(o.out.contains("PULS"));
+        assert!(o.out.contains("CIND"));
     }
 
     #[test]
@@ -221,7 +231,7 @@ mod tests {
         assert_eq!(o.code, 0);
         assert!(o.out.contains("\"container\":\"tpt\""));
         assert!(o.out.ends_with("}\n") || o.out.ends_with('}'));
-        assert!(o.out.contains("\"codec_id\":\"PULS\""));
+        assert!(o.out.contains("\"codec_id\":\"CIND\""));
         assert!(o.out.contains("\"duration_seconds\""));
     }
 
@@ -250,9 +260,9 @@ mod tests {
     fn list_codecs_prints_the_native_family() {
         let o = run(&argv(&["list-codecs"]), &file_ctx(&[]));
         assert_eq!(o.code, 0);
-        assert!(o.out.contains("PULS"));
+        assert!(o.out.contains("CIND"));
         assert!(o.out.contains("AURA"));
-        assert!(o.out.contains("VOX "));
+        assert!(o.out.contains("REED"));
     }
 
     #[test]
@@ -265,7 +275,7 @@ mod tests {
     #[test]
     fn encode_rejects_the_wav_container() {
         let o = run(
-            &argv(&["encode", "--codec", "pulse", "--container", "wav", "-", "-"]),
+            &argv(&["encode", "--codec", "cinder", "--container", "wav", "-", "-"]),
             &stdin_ctx(vec![]),
         );
         assert_eq!(o.code, 1);
@@ -275,7 +285,7 @@ mod tests {
     #[test]
     fn encode_rejects_non_wav_input() {
         let o = run(
-            &argv(&["encode", "--codec", "pulse", "-", "-"]),
+            &argv(&["encode", "--codec", "cinder", "-", "-"]),
             &stdin_ctx(b"not a wav at all".to_vec()),
         );
         assert_eq!(o.code, 1);
@@ -286,7 +296,7 @@ mod tests {
     fn encode_rejects_unsupported_rates() {
         let wav = io_wav(8_000, &[0; 128]);
         let o = run(
-            &argv(&["encode", "--codec", "pulse", "-", "-"]),
+            &argv(&["encode", "--codec", "cinder", "-", "-"]),
             &stdin_ctx(wav),
         );
         assert_eq!(o.code, 1);
@@ -298,11 +308,11 @@ mod tests {
     }
 
     #[test]
-    fn encode_rejects_vox_outside_its_rates() {
-        // Vox speaks 8/16 kHz; a 48 kHz input is rejected with the
+    fn encode_rejects_reed_outside_its_rates() {
+        // Reed speaks 8/16 kHz; a 48 kHz input is rejected with the
         // codec-specific rate list (no CLI resampler).
         let o = run(
-            &argv(&["encode", "--codec", "vox", "-", "-"]),
+            &argv(&["encode", "--codec", "reed", "-", "-"]),
             &stdin_ctx(io_wav(48_000, &[0; 1024])),
         );
         assert_eq!(o.code, 1);
@@ -310,10 +320,10 @@ mod tests {
     }
 
     #[test]
-    fn encode_pulse_writes_a_tpt_to_stdout() {
+    fn encode_cinder_writes_a_tpt_to_stdout() {
         let samples = sine_samples(1000);
         let o = run(
-            &argv(&["encode", "--codec", "pulse", "--quality", "80", "-", "-"]),
+            &argv(&["encode", "--codec", "cinder", "--quality", "80", "-", "-"]),
             &stdin_ctx(io_wav(48_000, &samples)),
         );
         assert_eq!(o.code, 0, "stderr was: {}", o.err);
@@ -323,10 +333,10 @@ mod tests {
     }
 
     #[test]
-    fn encode_pulse_round_trips_through_stdout() {
+    fn encode_cinder_round_trips_through_stdout() {
         let samples = sine_samples(1000);
         let enc = run(
-            &argv(&["encode", "--codec", "pulse", "--quality", "80", "-", "-"]),
+            &argv(&["encode", "--codec", "cinder", "--quality", "80", "-", "-"]),
             &stdin_ctx(io_wav(48_000, &samples)),
         );
         assert_eq!(enc.code, 0, "encode stderr: {}", enc.err);
@@ -347,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_pulse_writes_a_container_to_a_file() {
+    fn encode_cinder_writes_a_container_to_a_file() {
         let samples = sine_samples(512);
         let wav = io_wav(48_000, &samples);
         let files: &'static [(String, Vec<u8>)] =
@@ -355,7 +365,7 @@ mod tests {
         let log: &'static WriteLog = Box::leak(Box::new(WriteLog::default()));
         let ctx = file_ctx_with_writes(files, log);
         let o = run(
-            &argv(&["encode", "--codec", "pulse", "in.wav", "out.tpt"]),
+            &argv(&["encode", "--codec", "cinder", "in.wav", "out.tpt"]),
             &ctx,
         );
         assert_eq!(o.code, 0, "stderr was: {}", o.err);
@@ -434,11 +444,11 @@ mod tests {
     }
 
     #[test]
-    fn encode_vox_round_trips_through_stdout() {
-        // 640 samples at 16 kHz = two 320-sample (20 ms) vox frames.
+    fn encode_reed_round_trips_through_stdout() {
+        // 640 samples at 16 kHz = two 320-sample (20 ms) reed frames.
         let samples = sine_samples(640);
         let enc = run(
-            &argv(&["encode", "--codec", "vox", "-", "-"]),
+            &argv(&["encode", "--codec", "reed", "-", "-"]),
             &stdin_ctx(io_wav(16_000, &samples)),
         );
         assert_eq!(enc.code, 0, "encode stderr: {}", enc.err);
@@ -473,7 +483,7 @@ mod tests {
     #[test]
     fn quality_out_of_range_is_rejected() {
         let o = run(
-            &argv(&["encode", "--codec", "pulse", "--quality", "101", "in.raw"]),
+            &argv(&["encode", "--codec", "cinder", "--quality", "101", "in.raw"]),
             &file_ctx(&[]),
         );
         assert_eq!(o.code, 2);
@@ -487,25 +497,136 @@ mod tests {
         assert_eq!(args::parse_bitrate("96").unwrap(), 96);
         assert!(args::parse_bitrate("fast").is_err());
         let o = run(
-            &argv(&["encode", "--codec", "pulse", "--bitrate", "fast", "in.raw"]),
+            &argv(&["encode", "--codec", "cinder", "--bitrate", "fast", "in.raw"]),
             &file_ctx(&[]),
         );
         assert_eq!(o.code, 2);
     }
 
     #[test]
+    fn video_codecs_resolve_but_are_rejected_by_audio_commands() {
+        // thrum is part of the native family, so --codec thrum
+        // and --codec LIVE both resolve - but the encode/decode family
+        // is audio-only, so the failure must say *why* rather than
+        // claiming no encoder is registered.
+        assert_eq!(
+            args::resolve_codec("thrum").unwrap(),
+            tpt_media_core::CodecId::new(*b"THRM")
+        );
+        assert_eq!(
+            args::resolve_codec("THRM").unwrap(),
+            tpt_media_core::CodecId::new(*b"THRM")
+        );
+        for cmd in ["encode", "transcode", "benchmark"] {
+            let o = run(
+                &argv(&[cmd, "--codec", "thrum", "in.raw"]),
+                &file_ctx(&[]),
+            );
+            assert_eq!(o.code, 1, "{cmd} exit code");
+            assert!(
+                o.err.contains("video codec"),
+                "{cmd} should explain the video/audio mismatch, got: {}",
+                o.err
+            );
+            assert!(
+                !o.err.contains("no encoder registered"),
+                "{cmd} should not claim the codec is unknown"
+            );
+        }
+    }
+
+    #[test]
+    fn list_codecs_advertises_thrum() {
+        let o = run(&argv(&["list-codecs"]), &file_ctx(&[]));
+        assert_eq!(o.code, 0);
+        assert!(o.out.contains("thrum"), "{}", o.out);
+        assert!(o.out.contains("THRM"), "{}", o.out);
+    }
+
+    #[test]
+    fn video_corpus_reports_every_scene_with_both_metrics() {
+        let o = run(&argv(&["video-corpus", "--frames", "2"]), &file_ctx(&[]));
+        assert_eq!(o.code, 0, "{}", o.err);
+        // Every todo.md 36 video category appears by name.
+        for name in [
+            "talking-head",
+            "camera-motion",
+            "static-scene",
+            "high-motion",
+            "animation",
+            "screen-content",
+            "synthetic-patterns",
+            "pathological-frames",
+        ] {
+            assert!(o.out.contains(name), "missing scene {name} in\n{}", o.out);
+        }
+        // Both quality metrics and the rate/CPU columns are present: a
+        // quality number without a bitrate would be misleading.
+        assert!(o.out.contains("PSNR"), "{}", o.out);
+        assert!(o.out.contains("SSIM"), "{}", o.out);
+        assert!(o.out.contains("bit/s"), "{}", o.out);
+        assert!(o.out.contains("enc ms"), "{}", o.out);
+        assert!(o.out.contains("dec ms"), "{}", o.out);
+        assert!(o.out.contains("frame budget"), "{}", o.out);
+    }
+
+    #[test]
+    fn video_corpus_json_is_wellformed_and_complete() {
+        let o = run(
+            &argv(&["video-corpus", "--json", "--frames", "2", "--fps", "15"]),
+            &file_ctx(&[]),
+        );
+        assert_eq!(o.code, 0, "{}", o.err);
+        let s = o.out.trim();
+        assert!(s.starts_with('{') && s.ends_with('}'), "{}", s);
+        // Braces must balance, which catches the stray-comma class of bug
+        // the JSON writer has hit before.
+        let opens = s.matches('{').count();
+        let closes = s.matches('}').count();
+        assert_eq!(opens, closes, "unbalanced braces in {s}");
+        assert_eq!(opens, 9, "one wrapper plus eight scenes");
+        // The fps override must be honoured, not ignored.
+        assert!(s.contains("\"fps\":15"), "{s}");
+        for key in [
+            "bits_per_pixel",
+            "bitrate_bps",
+            "psnr_db",
+            "ssim",
+            "encode_ms_per_frame",
+            "decode_ms_per_frame",
+            "latency_ms",
+            "fits_frame_budget",
+        ] {
+            assert!(s.contains(key), "missing {key} in {s}");
+        }
+    }
+
+    #[test]
+    fn video_corpus_options_are_validated() {
+        // Zero is rejected rather than dividing by it downstream.
+        assert!(run(&argv(&["video-corpus", "--fps", "0"]), &file_ctx(&[])).code != 0);
+        assert!(run(&argv(&["video-corpus", "--frames", "0"]), &file_ctx(&[])).code != 0);
+        assert!(run(&argv(&["video-corpus", "--fps", "abc"]), &file_ctx(&[])).code != 0);
+        // A missing value is a usage error, not a panic.
+        assert!(run(&argv(&["video-corpus", "--fps"]), &file_ctx(&[])).code != 0);
+        // An unknown flag and a stray positional are both rejected.
+        assert!(run(&argv(&["video-corpus", "--nope"]), &file_ctx(&[])).code != 0);
+        assert!(run(&argv(&["video-corpus", "extra"]), &file_ctx(&[])).code != 0);
+    }
+
+    #[test]
     fn codec_resolution() {
         assert_eq!(
-            args::resolve_codec("pulse").unwrap(),
-            tpt_media_core::CodecId::new(*b"PULS")
+            args::resolve_codec("cinder").unwrap(),
+            tpt_media_core::CodecId::new(*b"CIND")
         );
         assert_eq!(
             args::resolve_codec("AURA").unwrap(),
             tpt_media_core::CodecId::new(*b"AURA")
         );
         assert_eq!(
-            args::resolve_codec("vox").unwrap(),
-            tpt_media_core::CodecId::new(*b"VOX ")
+            args::resolve_codec("reed").unwrap(),
+            tpt_media_core::CodecId::new(*b"REED")
         );
         assert_eq!(
             args::resolve_codec("RAWR").unwrap(),

@@ -1,11 +1,11 @@
 //! §42 "real-time allocation assertions": a counting global allocator
-//! verifies that Pulse's steady-state encode/decode path allocates in
+//! verifies that Cinder's steady-state encode/decode path allocates in
 //! small, bounded chunks — no allocation proportional to the *number of
 //! frames processed*, no accidental multi-megabyte scratch.
 //!
 //! Fidelity caveat: the test harness's other threads allocate too, so the
 //! asserted budget is deliberately generous (512 KiB across 32 blocks —
-//! roughly 25× what Pulse actually moves per block). The property being
+//! roughly 25× what Cinder actually moves per block). The property being
 //! guarded is *order-of-magnitude* stability: a single accidental
 //! per-frame `Vec` growth, a linearly-growing history buffer, or a
 //! multi-MB scratch allocation trips this immediately, while ordinary
@@ -64,7 +64,7 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
-use tpt_audio_pulse::{PulseDecoder, PulseEncoder, PulseEncoderConfig};
+use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
 
@@ -76,13 +76,13 @@ fn steady_state_encode_decode_allocations_are_bounded() {
     // Construction (FFT plans, config) is explicitly *out* of the
     // measured region: the real-time contract is about the per-frame
     // path.
-    let enc_cfg = PulseEncoderConfig {
+    let enc_cfg = CinderEncoderConfig {
         sample_rate: RATE,
         bits_per_coef: 8,
-        ..PulseEncoderConfig::default()
+        ..CinderEncoderConfig::default()
     };
-    let mut enc = PulseEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
-    let mut dec = PulseDecoder::new(CodecConfig::default(), enc_cfg).unwrap();
+    let mut enc = CinderEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
+    let mut dec = CinderDecoder::new(CodecConfig::default(), enc_cfg).unwrap();
 
     let blocks: Vec<Vec<u8>> = (0..32)
         .map(|i| {
@@ -97,7 +97,7 @@ fn steady_state_encode_decode_allocations_are_bounded() {
 
     let tb = Timebase::new(1, RATE);
     let one_pass =
-        |enc: &mut PulseEncoder, dec: &mut PulseDecoder, start: usize, blocks: &[Vec<u8>]| {
+        |enc: &mut CinderEncoder, dec: &mut CinderDecoder, start: usize, blocks: &[Vec<u8>]| {
             let frame = AudioFrame {
                 frame: Frame {
                     pts: Timestamp {

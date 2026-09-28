@@ -11,7 +11,7 @@
 
 ## Known issues (as of 2026-09-07)
 
-* **2026-09-14 — Pulse has a structural ≈3 dB SNR ceiling on every
+* **2026-09-14 — Cinder has a structural ≈3 dB SNR ceiling on every
   signal** (found by the new §36/§37 corpus quality tests, not by
   review). The encoder MDCTs *non-overlapping* 2N-sample windows (input
   hop = 2N) and the decoder emits a windowed IMDCT per packet with no
@@ -62,7 +62,7 @@
   matter, switching `Acc` to `i64` with `saturating_sub` in the
   duration math is the fix.
 * **2026-09-28 — probe's audio track line printed raw ticks under a
-  `{:.3} s` label** (found by smoke-testing the new Vox CLI path, not
+  `{:.3} s` label** (found by smoke-testing the new Reed CLI path, not
   by review — the codec was innocent; the display bug affected every
   `.tpt` file with a non-1/1 track timebase, i.e. everything `tpt
   encode` produces): the human-readable `Audio #0: ...` line subtracted
@@ -102,7 +102,7 @@
 * ~~**`CHANGELOG.md`'s `[Unreleased]` entry overstates scope.**~~
   **Fixed 2026-09-07 (later same day):** removed the
   not-yet-on-disk claims about `apps/`, `ffi/`, `tpt-cli`, `tpt-web`,
-  `tpt-media-sys`, and `tpt-video-{livelink,vault,whisper}`, replaced
+  `tpt-media-sys`, and `tpt-video-{thrum,vault,mote}`, replaced
   with an honest note that they're target structure pending
   implementation, and added a `### Fixed` section summarising the
   `Timestamp::rescale` and Aura doc-comment corrections.
@@ -112,7 +112,7 @@
 * **2026-09-07 tpt-dsp reconciliation**: verified §3–§14 against the
   sibling `tpt-dsp` repo's actual code (`tpt-dsp-core/src/*.rs`). MDCT
   (§5.1) and LPC (§6) are genuinely implemented and consumed by
-  Pulse/Aura — flipped below. Pitch analysis (§7), VQ (§8), LSP/LSF
+  Cinder/Aura — flipped below. Pitch analysis (§7), VQ (§8), LSP/LSF
   (§9), psychoacoustics (§10), and noise shaping (§11) were **entirely
   absent** from `tpt-dsp-core` at the time — confirmed by grep, no
   matches. **Update, same day, later sessions**: all five have since
@@ -135,23 +135,23 @@
   plausible in a quick check; only a test of the property the filter is
   actually *for* (here, DC-averaging accuracy) caught it.
 * **2026-09-07 (later same day) — fixed a real precision bug in
-  `tpt-dsp-core` that affects Pulse/Aura directly.** Implementing
+  `tpt-dsp-core` that affects Cinder/Aura directly.** Implementing
   `FastMdctPlan`/`FastDctIvPlan` (FFT-backed, see §5.1/§5.2 below) and
   cross-checking them against the existing direct `mdct`/`imdct`/`dct_iv`
-  turned up a real disagreement at N=1024+ (Pulse/Aura's actual block
+  turned up a real disagreement at N=1024+ (Cinder/Aura's actual block
   sizes) — not a bug in the new fast path, but in the **existing** direct
   reference: it evaluated `cos()` at the raw, unreduced `(π/N)·x·y` angle,
   which reaches thousands of radians at these block sizes and is poorly
   conditioned for `f32`/`f64` `cos()`. Fixed in `tpt-dsp` via an
   integer-domain angle-reduction helper (`complex::cos_pi_over_n`) applied
   to all five direct transforms (`dct_ii`/`iii`/`iv`, `mdct`/`imdct`);
-  `tpt-media`'s Pulse/Aura tests still pass against the corrected
-  reference. This means Pulse/Aura at 1024+ block sizes were silently
+  `tpt-media`'s Cinder/Aura tests still pass against the corrected
+  reference. This means Cinder/Aura at 1024+ block sizes were silently
   producing a measurably wrong spectrum before this fix — worth a mental
   note if `tpt-dsp`'s version isn't yet bumped/pulled everywhere this
   workspace's `Cargo.lock` might have cached the old code.
 * **2026-09-11 — a real bug in `tpt-media-bitstream`'s `BitReader::skip`,
-  caught by a new Pulse test, not by review.** Skipping a non-byte-aligned
+  caught by a new Cinder test, not by review.** Skipping a non-byte-aligned
   span of bits that crossed multiple bytes computed the right number of
   bytes to advance past, but then re-fetched the *following* byte (one
   past the skip region) to recover the last skipped byte's unconsumed
@@ -161,7 +161,7 @@
   calls `skip(1)`, which never takes the multi-byte code path, and the
   crate's own pre-existing `skip_across_bytes` test happened to skip
   exactly the number of bits already sitting in the accumulator, also
-  never exercising the buggy path. Found while adding a Pulse test that
+  never exercising the buggy path. Found while adding a Cinder test that
   parses a real encoded packet's header by skipping over each band's
   coefficients with `skip(n_coeffs * bits_per_coef)` — a genuine
   multi-byte, non-aligned skip. Fixed by rewriting `skip` to advance
@@ -181,7 +181,7 @@
   can be `0`. Fixed by rejecting `total > self.range` up front (which
   also covers the general case of a caller-supplied `total` genuinely
   exceeding `range`, not just this poisoned-state case). (2)
-  `tpt-audio-pulse`'s decoder read `n_bands` and each band's `n_coeffs`
+  `tpt-audio-cinder`'s decoder read `n_bands` and each band's `n_coeffs`
   directly from the packet with no bound relative to `frame_size`, so a
   malformed/adversarial packet claiming more bands/coefficients than
   actually fit in the decoded spectrum buffer indexed it out of bounds
@@ -340,12 +340,12 @@ tpt-media/
 │   └── tpt-media-probe/
 │
 ├── codecs/
-│   ├── pulse/
+│   ├── cinder/
 │   ├── aura/
-│   ├── vox/
-│   ├── livelink/
+│   ├── reed/
+│   ├── thrum/
 │   ├── vault/
-│   └── whisper/
+│   └── mote/
 │
 ├── containers/
 │   └── tpt-container/
@@ -392,7 +392,7 @@ Those responsibilities belong in `tpt-dsp`.
 * [x] Define `tpt-media` as the media representation/codec/container layer — `ARCHITECTURE.md` §1 Goals + §2 Crate Topology
 * [x] Document dependency direction — `ARCHITECTURE.md` §3: `tpt-media ─────────► tpt-dsp (never reversed)`
 * [x] Prevent `tpt-dsp` from depending on `tpt-media` — verified: no `tpt-media` reference anywhere in `tpt-dsp`'s `Cargo.toml` files
-* [x] Prevent codec-specific APIs from leaking into `tpt-dsp` — `tpt-dsp-core`'s public API (`fft`, `dct_*`, `mdct`/`imdct`, `lpc::*`, `Biquad`, `RingBuffer`, ...) is entirely generic; no Pulse/Aura/Vox-specific types
+* [x] Prevent codec-specific APIs from leaking into `tpt-dsp` — `tpt-dsp-core`'s public API (`fft`, `dct_*`, `mdct`/`imdct`, `lpc::*`, `Biquad`, `RingBuffer`, ...) is entirely generic; no Cinder/Aura/Reed-specific types
 
 Desired:
 
@@ -442,7 +442,7 @@ These should be extended rather than duplicated.
 
 ## 5.1 MDCT
 
-Required by Pulse and Aura.
+Required by Cinder and Aura.
 
 * [x] Define MDCT mathematical convention — `tpt-dsp-core/src/mdct.rs` doc: Princen–Bradley convention, explicit `X[k]` formula
 * [x] Define IMDCT convention — explicit inverse formula in the same doc comment
@@ -480,13 +480,13 @@ Initial target sizes:
 Current DCT-IV implementation is suitable as a correctness reference but must be evaluated for codec workloads.
 
 * [x] Benchmark current DCT implementation — `tpt-dsp-core/benches/dsp_bench.rs::bench_dct` (DCT-II/III/IV across `DCT_SIZES`), results recorded in `BENCHMARKS.md` (e.g. `dct/iv_f32/1024`: 50.0 µs, 20.5 Melem/s)
-* [x] Define performance targets — **target (2026-09-07): the MDCT/DCT-IV transform (forward on encode, inverse on decode) must consume ≤10% of the codec's own real-time frame budget, `frame_size / sample_rate`, at its default operating point** — leaving ≥90% headroom for windowing, quantization, entropy coding, and system jitter. This is derived from Pulse's own committed real-time contract (§29, §1 "zero allocation in real-time hot paths" / deterministic execution), not an arbitrary number; it only binds codecs that claim real-time (Pulse — §30's Aura is explicitly "high-fidelity/archival", i.e. the Offline profile in §14, so this target doesn't apply to it).
+* [x] Define performance targets — **target (2026-09-07): the MDCT/DCT-IV transform (forward on encode, inverse on decode) must consume ≤10% of the codec's own real-time frame budget, `frame_size / sample_rate`, at its default operating point** — leaving ≥90% headroom for windowing, quantization, entropy coding, and system jitter. This is derived from Cinder's own committed real-time contract (§29, §1 "zero allocation in real-time hot paths" / deterministic execution), not an arbitrary number; it only binds codecs that claim real-time (Cinder — §30's Aura is explicitly "high-fidelity/archival", i.e. the Offline profile in §14, so this target doesn't apply to it).
   Measured against `tpt-dsp-core/benches/dsp_bench.rs::bench_mdct` (2026-09-07, `--quick`, noisy per `tpt-dsp/BENCHMARKS.md`'s own caveat):
-  | Pulse `frame_size` (N) | frame budget (48kHz) | direct `mdct()` (what Pulse actually calls) | vs. 10% budget | `FastMdctPlan` |
+  | Cinder `frame_size` (N) | frame budget (48kHz) | direct `mdct()` (what Cinder actually calls) | vs. 10% budget | `FastMdctPlan` |
   | ---: | ---: | ---: | :--- | ---: |
   | 128 | 2.667 ms | 214 µs | 8.0% — **passes**, thinly | 0.34 µs (0.01%) |
   | 256 | 5.333 ms | 822 µs | 15.4% — **fails** | 0.69 µs (0.01%) |
-  So Pulse's *previous* code called the direct `mdct`/`imdct`, which already missed this target at its larger supported frame size, and only barely cleared it at the smaller one, before accounting for anything else in the encode/decode path. **Follow-up done 2026-09-08:** `codecs/pulse/src/lib.rs` now uses `FastMdctPlan` — `PulseEncoder` holds one plan sized to its fixed `frame_size`; `PulseDecoder` holds one plan per supported size (128 and 256, selected per-packet via `mdct_plan_for`, since the wire format self-describes frame size independent of the decoder's own configured default) so a size-128 packet decoded on a size-256-configured decoder still inverts correctly. Plans are built once at construction (the one-time FFT-plan/twiddle allocation) and only `forward`/`inverse` run in the hot path, which allocate nothing. All 6 existing `tpt-audio-pulse` tests still pass unchanged. `FastMdctPlan` clears the ≤10% target by ~3 orders of magnitude at both sizes, so the codec now meets its own real-time claim in practice, not just in the benchmark suite.
+  So Cinder's *previous* code called the direct `mdct`/`imdct`, which already missed this target at its larger supported frame size, and only barely cleared it at the smaller one, before accounting for anything else in the encode/decode path. **Follow-up done 2026-09-08:** `codecs/cinder/src/lib.rs` now uses `FastMdctPlan` — `CinderEncoder` holds one plan sized to its fixed `frame_size`; `CinderDecoder` holds one plan per supported size (128 and 256, selected per-packet via `mdct_plan_for`, since the wire format self-describes frame size independent of the decoder's own configured default) so a size-128 packet decoded on a size-256-configured decoder still inverts correctly. Plans are built once at construction (the one-time FFT-plan/twiddle allocation) and only `forward`/`inverse` run in the hot path, which allocate nothing. All 6 existing `tpt-audio-cinder` tests still pass unchanged. `FastMdctPlan` clears the ≤10% target by ~3 orders of magnitude at both sizes, so the codec now meets its own real-time claim in practice, not just in the benchmark suite.
 * [x] Implement optimized DCT-IV — `FastDctIvPlan` (added 2026-09-07): same FFT/chirp technique as `FastMdctPlan`, specialized to DCT-IV's `θ(m,k)=(π/N)(m+½)(k+½)` (zero-padded to `2N` since both indices range only `0..N`, unlike MDCT)
 * [x] Preserve reference implementation for verification — the direct `dct_iv` stays; `FastDctIvPlan` is checked against it, not a replacement
 * [x] Add scalar/SIMD equivalence tests — `fast_dct_iv_matches_reference` (direct `dct_iv` vs `FastDctIvPlan` across 4 sizes) and `fast_dct_iv_is_self_inverse_up_to_scale`; `FastDctIvPlan` is `FftPlan`/RustFFT-backed (same SIMD-dispatch rationale as `FastMdctPlan`)
@@ -498,7 +498,7 @@ Current DCT-IV implementation is suitable as a correctness reference but must be
 
 Required primarily by video codecs.
 
-_Confirmed 2026-09-07: no 2D transform code exists anywhere in `tpt-dsp-core` (no `dct_2d`, `Dct2d`, or separable-transform helpers) — expected, since this is only needed once Livelink/Vault/Whisper exist. All items below remain correctly unchecked._
+_Confirmed 2026-09-07: no 2D transform code exists anywhere in `tpt-dsp-core` (no `dct_2d`, `Dct2d`, or separable-transform helpers) — expected, since this is only needed once Thrum/Vault/Mote exist. All items below remain correctly unchecked._
 
 * [ ] Define 2D DCT API
 * [ ] Implement separable 2D DCT
@@ -514,7 +514,7 @@ _Confirmed 2026-09-07: no 2D transform code exists anywhere in `tpt-dsp-core` (n
 
 # 6. TPT-DSP — LPC
 
-Required by Vox and Aura.
+Required by Reed and Aura.
 
 * [x] Implement autocorrelation — `lpc.rs::autocorrelation`, tested
 * [x] Define LPC coefficient convention — doc comment: `predicted[n] = Σ a[k]·x[n-1-k]`
@@ -546,7 +546,7 @@ synthesize()
 
 # 7. TPT-DSP — Pitch Analysis
 
-Required primarily by Vox and potentially useful elsewhere.
+Required primarily by Reed and potentially useful elsewhere.
 
 * [x] Define pitch-analysis API — `tpt-dsp-core/src/pitch.rs`: `PitchEstimate<F>{period_samples: Option<usize>, confidence, voiced}` + `frequency_hz()` helper
 * [x] Implement autocorrelation pitch estimator — `autocorrelation_pitch`, normalized `Σx[n]x[n+lag]/Σx[n]²`, argmax over the search range. Biases the argmax toward the *shortest* near-tied lag (an absolute margin) to avoid the classic "octave error": a signal periodic at N is, by construction, also periodic at 2N/3N/..., and a naive global argmax can pick a harmonic instead of the fundamental on floating-point noise alone — this was caught by the test below actually returning the wrong (doubled) period before the fix
@@ -556,13 +556,13 @@ Required primarily by Vox and potentially useful elsewhere.
 * [x] Add confidence metric — autocorrelation: normalized peak value; AMDF: `1 - min/max` of the AMDF values seen across the search range
 * [x] Add tests using synthetic signals — `autocorrelation_pitch_recovers_known_period`/`amdf_pitch_recovers_known_period` (known-frequency sine), `silence_is_unvoiced_for_both_estimators`, `hash_noise_is_unvoiced_for_both_estimators` (SplitMix64 PRNG — a simpler per-index hash was tried first and rejected because it still had short-range structure `autocorrelation_pitch` could lock onto, a real false-positive risk worth documenting)
 * [ ] Add speech corpus tests — no real speech corpus is available in this environment; only synthetic signals are tested. Left honestly unchecked rather than substituting a synthetic proxy for what this item actually asks
-* [x] Benchmark — `tpt-dsp-core/benches/dsp_bench.rs::bench_pitch`, both estimators, at a Vox-realistic 16kHz/40ms frame over the full speech F0 range; ~53µs each (0.13% of the frame budget) — see `BENCHMARKS.md`
+* [x] Benchmark — `tpt-dsp-core/benches/dsp_bench.rs::bench_pitch`, both estimators, at a Reed-realistic 16kHz/40ms frame over the full speech F0 range; ~53µs each (0.13% of the frame budget) — see `BENCHMARKS.md`
 
 ---
 
 # 8. TPT-DSP — Vector Quantisation
 
-Required by Vox and Whisper.
+Required by Reed and Mote.
 
 * [x] Define generic VQ API — `tpt-dsp-core/src/vq.rs`: flat-codebook convention (`entries*dim`), `DistanceMetric` enum, free functions + `VqCodebook` owning wrapper (`alloc`-gated)
 * [x] Implement nearest-vector search — `nearest_vector`, linear scan, deterministic lowest-index tie-break
@@ -572,9 +572,9 @@ Required by Vox and Whisper.
 * [x] Implement decoder — `vq_decode`
 * [x] Support caller-owned buffers — all free functions take caller-provided output slices, no internal allocation
 * [x] Add deterministic behavior — `ties_break_toward_lowest_index_and_are_deterministic` (exact-tie input, repeated calls agree)
-* [x] Add optional accelerated search — `nearest_vector_accelerated`: early-exit once a codeword's partial distance sum can't beat the current best (both metrics accumulate non-negative terms, so this is always safe). Proven bit-identical to the linear scan (`accelerated_matches_linear_search`, 2 metrics × 20 random queries against a 40-entry codebook), not just "usually agrees" — ~3-3.6× faster at Vox's/Whisper's target codebook sizes (data-dependent, see `BENCHMARKS.md`)
-* [x] Benchmark linear search — `tpt-dsp-core/benches/dsp_bench.rs::bench_vq`, linear vs accelerated, at (1024,10) and (4096,16) — Vox's/Whisper's own target codebook sizes (§31/§34); results in `BENCHMARKS.md`
-* [ ] Investigate tree/product quantisation for larger codebooks — intentionally not implemented: no concrete consumer (Whisper doesn't exist yet) to validate requirements against, same reasoning as holding off on §5.3's 2D transforms
+* [x] Add optional accelerated search — `nearest_vector_accelerated`: early-exit once a codeword's partial distance sum can't beat the current best (both metrics accumulate non-negative terms, so this is always safe). Proven bit-identical to the linear scan (`accelerated_matches_linear_search`, 2 metrics × 20 random queries against a 40-entry codebook), not just "usually agrees" — ~3-3.6× faster at Reed's/Mote's target codebook sizes (data-dependent, see `BENCHMARKS.md`)
+* [x] Benchmark linear search — `tpt-dsp-core/benches/dsp_bench.rs::bench_vq`, linear vs accelerated, at (1024,10) and (4096,16) — Reed's/Mote's own target codebook sizes (§31/§34); results in `BENCHMARKS.md`
+* [ ] Investigate tree/product quantisation for larger codebooks — intentionally not implemented: no concrete consumer (Mote doesn't exist yet) to validate requirements against, same reasoning as holding off on §5.3's 2D transforms
 
 VQ itself belongs in DSP.
 
@@ -870,7 +870,7 @@ Frame
 
 All decoders must support bounded resources.
 
-* [x] maximum frame dimensions — Pulse/Aura decode paths now call `limits.check_frame_bytes(...)` before producing output (2026-09-09)
+* [x] maximum frame dimensions — Cinder/Aura decode paths now call `limits.check_frame_bytes(...)` before producing output (2026-09-09)
 * [x] maximum packet size
 * [x] maximum metadata size — 2026-09-11: `tpt_media_codec::ResourceLimits`
   gained `max_metadata_bytes` (`permissive()` 16MiB, `strict()`/`Default`
@@ -885,10 +885,14 @@ All decoders must support bounded resources.
   `oversized_tmta_metadata_is_rejected_by_default_but_allowed_with_permissive_limits`
   (a ~100KB metadata entry is rejected under strict/default limits but
   accepted and recovered intact under permissive limits).
-* [x] maximum allocation — Pulse (`check_allocation` on the decoded spectrum buffer) and Aura (lossless coefficient/sample buffers, lossy MDCT spec+synthesis buffers) now call `limits.check_allocation(...)` before allocating; both have tests asserting a tight budget yields `ResourceLimit(Allocation)` on a structurally valid packet (2026-09-09)
-* [ ] maximum reference frames — still no video codec to exercise it
+* [x] maximum allocation — Cinder (`check_allocation` on the decoded spectrum buffer) and Aura (lossless coefficient/sample buffers, lossy MDCT spec+synthesis buffers) now call `limits.check_allocation(...)` before allocating; both have tests asserting a tight budget yields `ResourceLimit(Allocation)` on a structurally valid packet (2026-09-09)
+* [x] maximum reference frames — 2026-09-28: `ThrumDecoder` keeps
+  exactly one reference picture
+  (`ThrumDecoder::REFERENCE_FRAMES = 1`) and calls
+  `limits.check_reference_frames(...)` on every packet, so the knob is
+  now exercised by a real decoder rather than being aspirational
 * [ ] maximum recursion depth — no recursive codec decode paths yet
-* [ ] maximum decode work where practical — `max_decode_micros` still uncalled (would need a measured loop budget)
+* [ ] maximum decode work where practical — `max_decode_micros` still uncalled (would need a measured loop budget). Thrum's per-packet work is bounded structurally (one pass over a fixed macroblock grid, each block's entropy walk capped at 64 positions), so there is no loop budget to measure — the bound is the frame geometry, which `max_frame_bytes` already covers
 * [ ] cancellation support — `CodecError::Cancelled` exists but no codec produces/checks a cancellation token yet
 * [x] malformed-input termination guarantees
 
@@ -1079,7 +1083,7 @@ All codecs must implement the generic codec framework.
 
 ---
 
-# 29. Pulse
+# 29. Cinder
 
 **Purpose:** low-latency real-time audio.
 
@@ -1096,18 +1100,18 @@ Target:
 * [x] windowing via `tpt-dsp`
 * [x] quantisation
 * [x] optional perceptual weighting — 2026-09-11:
-  `PulseEncoderConfig::perceptual_weighting` (default `false`, so every
+  `CinderEncoderConfig::perceptual_weighting` (default `false`, so every
   existing caller keeps its exact previous behavior). Unlike Aura's full
-  simultaneous-masking model (§10), Pulse deliberately uses only the
+  simultaneous-masking model (§10), Cinder deliberately uses only the
   cheapest piece of that toolkit — the absolute threshold of hearing
   (`tpt-dsp-core::threshold_in_quiet`) — evaluated once per band at
   construction time (not per frame, since it depends only on the fixed
-  band layout), consistent with Pulse's low-latency/low-complexity
+  band layout), consistent with Cinder's low-latency/low-complexity
   design goal. Each band's configured step is scaled by that band's
   threshold relative to a 1kHz reference; the scaling only ever coarsens
   a step, never sharpens below the configured value, since the wire
   format's step field is an integer with no sub-configured granularity.
-  No wire-format change (Pulse already transmits the actual per-band
+  No wire-format change (Cinder already transmits the actual per-band
   step used). Tests: `perceptual_weighting_off_by_default_leaves_step_unchanged`,
   `perceptual_weighting_coarsens_less_sensitive_bands_never_below_configured`,
   `perceptual_weighting_round_trip_carries_signal`. Writing a test that
@@ -1120,15 +1124,15 @@ Target:
 
 * [x] define frame sizes
 * [x] define bitstream
-* [ ] define modes — Pulse has no distinct "modes" concept
+* [ ] define modes — Cinder has no distinct "modes" concept
 * [x] define quantisation
 * [x] implement encoder
 * [x] implement decoder
 * [x] implement PLC
 * [x] test packet loss — `plc_conceals_mid_stream_packet_loss` (2026-09-09): encodes a 4-frame tone, drops the middle packet, substitutes `conceal()` at its slot, and asserts the concealed frame carries the right sample count/PTS and non-zero energy (realised from the last decoded spectrum), with clean decode before and after the gap
 * [x] test jitter — `jittered_pts_are_preserved_not_reordered` (2026-09-09): delivers valid packets in arrival order 0,2,3,1; the decoder must not panic/reorder on its own and each output frame echoes its own packet's PTS with full-length, non-silent output
-* [x] benchmark latency — 2026-09-14: `tpt benchmark` (§43) reports median/min encode+decode wall time and real-time factor per input, and `codecs/pulse/benches/codec_bench.rs` (criterion) pins the per-block cost; release numbers in `docs/performance.md` (encode ≈ 9.4 µs, decode ≈ 10.6 µs per 512-sample block ≈ 3 orders of magnitude inside the real-time budget)
-* [x] benchmark CPU usage — same two tools: the criterion bench is the CPU-cost source (`docs/performance.md`), and `codecs/pulse/tests/realtime_alloc.rs` (§42) additionally pins the hot path's allocation behavior, the other half of the real-time cost model
+* [x] benchmark latency — 2026-09-14: `tpt benchmark` (§43) reports median/min encode+decode wall time and real-time factor per input, and `codecs/cinder/benches/codec_bench.rs` (criterion) pins the per-block cost; release numbers in `docs/performance.md` (encode ≈ 9.4 µs, decode ≈ 10.6 µs per 512-sample block ≈ 3 orders of magnitude inside the real-time budget)
+* [x] benchmark CPU usage — same two tools: the criterion bench is the CPU-cost source (`docs/performance.md`), and `codecs/cinder/tests/realtime_alloc.rs` (§42) additionally pins the hot path's allocation behavior, the other half of the real-time cost model
 
 Initial frame targets:
 
@@ -1195,7 +1199,7 @@ Use `f64` only where justified by measurable quality requirements.
 
 ---
 
-# 31. Vox
+# 31. Reed
 
 **Purpose:** extremely low-bandwidth speech.
 
@@ -1215,7 +1219,7 @@ mono
       wire (50 Hz–1 kHz searchable at either rate)
 * [x] voiced/unvoiced classification — the same estimator's
       confidence-thresholded `voiced` flag (1 bit on the wire)
-* [x] excitation model — voiced: impulse train at the transmitted
+* [x] excitation model — voiced: imcinder train at the transmitted
       period (classic LPC-10-style, amplitude set so its RMS matches
       the quantized residual RMS); unvoiced: one 1024-entry stochastic
       codebook shape scaled by the same gain. Gain (residual RMS) is
@@ -1243,11 +1247,11 @@ mono
       `thumbv7em-none-eabi` is the existing CI job and now builds with
       the real codec in it (float math via `libm`, matching
       `tpt-media-core`)
-* [x] encoder — `VoxEncoder` (§41 bench: ~266 µs/frame median over a
+* [x] encoder — `ReedEncoder` (§41 bench: ~266 µs/frame median over a
       half-voiced/half-noise input; dominated by the unvoiced codebook
       search, and deliberately *not* claimed real-time-safe)
-* [x] decoder — `VoxDecoder` (~5.9 µs/frame; `real_time_decoder` is
-      claimed and pinned by `codecs/vox/tests/realtime_alloc.rs`)
+* [x] decoder — `ReedDecoder` (~5.9 µs/frame; `real_time_decoder` is
+      claimed and pinned by `codecs/reed/tests/realtime_alloc.rs`)
 * [x] packet-loss concealment — `conceal()` repeats the last good
       envelope/voicing/pitch with gain decayed 6 dB per concealed
       frame, fading gaps to exact silence; first-ever concealment
@@ -1255,7 +1259,7 @@ mono
 * [x] deterministic decoding — pinned byte-for-byte across independent
       instances (`encoding_and_decoding_are_deterministic` and the §39
       property test); the SplitMix64 codebook is pure integer math
-* [x] embedded benchmark — `codecs/vox/benches/codec_bench.rs`
+* [x] embedded benchmark — `codecs/reed/benches/codec_bench.rs`
       (criterion, 64×320-sample frames @ 16 kHz); results in
       `docs/performance.md`. Decode at ~3400× realtime is comfortably
       inside an embedded budget; encode's search is the part a
@@ -1269,7 +1273,7 @@ Initial codebook target:
 
 ---
 
-# 32. Livelink
+# 32. Thrum
 
 **Purpose:** low-latency video communication.
 
@@ -1282,23 +1286,112 @@ simple prediction
 low-complexity transforms
 ```
 
-* [ ] define pixel formats
-* [ ] define colour model
-* [ ] define frame structure
-* [ ] define I-frame
-* [ ] define P-frame
-* [ ] implement intra prediction
-* [ ] implement inter prediction
-* [ ] motion estimation
-* [ ] full-pixel SAD
-* [ ] DCT
-* [ ] quantisation
-* [ ] entropy coding
-* [ ] intra refresh
-* [ ] deblocking
-* [ ] decoder
-* [ ] encoder
-* [ ] latency benchmark
+2026-09-28: `tpt-video-thrum` is a working implementation of all of
+the below. Design notes in `docs/codec-design.md`; measured numbers in
+`docs/performance.md`; algorithm sources in `docs/provenance.md`.
+
+* [x] define pixel formats — `Gray8` and planar 4:2:0 `Yuv420` (the two
+      coded formats; anything else is refused with
+      `CodecError::Unsupported` rather than converted). Frames must be
+      non-zero multiples of 16 so the picture is exactly
+      macroblock-aligned — no padding, no partial macroblocks
+* [x] define colour model — BT.601-family luma/chroma, stored full-range
+      8-bit unsigned; 4:2:0 means one chroma sample spans two luma
+      samples, so chroma motion vectors are the luma vector halved
+      (`chroma_mv`), recomputed on both sides rather than signalled
+* [x] define frame structure — a macroblock is 16x16 luma = four 8x8
+      luma blocks, plus one 8x8 U and one 8x8 V block for 4:2:0;
+      macroblocks are coded in raster order and one frame is exactly one
+      packet (`END_OF_FRAME` on every packet, no reordering buffer)
+* [x] define I-frame — every macroblock intra; each 8x8 luma block
+      carries a 2-bit mode (DC / vertical / horizontal / diagonal)
+      chosen by SAD, chroma always DC; prediction is built from the
+      *reconstructed* neighbours, so encoder and decoder cannot drift
+* [x] define P-frame — 1-bit intra flag per macroblock (the intra-refresh
+      cursor), then either skip (1 bit, copy the reference at `(0, 0)`)
+      or a 6-bit biased motion vector per axis plus the residual blocks
+* [x] implement intra prediction — the four modes above;
+      `intra_mode_available` gates them on geometry and the decoder
+      re-checks, so an unavailable mode in a hostile packet degrades to
+      DC instead of reading out of bounds
+* [x] implement inter prediction — full-pixel integer motion
+      compensation from a single reference frame, edge-clamped on both
+      sides
+* [x] motion estimation — exhaustive integer search over the whole
+      `±search_range` window
+* [x] full-pixel SAD — the search cost is the sum of absolute luma
+      differences, with an exact early exit once the running total
+      reaches the best found so far (the SAD is monotonically
+      increasing, so the exit is not a heuristic)
+* [x] DCT — 8x8 separable DCT-II/DCT-III from `tpt-dsp-core`'s
+      `dct_2d`/`idct_2d` (todo.md §3.1: transforms live in `tpt-dsp`,
+      the codec consumes them)
+* [x] quantisation — one flat dead-zone uniform quantiser; the step
+      comes from a 6-bit `qp` sent in every frame header, via a fixed
+      table (`quant_step`) so no float `pow` is needed and the step is
+      bit-identical on every target
+* [x] entropy coding — real Rice coding
+      (`tpt-media-bitstream::rice`), a run/level token stream over the
+      zigzag scan, with a per-block Rice parameter `k` chosen by the
+      encoder from `{0,1,2,3}` to minimise the coded length
+* [x] intra refresh — `DEFAULT_INTRA_REFRESH_PERCENT` = 5% of a P-frame's
+      macroblocks re-coded intra, on a sliding window that sweeps the
+      whole picture in `ceil(total / per_frame)` frames
+      (`intra_refresh_sweeps_every_macroblock`). The first version used
+      a strided cursor that was only exhaustive when the stride happened
+      to be coprime with the macroblock count; with 48 macroblocks and
+      9 per frame the stride 6 shares a factor and the sweep silently
+      covered 1/6 of the frame
+* [x] deblocking — a 4x4-grid loop filter in the classic H.263 shape
+      (a `d < alpha` test with a `d < beta` wide path and a
+      `tc`-limited narrow path), applied to the whole reconstructed
+      frame, with the *filtered* picture becoming the next reference
+* [x] decoder — `ThrumDecoder`; one frame out per packet in, no
+      reordering, no look-ahead
+* [x] encoder — `ThrumEncoder`; I-frame every
+      `KEYFRAME_INTERVAL` (30) frames and the first
+* [x] latency benchmark — `codecs/thrum/benches/codec_bench.rs`
+      (criterion) measures I-frame and P-frame encode and decode
+      separately, because the encoder never holds a frame back: the
+      encode + decode cost of a single P-frame *is* the one-way latency
+      contribution. Results in `docs/performance.md`
+
+Additional work not on the original list, and why:
+
+* [x] versioned bitstream + CRC-32 trailer — §35's family convention
+      (16-bit version rejected up front; a 4-byte CRC-32 trailer over
+      the payload, verified before parsing). This is the v0.1 wire
+      format; there is nothing to be backward compatible *with* yet
+* [x] packet-loss concealment — `ThrumDecoder::conceal` repeats the
+      last decoded frame (a freeze), which is the right concealment for
+      a codec with no temporal hierarchy; mid-grey before the first
+      frame
+* [x] `DynEncoder`/`DynDecoder` factories — so `LIVE` is reachable
+      through `Registry` (§18). A video factory carries the frame
+      geometry, because geometry is part of a video codec's
+      configuration and `CodecConfig` only carries the track's private
+      bytes
+* [x] provable packet-size bound — `ThrumConfig::max_packet_bits`
+      derives the worst case from `MAX_LEVEL` and `MAX_RICE_BITS` rather
+      than estimating it, so the encoder's single allocation can never
+      overflow
+* [x] `shrink_to_fit` on the emitted packet — without it each packet
+      carried the full worst-case capacity (megabytes for a mid-size
+      frame) despite holding a few kilobytes. Caught by
+      `tests/realtime_alloc.rs`
+* [x] rate-aware skip threshold — `skip_threshold(step)`: skip when the
+      mean absolute prediction error is below one quantiser step, i.e.
+      when the residual would quantise to zero anyway. A fixed SAD
+      constant disabled skip entirely at coarse `qp`, exactly where it
+      is worth the most
+* [ ] CLI encode/decode — the CLI's `encode`/`decode`/`transcode`/
+      `benchmark` are WAV-in/WAV-out and drive audio only. `thrum`
+      resolves (`--codec thrum`, `--codec LIVE`) and appears in
+      `tpt list-codecs`, but reaching one of those commands with it
+      fails with an explicit "this is a video codec and the commands
+      are audio-only" message rather than a generic unknown-codec
+      error. Wiring raw video I/O through `tpt-media-io` is its own
+      change
 
 Initial intra-refresh target:
 
@@ -1350,7 +1443,7 @@ Do not claim an absolute global minimum.
 
 ---
 
-# 34. Whisper
+# 34. Mote
 
 **Purpose:** extreme edge / IoT video.
 
@@ -1384,7 +1477,7 @@ The bandwidth target must be benchmark-defined rather than treated as a universa
 
 Native TPT codecs need:
 
-* [x] versioned bitstreams — 2026-09-11: Aura and Pulse packets both now
+* [x] versioned bitstreams — 2026-09-11: Aura and Cinder packets both now
   lead with a 16-bit wire-format version field (`VERSION`, already
   existed as a constant but was never actually written to either
   codec's stream before this). A decoder reads it first and returns
@@ -1408,12 +1501,12 @@ Native TPT codecs need:
 * [x] graceful unsupported-mode handling — `Registry::find_decoder`/
   `find_encoder` return `Option` (no panic on an unknown codec ID);
   `DynEncoder::encode` returns `CodecError::Unsupported` for a
-  frame/format a codec doesn't handle (e.g. Aura/Pulse reject
+  frame/format a codec doesn't handle (e.g. Aura/Cinder reject
   non-audio `DynFrame`s); and the new versioned-bitstream check above
   extends this to unrecognized wire versions
 * [ ] forward-compatible extension mechanism — the container format has
   one (reserved chunk ID ranges, §24), but the native codecs'
-  *packet-level* bitstreams do not: every Aura/Pulse wire-format change
+  *packet-level* bitstreams do not: every Aura/Cinder wire-format change
   so far (CRC trailer, lossy Bark-band quantization, the version field
   above) has been a breaking change with no reserved/extension bits.
   Left honestly unchecked rather than retrofitting an unused mechanism
@@ -1433,14 +1526,14 @@ Create reference corpora.
 * [ ] music — same: no real recordings; `signals::mixed` is labelled as
       a synthetic stand-in, not a substitute
 * [x] transient-heavy material — 2026-09-14: synthetic click trains
-      (`signals::click_train`, sparse impulses with exponential
+      (`signals::click_train`, sparse imcinders with exponential
       ring-down) driven through both codecs in the §37 corpus tests;
       synthetic rather than recorded, noted as such
 * [x] synthetic signals — 2026-09-14: `apps/tpt-cli/src/signals.rs`
       generates the corpus deterministically (SplitMix64 + closed-form
       signals; no committed binary fixtures), and
       `apps/tpt-cli/tests/quality.rs` drives every signal through real
-      Pulse and Aura round trips (Aura bit-exact on all of them,
+      Cinder and Aura round trips (Aura bit-exact on all of them,
       including full-range noise)
 * [x] silence — 2026-09-14: corpus case; both codecs must decode it
       back to exact digital silence (asserted)
@@ -1516,9 +1609,9 @@ Video:
 All five, 2026-09-14, following the project's dependency-free seeded
 LCG strategy (§38 note above) rather than a property-framework crate:
 
-* [x] encode/decode invariants — `codecs/{pulse,aura}/tests/property.rs`:
+* [x] encode/decode invariants — `codecs/{cinder,aura}/tests/property.rs`:
       full-range random audio round trips (Aura lossless bit-exact on
-      arbitrary S16 including worst-case noise; Pulse within its
+      arbitrary S16 including worst-case noise; Cinder within its
       measured floors), silence stays silent, length preserved, finite
       output
 * [x] timestamp invariants — `crates/tpt-media-core/tests/property.rs`:
@@ -1565,9 +1658,9 @@ untrusted input; none of them add an external fuzz-harness dependency.
   (`corruption_never_panics_and_truncation_never_panics`); this item was
   just never checked off here
 * [x] codec fuzzing — 2026-09-11: `decode_never_panics_on_corrupted_or_arbitrary_packets`
-  added to both `tpt-audio-aura` and `tpt-audio-pulse` (arbitrary bytes +
+  added to both `tpt-audio-aura` and `tpt-audio-cinder` (arbitrary bytes +
   full truncation sweep + bit-flip sweep of a real packet). **Found and
-  fixed a real out-of-bounds write in Pulse**: `n_bands`/`n_coeffs` are
+  fixed a real out-of-bounds write in Cinder**: `n_bands`/`n_coeffs` are
   read straight from the packet with no bound relative to `frame_size`,
   so a malformed/adversarial packet could index the decoded spectrum
   buffer out of range and panic instead of returning
@@ -1583,8 +1676,8 @@ untrusted input; none of them add an external fuzz-harness dependency.
   plus the container-level corruption sweep (§24), which includes `TMTA`
   chunks in its fixture
 * [x] truncated packets — covered by the container truncation sweep (§24)
-  and the new per-codec truncation sweeps above (Aura/Pulse)
-* [x] random packet ordering — `tpt-audio-pulse`'s
+  and the new per-codec truncation sweeps above (Aura/Cinder)
+* [x] random packet ordering — `tpt-audio-cinder`'s
   `jittered_pts_are_preserved_not_reordered` (§29, added 2026-09-09)
   delivers packets out of PTS order and asserts no reordering/panic;
   Aura has no cross-packet decode state at all (`AuraDecoder` holds no
@@ -1598,7 +1691,7 @@ untrusted input; none of them add an external fuzz-harness dependency.
 All six, 2026-09-14:
 
 * [x] deterministic decoding — `encoding_and_decoding_are_deterministic`
-      in `codecs/{pulse,aura}/tests/property.rs`: independent
+      in `codecs/{cinder,aura}/tests/property.rs`: independent
       encoder/decoder instances produce byte-identical packets and
       byte-identical decodes; both codecs are pure functions of
       (bytes, config) — no RNG, wall-clock, or thread state
@@ -1663,25 +1756,31 @@ results + machine caveats recorded in `docs/performance.md`):
 * [x] FFT — `tpt-dsp-core/benches/dsp_bench.rs` (§5.1's FFT backing)
 * [x] DCT — `bench_dct` (DCT-II/III/IV; §5.2)
 * [x] LPC — `bench_lpc` at Aura's orders 8/16/32 (§6)
-* [x] VQ — `bench_vq`, linear vs accelerated at Vox/Whisper codebook
+* [x] VQ — `bench_vq`, linear vs accelerated at Reed/Mote codebook
       sizes (§8)
 * [x] psychoacoustics — `bench_psychoacoustic`: masking + tonal
       classification (§10)
 * [x] entropy coding — `crates/tpt-media-bitstream/benches/
       bitstream_bench.rs`: bit I/O, Rice, range (peek/update), Huffman
       at codec batch sizes
-* [x] Pulse encode/decode — `codecs/pulse/benches/codec_bench.rs`
+* [x] Cinder encode/decode — `codecs/cinder/benches/codec_bench.rs`
       (64×512-sample blocks @ 48 kHz; also `tpt benchmark` for
       end-to-end wall time on a real WAV — §29)
 * [x] Aura encode/decode — `codecs/aura/benches/codec_bench.rs`
       (lossless, 32×1024-sample blocks @ 48 kHz)
-* [x] Vox encode/decode — 2026-09-28:
-      `codecs/vox/benches/codec_bench.rs` (encode/decode of 64×
+* [x] Reed encode/decode — 2026-09-28:
+      `codecs/reed/benches/codec_bench.rs` (encode/decode of 64×
       320-sample 20 ms frames @ 16 kHz, alternating voiced/noise
       blocks); results in `docs/performance.md` (§31)
-* [ ] Livelink encode/decode — no implementation yet (§32)
+* [x] Thrum encode/decode — 2026-09-28:
+      `codecs/thrum/benches/codec_bench.rs` (encode/decode of 8-frame
+      clips at 176x144 4:2:0 and 640x480 mono, I-frames and P-frames
+      measured separately); results in `docs/performance.md` (§32).
+      P-frame figures are the latency-relevant ones: Thrum never
+      holds a frame back, so one P-frame's encode + decode *is* the
+      one-way latency contribution
 * [ ] Vault encode/decode — no implementation yet (§33)
-* [ ] Whisper encode/decode — no implementation yet (§34)
+* [ ] Mote encode/decode — no implementation yet (§34)
 * [x] container mux/demux — `containers/tpt-container/benches/
       container_bench.rs` (200-packet stream both directions)
 * [x] pipeline throughput — `crates/tpt-media-pipeline/benches/
@@ -1702,10 +1801,10 @@ allocations
 # 42. Memory Testing
 
 * [ ] allocation profiling — systematic profiling (criterion
-      allocator hooks / tracing) not yet set up; only the Pulse bound
+      allocator hooks / tracing) not yet set up; only the Cinder bound
       below exists
 * [x] real-time allocation assertions — 2026-09-14:
-      `codecs/pulse/tests/realtime_alloc.rs` runs the steady-state
+      `codecs/cinder/tests/realtime_alloc.rs` runs the steady-state
       encode/decode path under a counting global allocator and asserts
       peak allocations stay within 512 KiB over 31 blocks (~25× the
       measured working set) — catches per-frame allocation growth or
@@ -1717,7 +1816,7 @@ allocations
       truncation/bit-flip sweeps (asserting no panic on hostile bytes)
       plus the §19/§47 resource-limit and bomb tests (asserting hostile
       *sizes* are rejected before allocation) are exactly these
-* [x] maximum-frame tests — §19: Pulse/Aura `check_frame_bytes` /
+* [x] maximum-frame tests — §19: Cinder/Aura `check_frame_bytes` /
       `check_allocation` tests assert a tight budget yields
       `ResourceLimit(Allocation)` on structurally valid packets;
       `docs/security.md` records the limit table
@@ -1754,7 +1853,7 @@ tpt benchmark
 
 Done 2026-09-08, completed 2026-09-14. `apps/tpt-cli` (`tpt` binary +
 lib core). `probe` / `inspect` / `list-codecs` / `--help` fully
-implemented; `encode`/`decode` live end-to-end (WAV → `pulse`/`aura` →
+implemented; `encode`/`decode` live end-to-end (WAV → `cinder`/`aura` →
 `.tpt` and back) since 2026-09-08. **2026-09-14: `transcode` and
 `benchmark` are live too** — `transcode` decodes the input `.tpt` and
 re-encodes with the `--codec` target (metadata carried, `--set-meta`
@@ -1856,7 +1955,7 @@ Muxer
   branch used plain `p + len` (`len` a full attacker-controlled `u32`),
   which is safe on 64-bit `usize` but can wrap on a 32-bit target (this
   workspace explicitly builds/targets 32-bit — `thumbv7em-none-eabi` for
-  Vox, and wasm32 for the planned §45 WASM target) and pass a bounds
+  Reed, and wasm32 for the planned §45 WASM target) and pass a bounds
   check it should have failed. Fixed with `checked_add`. Every other
   length field in that file is either itself narrow enough (`u8`/`u16`)
   to make wraparound unreachable on any realistic target, or already
@@ -1864,7 +1963,7 @@ Muxer
   / `TptDemuxer::scan`). Test:
   `decode_tmta_rejects_bytes_value_length_that_would_overrun_the_body`
 * [x] bounds-check audit — 2026-09-11: covered together with §38's fuzz
-  sweeps (Aura/Pulse OOB write fix) and the integer-overflow audit above;
+  sweeps (Aura/Cinder OOB write fix) and the integer-overflow audit above;
   see `CHANGELOG.md` for the full list of fixes this produced
 * [x] allocation exhaustion protection — 2026-09-11: found and fixed a
   real gap in `tpt-container`'s `decode_idx`: `entry_count` is a fully
@@ -1999,7 +2098,7 @@ documentation-baseline note for what the audit found and fixed):
 * [x] security model — `SECURITY.md` (threat model) +
       `docs/security.md` (implementation mitigations, limit tables)
 * [x] provenance/IP policy — `docs/provenance.md` (per-algorithm
-      records for Pulse and Vox; GREEN-only policy)
+      records for Cinder and Reed; GREEN-only policy)
 * [x] contributor guide — `CONTRIBUTING.md` (clean-room rules)
 * [x] API documentation — rustdoc on every public item;
       `cargo doc --workspace --no-deps` is now **zero-warning** (the
@@ -2101,16 +2200,16 @@ Avoid cyclic dependencies.
 Before 0.1:
 
 * [x] workspace builds — `cargo check --workspace` is clean
-* [x] CI operational — `.github/workflows/ci.yml` gates (`fmt --check`, clippy `--all-targets -- -D warnings`, `cargo build/test --workspace --locked`) all pass, and the no_std `tpt-audio-vox` job (`--target thumbv7em-none-eabi --no-default-features`) now builds: workspace `default-features = false` on `tpt-media-{core,bitstream,codec}` with members opting back into `std`, thiserror 1.x→2.x (1.x hard-requires `std`), `String`/no_std-gate fixes in `tpt-media-codec`, and `libm` for the required float math (2026-09-09)
+* [x] CI operational — `.github/workflows/ci.yml` gates (`fmt --check`, clippy `--all-targets -- -D warnings`, `cargo build/test --workspace --locked`) all pass, and the no_std `tpt-audio-reed` job (`--target thumbv7em-none-eabi --no-default-features`) now builds: workspace `default-features = false` on `tpt-media-{core,bitstream,codec}` with members opting back into `std`, thiserror 1.x→2.x (1.x hard-requires `std`), `String`/no_std-gate fixes in `tpt-media-codec`, and `libm` for the required float math (2026-09-09)
 * [x] basic media model
 * [x] timestamp model — rational timebase, `rescale` overflow bug fixed 2026-09-07 (see Known Issues), signed-duration saturation + `checked_{add,sub}_duration`, disciplined `ClockDomain`/`SyncMap` (§16 all green)
 * [x] bitstream primitives — the range coder finding was corrected 2026-09-07 (all bitstream tests pass); this gate item was blocked only on that
 * [x] container prototype
-* [x] one working codec — Pulse and Aura both have real, signal-preserving encode/decode round trips
+* [x] one working codec — Cinder and Aura both have real, signal-preserving encode/decode round trips
 * [x] fuzz infrastructure — 2026-09-11: §38's deterministic
   corruption/truncation sweeps now cover `tpt-media-bitstream` (new,
   found a real bug), `tpt-container` (pre-existing, §24),
-  `tpt-audio-aura`/`tpt-audio-pulse` (new, found a real bug), and
+  `tpt-audio-aura`/`tpt-audio-cinder` (new, found a real bug), and
   `tpt-media-probe` (new). No external fuzz-harness dependency; see §38's
   strategy note for why
 * [x] documentation baseline — audited 2026-09-28, every top-level doc
@@ -2120,12 +2219,12 @@ Before 0.1:
       don't exist (`DecodeError`, single-frame returns), §7-§8 predated
       the index/streaming container and the pipeline's actual
       backpressure model, §11 claimed "zero allocation" real-time (it is
-      bounded allocation, pinned by tests) and a real-time livelink;
-      `docs/architecture.md` claimed vox used "fixed-point i16/i32" (it
+      bounded allocation, pinned by tests) and a real-time thrum;
+      `docs/architecture.md` claimed reed used "fixed-point i16/i32" (it
       is f64 + libm) and a `process_one()` pipeline API that never
       existed (it is `process()`/`Chain`/`Pipeline::pull`);
       `docs/codec-design.md`'s tables overstated implemented formats
-      (96 kHz/8-channel Aura, stereo Pulse) and described a
+      (96 kHz/8-channel Aura, stereo Cinder) and described a
       compatibility-mode version policy that the codecs deliberately
       don't have (§35: fail fast). Also: 13 broken rustdoc links fixed
       (`cargo doc --workspace` now zero-warning), a runnable `io_tour`
@@ -2145,10 +2244,10 @@ Before 0.2:
       proven bit-identical, benchmarks)
 * [ ] improved DSP APIs — open-ended; nothing driving a specific
       improvement right now
-* [x] Pulse prototype — §29: encoder/decoder/PLC with round-trip,
+* [x] Cinder prototype — §29: encoder/decoder/PLC with round-trip,
       packet-loss, jitter tests; ≈3 dB structural ceiling recorded
       (Known Issues); real-time benchmarks recorded (§41)
-* [x] Vox prototype — §31: LPC + LSP + pitch + stochastic-excitation VQ
+* [x] Reed prototype — §31: LPC + LSP + pitch + stochastic-excitation VQ
       vocoder with PLC, property/fuzz/alloc tests, criterion bench, CLI
       wiring, provenance records (2026-09-28); honestly robotic by
       design at ~4.5 kbps, with envelope/pitch preservation pinned by
@@ -2164,17 +2263,17 @@ Before 0.3:
       and lossy (MDCT + Bark masking + noise shaping) paths with
       bit-exact lossless round trips, benchmarks (§41), and the §36
       corpus property tests
-* [ ] Livelink prototype
+* [ ] Thrum prototype
 * [ ] WASM decoder
 * [ ] stable container specification
 * [ ] benchmark suite — the workspace now has one (§41, 2026-09-14)
-      but Livelink/Vault/Whisper-era benches and CI-recording are
+      but Thrum/Vault/Mote-era benches and CI-recording are
       still ahead of this gate's original intent
 
 Before 0.4:
 
 * [ ] Vault prototype
-* [ ] Whisper prototype
+* [ ] Mote prototype
 * [ ] advanced quality testing
 * [ ] security hardening
 
@@ -2221,19 +2320,19 @@ Before 1.0:
 
 The architecture must satisfy:
 
-* [x] no duplicated DSP implementations — Pulse/Aura/Vox consume
+* [x] no duplicated DSP implementations — Cinder/Aura/Reed consume
       `tpt-dsp` for MDCT/LPC/psychoacoustics/noise shaping (§3); the
       codecs' own code (entropy coding, packetization, band mapping)
       is codec logic, not DSP
 * [x] no codec-specific DSP in `tpt-dsp` — verified §3.1: its public
-      API is entirely generic, no Pulse/Aura/Vox-specific types
+      API is entirely generic, no Cinder/Aura/Reed-specific types
 * [x] no media/container abstractions in `tpt-dsp` — §3.1: no
       `tpt-media` dependency anywhere in `tpt-dsp`'s manifests
 * [x] no cyclic dependencies — cargo forbids workspace cycles by
       construction; the declared graph (core/bitstream/codec →
       container → pipeline → apps, probe → container, everything on
       tpt-dsp) builds clean
-* [ ] real-time paths are allocation-free — Pulse's hot path is
+* [ ] real-time paths are allocation-free — Cinder's hot path is
       *bounded*-allocation (§42 test), not strictly zero; the strict
       reading stays open until caller-buffer APIs exist
 * [x] malformed media cannot cause unbounded resource consumption —
@@ -2298,7 +2397,7 @@ This gives you a single master checklist, while still making it clear to an agen
 Investigate whether natural video can be represented more sparsely/efficiently
 by a fundamentally different mathematical representation than block-transform
 codecs, rather than only by improving prediction/transform/quantisation/
-entropy coding within that paradigm. Livelink/Vault/Whisper (§32-34) already
+entropy coding within that paradigm. Thrum/Vault/Mote (§32-34) already
 assume the conventional block/motion-vector/DCT paradigm; this section builds
 a swappable representation abstraction first, so those codecs can later become
 instances of it rather than the only option ever tried. Full methodology and
@@ -2338,8 +2437,31 @@ it isn't a speculative abstraction with nothing validating it.
 * [x] Phase 5 — challenge representation: coefficients (`block_dct`) vs. dictionary/VQ (`patch_vq`)
 * Phase 1 (DCT vs. alternative transforms), Phase 3 (2-D frame vs. 3-D space-time), and Phase 6 (combine winners) are enabled by the abstraction but explicitly deferred, not implemented this milestone
 
-## Compatibility with Vault/Whisper (§33-34)
+## Compatibility with Vault/Mote (§33-34)
 
-* [x] no code changes to Vault/Whisper needed yet — neither has any implementation on disk. Recorded intent only: Vault's eventual prediction → partition → transform → quantisation → entropy pipeline and Whisper's eventual patches → dictionary → VQ → temporal-prediction pipeline should each become expressible as one `Representation` impl, without forcing either codec's internals to look identical to the other
+* [x] no code changes to Vault/Mote needed yet — neither has any implementation on disk. Recorded intent only: Vault's eventual prediction → partition → transform → quantisation → entropy pipeline and Mote's eventual patches → dictionary → VQ → temporal-prediction pipeline should each become expressible as one `Representation` impl, without forcing either codec's internals to look identical to the other
 
 One thing I particularly like about this arrangement is that if you later decide to build something like RF codecs, scientific signal codecs, telemetry compression, or robotics signal processing, the DSP work we've done for media isn't trapped inside tpt-media; it becomes part of the reusable TPT foundation.
+
+# 57. Codec Renames (2026-09-28)
+
+Four of the six native codec names collided with well-known existing
+products in the same domain and were renamed project-wide (crate
+directories/packages, `CodecId` 4CCs, types, CLI strings, docs):
+
+* [x] `Vox` (§31, audio, edge/IoT speech) → **Reed** — collided with the
+  Dialogic/OKI ADPCM ".vox" telephony codec. 4CC `VOX ` → `REED`.
+* [x] `Pulse` (§29, audio, real-time low-latency) → **Cinder** — collided
+  with PulseAudio and the "pulse-code modulation" (PCM) term. 4CC `PULS` →
+  `CIND`.
+* [x] `Livelink` (§32, video, real-time communication) → **Thrum** —
+  collided with Unreal Engine's Live Link real-time animation/mocap
+  plugin. 4CC `LIVE` → `THRM`.
+* [x] `Whisper` (§34, video, edge/IoT, not started) → **Mote** — collided
+  with OpenAI Whisper, especially confusing since this codec is video, not
+  audio. 4CC `WHSP` → `MOTE`.
+
+`Aura` and `Vault` had no meaningful collision and were kept as-is. Earlier
+sections in this file (§29, §31-34 and cross-references elsewhere) were
+updated in place to use the new names; this entry is the historical record
+of why and when the rename happened.

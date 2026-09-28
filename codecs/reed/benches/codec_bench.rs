@@ -1,4 +1,4 @@
-//! §41 codec benchmarks: Vox encode/decode at its default operating point
+//! §41 codec benchmarks: Reed encode/decode at its default operating point
 //! (320-sample / 20 ms frames @ 16 kHz, LPC order 10, 5-bit LSFs, 1024-entry
 //! stochastic codebook).
 
@@ -6,7 +6,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use tpt_audio_vox::{VoxConfig, VoxDecoder, VoxEncoder};
+use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
 
@@ -65,17 +65,17 @@ fn blocks() -> Vec<AudioFrame> {
         .collect()
 }
 
-fn bench_vox(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vox");
+fn bench_reed(c: &mut Criterion) {
+    let mut group = c.benchmark_group("reed");
     group.sample_size(20);
     group.warm_up_time(Duration::from_millis(300));
     group.measurement_time(Duration::from_secs(2));
 
     let input = blocks();
     let fw = CodecConfig::default();
-    let cfg = VoxConfig::default();
-    let mut encoder = VoxEncoder::new(fw.clone(), cfg.clone()).unwrap();
-    let mut decoder = VoxDecoder::new(fw, cfg).unwrap();
+    let cfg = ReedConfig::default();
+    let mut encoder = ReedEncoder::new(fw.clone(), cfg.clone()).unwrap();
+    let mut decoder = ReedDecoder::new(fw, cfg).unwrap();
 
     group.bench_function("encode/16khz_320", |b| {
         b.iter(|| {
@@ -101,5 +101,5 @@ fn bench_vox(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_vox);
+criterion_group!(benches, bench_reed);
 criterion_main!(benches);

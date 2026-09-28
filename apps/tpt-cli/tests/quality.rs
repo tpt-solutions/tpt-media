@@ -5,7 +5,7 @@
 //! commands are exercised end-to-end through [`tpt_cli::run`].
 
 use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder};
-use tpt_audio_pulse::{PulseDecoder, PulseEncoder, PulseEncoderConfig};
+use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
 use tpt_cli::quality::{log_spectral_distance_db, snr_db};
 use tpt_cli::signals;
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
@@ -13,14 +13,14 @@ use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, T
 
 const RATE: u32 = 48_000;
 /// Samples per encode block, matching the CLI (`samples_per_block`):
-/// Pulse's 2×256 window, Aura's 1024.
-const PULSE_BLOCK: usize = 512;
+/// Cinder's 2×256 window, Aura's 1024.
+const CINDER_BLOCK: usize = 512;
 const AURA_BLOCK: usize = 1024;
 /// One second of audio per corpus signal.
 const N: usize = 48_000;
 
-type PulseEnc = PulseEncoder;
-type PulseDec = PulseDecoder;
+type CinderEnc = CinderEncoder;
+type CinderDec = CinderDecoder;
 
 fn s16_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
     signals::from_s16_le_bytes(bytes)
@@ -48,24 +48,24 @@ fn make_frame(samples: Vec<u8>, start_tick: i64, count: u32) -> AudioFrame {
     }
 }
 
-/// Drive `samples` (S16 LE) through a full Pulse encode/decode round trip
+/// Drive `samples` (S16 LE) through a full Cinder encode/decode round trip
 /// using the CLI's block chunking, returning the decoded S16 bytes.
-fn pulse_round_trip(samples: &[u8], bits_per_coef: u8) -> Vec<u8> {
+fn cinder_round_trip(samples: &[u8], bits_per_coef: u8) -> Vec<u8> {
     let cfg = CodecConfig::default();
-    let enc_cfg = PulseEncoderConfig {
+    let enc_cfg = CinderEncoderConfig {
         sample_rate: RATE,
         bits_per_coef,
-        ..PulseEncoderConfig::default()
+        ..CinderEncoderConfig::default()
     };
-    let mut enc = PulseEnc::new(cfg.clone(), enc_cfg.clone()).expect("pulse encoder");
-    let mut dec = PulseDec::new(cfg, enc_cfg).expect("pulse decoder");
+    let mut enc = CinderEnc::new(cfg.clone(), enc_cfg.clone()).expect("cinder encoder");
+    let mut dec = CinderDec::new(cfg, enc_cfg).expect("cinder decoder");
     let mut out = Vec::with_capacity(samples.len());
-    for (i, chunk) in samples.chunks(PULSE_BLOCK * 2).enumerate() {
-        let mut block = vec![0u8; PULSE_BLOCK * 2];
+    for (i, chunk) in samples.chunks(CINDER_BLOCK * 2).enumerate() {
+        let mut block = vec![0u8; CINDER_BLOCK * 2];
         block[..chunk.len()].copy_from_slice(chunk);
-        let frame = make_frame(block, (i * PULSE_BLOCK) as i64, PULSE_BLOCK as u32);
-        for pkt in enc.encode(&frame).expect("pulse encode") {
-            for f in dec.decode(&pkt).expect("pulse decode") {
+        let frame = make_frame(block, (i * CINDER_BLOCK) as i64, CINDER_BLOCK as u32);
+        for pkt in enc.encode(&frame).expect("cinder encode") {
+            for f in dec.decode(&pkt).expect("cinder decode") {
                 out.extend_from_slice(&f.samples);
             }
         }
@@ -108,10 +108,10 @@ fn aura_round_trip(samples: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Per-signal Pulse round-trip SNR floors (dB) at the CLI's
+/// Per-signal Cinder round-trip SNR floors (dB) at the CLI's
 /// default-equivalent quality (10 bits/coefficient).
 ///
-/// These floors sit just under the *measured* values, because Pulse v0.1
+/// These floors sit just under the *measured* values, because Cinder v0.1
 /// has a structural quality ceiling of ≈3 dB shared by every signal (see
 /// todo.md Known Issues, 2026-09-14): the encoder MDCTs non-overlapping
 /// 2N-sample windows (hop 2N), so the TDAC overlap-add that would recover
@@ -120,7 +120,7 @@ fn aura_round_trip(samples: &[u8]) -> Vec<u8> {
 /// change, not something these tests can or should mask — what they guard
 /// against is a *further regression* (quantization, bitstream bugs) on
 /// top of today's measured behavior.
-fn pulse_floor(signal: &str) -> f64 {
+fn cinder_floor(signal: &str) -> f64 {
     match signal {
         "silence" => f64::INFINITY,     // handled separately: must stay silent
         "sine_1khz" => 1.5,             // measured 3.01
@@ -136,10 +136,10 @@ fn pulse_floor(signal: &str) -> f64 {
 }
 
 #[test]
-fn pulse_corpus_round_trips_meet_quality_floors() {
+fn cinder_corpus_round_trips_meet_quality_floors() {
     for (name, signal) in signals::corpus(0xC0FFEE, RATE, N) {
         let original = f32_to_s16_bytes(&signal);
-        let decoded = pulse_round_trip(&original, 10);
+        let decoded = cinder_round_trip(&original, 10);
         assert_eq!(decoded.len(), original.len(), "{name}: length must survive");
         let back = s16_bytes_to_f32(&decoded);
         assert!(
@@ -155,7 +155,7 @@ fn pulse_corpus_round_trips_meet_quality_floors() {
         }
         let snr = snr_db(&signal, &back)
             .unwrap_or_else(|| panic!("{name}: SNR should be defined for non-silent input"));
-        let floor = pulse_floor(name);
+        let floor = cinder_floor(name);
         assert!(
             snr >= floor,
             "{name}: SNR {snr:.1} dB fell below floor {floor:.1} dB"
@@ -179,7 +179,7 @@ fn corpus_spectral_distance_tracks_snr() {
     // time-domain SNR must not look spectrally perfect.
     let noisy = signals::noise(1, N, 0.5);
     let original = f32_to_s16_bytes(&noisy);
-    let decoded = pulse_round_trip(&original, 6); // deliberately low quality
+    let decoded = cinder_round_trip(&original, 6); // deliberately low quality
     let back = s16_bytes_to_f32(&decoded);
     let snr = snr_db(&noisy, &back).expect("noise is not silent");
     let lsd = log_spectral_distance_db(&noisy, &back, 1024).expect("spectra computable");
@@ -221,7 +221,7 @@ fn test_tone() -> Vec<f32> {
 }
 
 fn encode_via_cli(samples: &[u8], extra: &[&str]) -> Vec<u8> {
-    let mut args = vec!["encode", "--codec", "pulse"];
+    let mut args = vec!["encode", "--codec", "cinder"];
     args.extend_from_slice(extra);
     args.push("-");
     args.push("-");
@@ -237,14 +237,14 @@ fn decode_via_cli(tpt: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn transcode_pulse_to_aura_preserves_decoded_samples() {
+fn transcode_cinder_to_aura_preserves_decoded_samples() {
     let original = f32_to_s16_bytes(&test_tone());
     let tpt = encode_via_cli(&original, &["--quality", "80"]);
     let direct_decode = decode_via_cli(&tpt);
 
     let tr = run_stdin(&tpt, &["transcode", "--codec", "aura", "-", "-"]);
     assert_eq!(tr.code, 0, "transcode stderr: {}", tr.err);
-    assert!(tr.out.contains("pulse -> aura"), "summary: {}", tr.out);
+    assert!(tr.out.contains("cinder -> aura"), "summary: {}", tr.out);
     let transcoded = tr.binary_stdout.expect("tpt on stdout");
 
     let final_wav = decode_via_cli(&transcoded);
@@ -254,7 +254,7 @@ fn transcode_pulse_to_aura_preserves_decoded_samples() {
 }
 
 #[test]
-fn transcode_aura_to_pulse_round_trips_audibly() {
+fn transcode_aura_to_cinder_round_trips_audibly() {
     let original = f32_to_s16_bytes(&test_tone());
     let aura_tpt = {
         // Encode with aura via the CLI.
@@ -267,7 +267,7 @@ fn transcode_aura_to_pulse_round_trips_audibly() {
     };
     let tr = run_stdin(
         &aura_tpt,
-        &["transcode", "--codec", "pulse", "--quality", "80", "-", "-"],
+        &["transcode", "--codec", "cinder", "--quality", "80", "-", "-"],
     );
     assert_eq!(tr.code, 0, "transcode stderr: {}", tr.err);
     let transcoded = tr.binary_stdout.expect("tpt on stdout");
@@ -276,8 +276,8 @@ fn transcode_aura_to_pulse_round_trips_audibly() {
     let back = s16_bytes_to_f32(&frame.samples);
     let snr = snr_db(&test_tone(), &back).expect("tone is not silent");
     // Same ≈3 dB structural ceiling as the corpus test (see
-    // `pulse_floor`); require "no worse than today's measured 2.9 dB".
-    assert!(snr > 1.0, "aura->pulse transcode SNR {snr:.1} dB too low");
+    // `cinder_floor`); require "no worse than today's measured 2.9 dB".
+    assert!(snr > 1.0, "aura->cinder transcode SNR {snr:.1} dB too low");
 }
 
 #[test]
@@ -332,17 +332,17 @@ fn transcode_errors_are_stable() {
     // WAV input → guidance to encode instead.
     let o = run_stdin(
         &wav_bytes(&tone),
-        &["transcode", "--codec", "pulse", "-", "-"],
+        &["transcode", "--codec", "cinder", "-", "-"],
     );
     assert_eq!(o.code, 1);
     assert!(o.err.contains("use `tpt encode`"));
-    // Vox target at a 48 kHz source → codec-specific rate gate (vox
+    // Reed target at a 48 kHz source → codec-specific rate gate (reed
     // speaks 8/16 kHz; there is no CLI resampler).
-    let o = run_stdin(&tpt, &["transcode", "--codec", "vox", "-", "-"]);
+    let o = run_stdin(&tpt, &["transcode", "--codec", "reed", "-", "-"]);
     assert_eq!(o.code, 1);
     assert!(o.err.contains("8000 or 16000"), "unexpected err: {}", o.err);
     // Garbage input → not recognisable.
-    let o = run_stdin(b"zzz", &["transcode", "--codec", "pulse", "-", "-"]);
+    let o = run_stdin(b"zzz", &["transcode", "--codec", "cinder", "-", "-"]);
     assert_eq!(o.code, 1);
     assert!(o.err.contains("not a recognisable media file"));
 }
@@ -355,7 +355,7 @@ fn benchmark_human_output_reports_timing_and_quality() {
         &[
             "benchmark",
             "--codec",
-            "pulse",
+            "cinder",
             "--quality",
             "80",
             "--runs",
@@ -365,7 +365,7 @@ fn benchmark_human_output_reports_timing_and_quality() {
     );
     assert_eq!(o.code, 0, "benchmark stderr: {}", o.err);
     for expected in [
-        "benchmark: pulse",
+        "benchmark: cinder",
         "encode:",
         "decode:",
         "payload:",
@@ -411,7 +411,7 @@ fn benchmark_json_is_structured_and_aura_is_bit_exact() {
 fn benchmark_rejects_non_wav_input() {
     let tone = f32_to_s16_bytes(&test_tone());
     let tpt = encode_via_cli(&tone, &[]);
-    let o = run_stdin(&tpt, &["benchmark", "--codec", "pulse", "-"]);
+    let o = run_stdin(&tpt, &["benchmark", "--codec", "cinder", "-"]);
     assert_eq!(o.code, 1);
     assert!(o.err.contains("not a readable wav"));
     let o = run_stdin(

@@ -1,5 +1,5 @@
 [package]
-name = "tpt-audio-vox"
+name = "tpt-audio-reed"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Vox: TPT extremely-low-bandwidth speech codec (no_std LPC vocoder with LSP quantization and stochastic-excitation VQ)."
+description = "Reed: TPT extremely-low-bandwidth speech codec (no_std LPC vocoder with LSP quantization and stochastic-excitation VQ)."
 
 [dependencies]
 tpt-media-core = { workspace = true, default-features = false }

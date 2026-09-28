@@ -42,12 +42,12 @@ crates/    ← generic, codec-independent primitives
   tpt-media-research   — representation research harness (§56)
 
 codecs/    ← native TPT codecs, each implementing tpt-media-codec
-  pulse    ← real-time audio
+  cinder    ← real-time audio
   aura     ← high-fidelity / archival audio
-  vox      ← edge / IoT speech (no_std)
-  livelink ← real-time video            (planned, todo.md §32)
+  reed      ← edge / IoT speech (no_std)
+  thrum ← real-time video            (implemented, todo.md §32)
   vault    ← archival video             (planned, todo.md §33)
-  whisper  ← extreme-edge video         (planned, todo.md §34)
+  mote  ← extreme-edge video         (planned, todo.md §34)
 
 containers/
   tpt-container — the native .tpt format (implements tpt-media-container)
@@ -210,12 +210,13 @@ Both are documented as **stable** at the 1.0 release.
 
 Real-time paths are documented per-API. The default execution profile for
 all codecs is **offline**: allocation, parallelism, and RDO are permitted.
-Pulse claims real-time encode *and* decode, Vox claims real-time decode
-only (its encoder runs a documented 1024-entry codebook search), and
-`livelink` will join them when it exists. "Real-time" here means bounded
-allocation and bounded work per frame — not literally zero allocation —
-and the bounded-allocation claims are pinned by counting-allocator tests
-(`codecs/{pulse,vox}/tests/realtime_alloc.rs`).
+Cinder claims real-time encode *and* decode; Reed and Thrum claim
+real-time decode only (Reed runs a documented 1024-entry codebook search,
+Thrum an exhaustive `(2r+1)^2` motion search, both in their
+encoders). "Real-time" here means bounded allocation and bounded work per
+frame — not literally zero allocation — and the bounded-allocation
+claims are pinned by counting-allocator tests
+(`codecs/{cinder,reed,thrum}/tests/realtime_alloc.rs`).
 
 Determinism is required for:
 
@@ -260,11 +261,11 @@ See [`todo.md` §53](todo.md) for the full list. The high-level gates are:
 
 - **0.1** — workspace builds, CI runs, basic media model, one working
   codec.
-- **0.2** — MDCT/LPC/VQ in place, Pulse + Vox prototypes, container
+- **0.2** — MDCT/LPC/VQ in place, Cinder + Reed prototypes, container
   streaming, basic pipeline.
-- **0.3** — Aura + Livelink prototypes, WASM decoder, stable `.tpt`
+- **0.3** — Aura + Thrum prototypes, WASM decoder, stable `.tpt`
   specification, benchmark suite.
-- **0.4** — Vault + Whisper prototypes, advanced quality testing,
+- **0.4** — Vault + Mote prototypes, advanced quality testing,
   security hardening.
 - **1.0** — stable public APIs, stable `.tpt` spec, comprehensive fuzzing,
   reproducible benchmarks, FFI/WASM stability.

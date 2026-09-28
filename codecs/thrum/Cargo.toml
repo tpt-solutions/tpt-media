@@ -1,5 +1,5 @@
 [package]
-name = "tpt-audio-pulse"
+name = "tpt-video-thrum"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,18 +9,18 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Pulse: TPT native real-time low-latency audio codec (MDCT + scalar quantisation + PLC)."
+description = "Thrum: TPT low-latency video communication codec (I/P frames, intra refresh, 8x8 DCT)."
 
 [dependencies]
 tpt-media-core = { workspace = true, features = ["std"] }
 tpt-media-bitstream = { workspace = true, features = ["std"] }
 tpt-media-codec = { workspace = true, features = ["std"] }
 tpt-dsp-core = { workspace = true, features = ["std"] }
-thiserror = { workspace = true }
 
 [features]
 default = ["std"]
-std = ["tpt-media-core/std", "tpt-media-bitstream/std", "tpt-media-codec/std"]
+std = ["tpt-media-core/std", "tpt-media-bitstream/std", "tpt-media-codec/std", "tpt-dsp-core/std"]
+
 [[bench]]
 name = "codec_bench"
 harness = false

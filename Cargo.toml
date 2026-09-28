@@ -2,7 +2,7 @@
 resolver = "2"
 # Note: as we work our way down todo.md, members are added to this list
 # one at a time. The foundation crates (crates/tpt-media-*),
-# tpt-container, the first three codecs (pulse/aura/vox), and the first
+# tpt-container, the first three codecs (cinder/aura/reed), and the first
 # app (apps/tpt-cli) are enabled; the remaining codec crates, the web/ui
 # apps, and the FFI bridge are listed in todo.md §2 and will be enabled
 # as their implementations land.
@@ -17,10 +17,10 @@ members = [
     "crates/tpt-media-representation",
     "crates/tpt-media-research",
 
-    "codecs/pulse",
+    "codecs/cinder",
     "codecs/aura",
-    "codecs/vox",
-    "codecs/livelink",
+    "codecs/reed",
+    "codecs/thrum",
 
     "containers/tpt-container",
 
@@ -50,7 +50,7 @@ exclude = [
 # Internal crates. `default-features = false` is set here (not at the
 # member level — Cargo only honors member-level `default-features` when
 # the workspace dependency declares it) so members explicitly opt into
-# "std" via `features = ["std"]`; `tpt-audio-vox` instead builds these
+# "std" via `features = ["std"]`; `tpt-audio-reed` instead builds these
 # crates no_std for its bare-metal target (todo.md §31).
 tpt-media-core = { path = "crates/tpt-media-core", version = "0.1.0", default-features = false }
 tpt-media-bitstream = { path = "crates/tpt-media-bitstream", version = "0.1.0", default-features = false }
@@ -64,21 +64,21 @@ tpt-media-research = { path = "crates/tpt-media-research", version = "0.1.0" }
 tpt-container = { path = "containers/tpt-container", version = "0.1.0" }
 
 # Codecs
-tpt-audio-pulse = { path = "codecs/pulse", version = "0.1.0" }
+tpt-audio-cinder = { path = "codecs/cinder", version = "0.1.0" }
 tpt-audio-aura = { path = "codecs/aura", version = "0.1.0" }
-tpt-audio-vox = { path = "codecs/vox", version = "0.1.0" }
-tpt-video-livelink = { path = "codecs/livelink", version = "0.1.0" }
+tpt-audio-reed = { path = "codecs/reed", version = "0.1.0" }
+tpt-video-thrum = { path = "codecs/thrum", version = "0.1.0" }
 tpt-video-vault = { path = "codecs/vault", version = "0.1.0" }
-tpt-video-whisper = { path = "codecs/whisper", version = "0.1.0" }
+tpt-video-mote = { path = "codecs/mote", version = "0.1.0" }
 
 # tpt-dsp: the shared signal-processing foundation (see todo.md §3).
-# MDCT/LPC live there, not in tpt-media, so Pulse/Aura/Vox consume them
+# MDCT/LPC live there, not in tpt-media, so Cinder/Aura/Reed consume them
 # instead of reimplementing them per codec. `path` resolves the sibling
 # checkout during local development; `version` is what a future `cargo
 # publish` of tpt-media would require from crates.io (tpt-dsp-core is
 # already published there). `default-features = false` here (not at the
 # member level — see tpt-dsp's own Cargo.toml for why) lets std-based
-# codecs (Pulse, Aura) opt into "std" while the no_std Vox codec opts
+# codecs (Cinder, Aura) opt into "std" while the no_std Reed codec opts
 # into "alloc" only.
 tpt-dsp-core = { path = "../tpt-dsp/tpt-dsp-core", version = "0.1", default-features = false }
 # tpt-dsp-io: file/device I/O reused by tpt-media-io instead of being

@@ -54,7 +54,7 @@ fn bench_container(c: &mut Criterion) {
                 num: 1,
                 den: 48_000,
             });
-            muxer.add_track(1, b"PULS", &[]);
+            muxer.add_track(1, b"CIND", &[]);
             for p in black_box(&packets) {
                 muxer.write_packet_raw(p).expect("mux");
             }
@@ -67,7 +67,7 @@ fn bench_container(c: &mut Criterion) {
             num: 1,
             den: 48_000,
         });
-        muxer.add_track(1, b"PULS", &[]);
+        muxer.add_track(1, b"CIND", &[]);
         for p in &packets {
             muxer.write_packet_raw(p).expect("mux");
         }

@@ -1,11 +1,11 @@
 //! §38/§39: seeded-random round-trip properties and determinism pins for
-//! Vox. Vox is *lossy by design* (a ~4.5 kbps vocoder), so the properties
+//! Reed. Reed is *lossy by design* (a ~4.5 kbps vocoder), so the properties
 //! pinned here are the ones its contract actually claims: full-length,
 //! finite, non-silent decodes of arbitrary non-silent input; silence
 //! round-trips to exact silence; and encoding/decoding are pure functions
 //! of (bytes, config) — no RNG, wall-clock, or thread state.
 
-use tpt_audio_vox::{VoxConfig, VoxDecoder, VoxEncoder};
+use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, Packet, SampleFormat, Timebase, Timestamp};
 
@@ -60,8 +60,8 @@ fn rms_of(frame: &AudioFrame) -> f64 {
 #[test]
 fn random_audio_round_trips_full_length_finite_and_audible() {
     let fw = CodecConfig::default();
-    let mut enc = VoxEncoder::new(fw.clone(), VoxConfig::default()).unwrap();
-    let mut dec = VoxDecoder::new(fw, VoxConfig::default()).unwrap();
+    let mut enc = ReedEncoder::new(fw.clone(), ReedConfig::default()).unwrap();
+    let mut dec = ReedDecoder::new(fw, ReedConfig::default()).unwrap();
     let mut state = 0xA5A5_5A5A_0000_0001u64;
 
     for i in 0..8i64 {
@@ -100,8 +100,8 @@ fn random_audio_round_trips_full_length_finite_and_audible() {
 #[test]
 fn silence_stays_silent_across_frames() {
     let fw = CodecConfig::default();
-    let mut enc = VoxEncoder::new(fw.clone(), VoxConfig::default()).unwrap();
-    let mut dec = VoxDecoder::new(fw, VoxConfig::default()).unwrap();
+    let mut enc = ReedEncoder::new(fw.clone(), ReedConfig::default()).unwrap();
+    let mut dec = ReedDecoder::new(fw, ReedConfig::default()).unwrap();
     for i in 0..3i64 {
         let frame = frame_from_s16(vec![0u8; BLOCK * 2], i * BLOCK as i64);
         let pkt = enc.encode(&frame).unwrap().into_iter().next().unwrap();
@@ -118,8 +118,8 @@ fn quiet_input_does_not_blow_up() {
     // A near-silent (but not exactly silent) frame takes the gain floor;
     // the decode must stay near-silent and finite, not amplify noise.
     let fw = CodecConfig::default();
-    let mut enc = VoxEncoder::new(fw.clone(), VoxConfig::default()).unwrap();
-    let mut dec = VoxDecoder::new(fw, VoxConfig::default()).unwrap();
+    let mut enc = ReedEncoder::new(fw.clone(), ReedConfig::default()).unwrap();
+    let mut dec = ReedDecoder::new(fw, ReedConfig::default()).unwrap();
     let mut state = 0xBEEF_CAFE_0000_0002u64;
     let block = random_block(&mut state, 2); // ±2 LSB dither
     let frame = frame_from_s16(block, 0);
@@ -139,8 +139,8 @@ fn encoding_and_decoding_are_deterministic() {
     let mk = || {
         let fw = CodecConfig::default();
         (
-            VoxEncoder::new(fw.clone(), VoxConfig::default()).unwrap(),
-            VoxDecoder::new(fw, VoxConfig::default()).unwrap(),
+            ReedEncoder::new(fw.clone(), ReedConfig::default()).unwrap(),
+            ReedDecoder::new(fw, ReedConfig::default()).unwrap(),
         )
     };
     let (mut enc_a, mut dec_a) = mk();
@@ -169,8 +169,8 @@ fn corruption_sweep_never_panics() {
     // packet, in the project's no-external-harness style. Every decode
     // must return a `Result`, never panic.
     let fw = CodecConfig::default();
-    let mut enc = VoxEncoder::new(fw.clone(), VoxConfig::default()).unwrap();
-    let mut dec = VoxDecoder::new(fw, VoxConfig::default()).unwrap();
+    let mut enc = ReedEncoder::new(fw.clone(), ReedConfig::default()).unwrap();
+    let mut dec = ReedDecoder::new(fw, ReedConfig::default()).unwrap();
     let frame = frame_from_s16(random_block(&mut 0x5EED_0001u64, i16::MAX), 0);
     let valid: Vec<Packet> = enc.encode(&frame).unwrap();
     let pts = Timestamp::zero(Timebase::new(1, RATE));

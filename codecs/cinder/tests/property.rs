@@ -1,5 +1,5 @@
 //! §38/§39: seeded-random round-trip properties and determinism pins for
-//! Pulse. The determinism tests are the §39 guarantee at the codec level
+//! Cinder. The determinism tests are the §39 guarantee at the codec level
 //! (same input → byte-identical packets → byte-identical decode); the
 //! property tests run the corpus-style random signals through full
 //! round trips and assert the invariants that hold today (length, finite
@@ -7,7 +7,7 @@
 //! see the §37 corpus tests in `apps/tpt-cli/tests/quality.rs` for why
 //! those floors sit where they do).
 
-use tpt_audio_pulse::{PulseDecoder, PulseEncoder, PulseEncoderConfig};
+use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
 
@@ -40,7 +40,7 @@ fn frame_from_s16(samples: Vec<u8>, start_tick: i64) -> AudioFrame {
 }
 
 /// Encode `blocks` and return the packet byte vectors.
-fn encode_blocks(enc: &mut PulseEncoder, blocks: &[Vec<u8>]) -> Vec<Vec<u8>> {
+fn encode_blocks(enc: &mut CinderEncoder, blocks: &[Vec<u8>]) -> Vec<Vec<u8>> {
     let mut packets = Vec::new();
     for (i, block) in blocks.iter().enumerate() {
         for p in enc
@@ -54,7 +54,7 @@ fn encode_blocks(enc: &mut PulseEncoder, blocks: &[Vec<u8>]) -> Vec<Vec<u8>> {
 }
 
 /// Decode packet payloads back to concatenated S16 bytes.
-fn decode_packets(dec: &mut PulseDecoder, packets: &[Vec<u8>]) -> Vec<u8> {
+fn decode_packets(dec: &mut CinderDecoder, packets: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
     for data in packets {
         let mut pkt = Packet::empty(0, Timestamp::zero(Timebase::new(1, RATE)));
@@ -79,12 +79,12 @@ fn encoding_and_decoding_are_deterministic() {
         })
         .collect();
 
-    let enc_cfg = PulseEncoderConfig {
+    let enc_cfg = CinderEncoderConfig {
         sample_rate: RATE,
-        ..PulseEncoderConfig::default()
+        ..CinderEncoderConfig::default()
     };
-    let mut enc_a = PulseEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
-    let mut enc_b = PulseEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
+    let mut enc_a = CinderEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
+    let mut enc_b = CinderEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
     let packets_a = encode_blocks(&mut enc_a, &blocks);
     let packets_b = encode_blocks(&mut enc_b, &blocks);
     assert_eq!(
@@ -93,8 +93,8 @@ fn encoding_and_decoding_are_deterministic() {
     );
 
     let dec_cfg = CodecConfig::default();
-    let mut dec_a = PulseDecoder::new(dec_cfg.clone(), enc_cfg.clone()).unwrap();
-    let mut dec_b = PulseDecoder::new(dec_cfg, enc_cfg).unwrap();
+    let mut dec_a = CinderDecoder::new(dec_cfg.clone(), enc_cfg.clone()).unwrap();
+    let mut dec_b = CinderDecoder::new(dec_cfg, enc_cfg).unwrap();
     assert_eq!(
         decode_packets(&mut dec_a, &packets_a),
         decode_packets(&mut dec_b, &packets_b)
@@ -121,13 +121,13 @@ fn random_signals_round_trip_with_length_and_floors_intact() {
             })
             .collect();
 
-        let cfg = PulseEncoderConfig {
+        let cfg = CinderEncoderConfig {
             sample_rate: RATE,
             bits_per_coef: 10,
-            ..PulseEncoderConfig::default()
+            ..CinderEncoderConfig::default()
         };
-        let mut enc = PulseEncoder::new(CodecConfig::default(), cfg.clone()).unwrap();
-        let mut dec = PulseDecoder::new(CodecConfig::default(), cfg).unwrap();
+        let mut enc = CinderEncoder::new(CodecConfig::default(), cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(CodecConfig::default(), cfg).unwrap();
         let packets = encode_blocks(&mut enc, &blocks);
         let mut decoded = decode_packets(&mut dec, &packets);
         let original_len: usize = blocks.iter().map(|b| b.len()).sum();
@@ -142,12 +142,12 @@ fn random_signals_round_trip_with_length_and_floors_intact() {
 
 #[test]
 fn silence_stays_silent_across_random_block_counts() {
-    let cfg = PulseEncoderConfig {
+    let cfg = CinderEncoderConfig {
         sample_rate: RATE,
-        ..PulseEncoderConfig::default()
+        ..CinderEncoderConfig::default()
     };
-    let mut enc = PulseEncoder::new(CodecConfig::default(), cfg.clone()).unwrap();
-    let mut dec = PulseDecoder::new(CodecConfig::default(), cfg).unwrap();
+    let mut enc = CinderEncoder::new(CodecConfig::default(), cfg.clone()).unwrap();
+    let mut dec = CinderDecoder::new(CodecConfig::default(), cfg).unwrap();
     let blocks: Vec<Vec<u8>> = (0..5).map(|_| vec![0u8; BLOCK * 2]).collect();
     let packets = encode_blocks(&mut enc, &blocks);
     let decoded = decode_packets(&mut dec, &packets);

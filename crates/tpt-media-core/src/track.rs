@@ -137,7 +137,7 @@ mod tests {
         let t = Track::new(
             0,
             MediaType::Audio,
-            CodecId::new(*b"PULS"),
+            CodecId::new(*b"CIND"),
             Timebase::MILLISECONDS,
         );
         let id = s.add_track(t);
@@ -151,7 +151,7 @@ mod tests {
         s.add_track(Track::new(
             0,
             MediaType::Audio,
-            CodecId::new(*b"PULS"),
+            CodecId::new(*b"CIND"),
             Timebase::MILLISECONDS,
         ));
         assert!(s.track(0).is_some());
@@ -163,7 +163,7 @@ mod tests {
         let t = Track::new(
             0,
             MediaType::Audio,
-            CodecId::new(*b"PULS"),
+            CodecId::new(*b"CIND"),
             Timebase::MILLISECONDS,
         );
         assert_eq!(t.media.sample_rate, None);
@@ -178,7 +178,7 @@ mod tests {
         let mut t = Track::new(
             0,
             MediaType::Video,
-            CodecId::new(*b"LIVE"),
+            CodecId::new(*b"THRM"),
             Timebase::MILLISECONDS,
         );
         t.media.width = Some(1920);

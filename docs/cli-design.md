@@ -25,7 +25,7 @@ real filesystem or stdin.
 
 | # | §43 requirement | implementation |
 |---|---|---|
-| 1 | codec selection | `--codec <name>` → `args::resolve_codec` (`pulse\|aura\|vox` or a raw 4-byte codec ID). Unknown codec = usage error (2). |
+| 1 | codec selection | `--codec <name>` → `args::resolve_codec` (`cinder\|aura\|reed` or a raw 4-byte codec ID). Unknown codec = usage error (2). |
 | 2 | container selection | `--container tpt\|wav` → `probe::ContainerKind`. Default `tpt`. Invalid = usage error (2). |
 | 3 | quality configuration | `--quality 0..=100` → validated `u8`. Out of range = usage error (2). |
 | 4 | bitrate configuration | `--bitrate <n>[k\|m]` → `args::parse_bitrate` (`k` = ×1e3, `m` = ×1e6). Overflow / non-numeric = usage error (2). |
@@ -41,20 +41,20 @@ real filesystem or stdin.
 | 0 | success |
 | 1 | runtime / I/O error (missing input, unreadable/unsupported media, codec mismatch, write failure) |
 | 2 | usage error (unknown command, unknown option, bad value, missing required) |
-| 3 | requested operation is not wired yet (the skeletal `vox` codec) |
+| 3 | requested operation is not wired yet (the skeletal `reed` codec) |
 
 ## Wiring status
 
 - `probe`, `inspect`, `list-codecs`, `--help` are fully implemented and
   tested.
 - `encode` is live: reads a 16-bit mono WAV (44.1/48 kHz, matching the
-  Pulse/Aura supported-format table), chunks the samples into codec blocks
-  (Pulse `2·frame_size` = 512 samples, Aura `block_size` = 1024), zero-pads
+  Cinder/Aura supported-format table), chunks the samples into codec blocks
+  (Cinder `2·frame_size` = 512 samples, Aura `block_size` = 1024), zero-pads
   the final block, encodes each block and muxes everything into a `.tpt`
   with a full track descriptor (track timebase `1/sample_rate`, codec
   version from `encoder.info()`, sample rate, channel layout, `--set-meta`
   tags). Parameters that are not self-describing in the codec bitstream
-  ride in the track's codec-private `data`: Pulse `bits_per_coef` (the
+  ride in the track's codec-private `data`: Cinder `bits_per_coef` (the
   `--quality` mapping) as one byte, Aura `block_size` as two little-endian
   bytes. The original sample count is stored in the reserved metadata key
   `tpt.io.sample_count` so `decode` can drop padding. Encodes only the
@@ -62,12 +62,12 @@ real filesystem or stdin.
 - `decode` is live: sniffs the input, opens the `.tpt`, finds the first
   audio track, decodes every packet with the track's codec (an explicit
   `--codec` must match the track, otherwise exit 1; codec-private `data`
-  supplies Pulse `bits_per_coef` and Aura `block_size`), trims block
+  supplies Cinder `bits_per_coef` and Aura `block_size`), trims block
   padding using `tpt.io.sample_count`, and writes a single 16-bit WAV.
   Decodes only to `wav` output (any other `--container` value is an
-  error). `vox` tracks exit 3.
+  error). `reed` tracks exit 3.
 - `--quality` maps `0..=100` onto the codec coefficient bit depth
-  (Pulse/Aura `bits_per_coef`, 4–12 bits). `--bitrate` is parsed and
+  (Cinder/Aura `bits_per_coef`, 4–12 bits). `--bitrate` is parsed and
   validated but has no effect yet (neither codec has rate control).
 - `transcode` is live (2026-09-14): decodes the input `.tpt` (first
   audio track, padding trimmed via `tpt.io.sample_count`), re-encodes

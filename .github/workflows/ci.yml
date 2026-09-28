@@ -36,12 +36,12 @@ jobs:
         run: cargo test --workspace --locked
 
   no_std:
-    name: no_std build (tpt-audio-vox)
+    name: no_std build (tpt-audio-reed)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv7em-none-eabi
-      - name: cargo build no_std vox
-        run: cargo build -p tpt-audio-vox --target thumbv7em-none-eabi --no-default-features
+      - name: cargo build no_std reed
+        run: cargo build -p tpt-audio-reed --target thumbv7em-none-eabi --no-default-features

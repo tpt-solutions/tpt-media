@@ -1,8 +1,8 @@
 //! Command execution for `tpt`.
 
 use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder, AuraMode};
-use tpt_audio_pulse::{PulseDecoder, PulseEncoder, PulseEncoderConfig};
-use tpt_audio_vox::{VoxConfig, VoxDecoder, VoxEncoder};
+use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
+use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig as FrameworkCodecConfig, Decoder, Encoder, ResourceLimits};
 use tpt_media_container::Container;
 use tpt_media_core::{
@@ -416,19 +416,19 @@ pub fn list_codecs() -> Outcome {
 /// One of the native TPT audio codecs the encode/decode commands can drive.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum AudioCodec {
-    Pulse,
+    Cinder,
     Aura,
-    Vox,
+    Reed,
 }
 
 impl AudioCodec {
     fn from_id(id: CodecId) -> Option<AudioCodec> {
-        if id == CodecId::new(*b"PULS") {
-            Some(AudioCodec::Pulse)
+        if id == CodecId::new(*b"CIND") {
+            Some(AudioCodec::Cinder)
         } else if id == CodecId::new(*b"AURA") {
             Some(AudioCodec::Aura)
-        } else if id == CodecId::new(*b"VOX ") {
-            Some(AudioCodec::Vox)
+        } else if id == CodecId::new(*b"REED") {
+            Some(AudioCodec::Reed)
         } else {
             None
         }
@@ -436,20 +436,59 @@ impl AudioCodec {
 
     fn codec_id(self) -> CodecId {
         match self {
-            AudioCodec::Pulse => CodecId::new(*b"PULS"),
+            AudioCodec::Cinder => CodecId::new(*b"CIND"),
             AudioCodec::Aura => CodecId::new(*b"AURA"),
-            AudioCodec::Vox => CodecId::new(*b"VOX "),
+            AudioCodec::Reed => CodecId::new(*b"REED"),
         }
     }
 
     /// Lower-case display name used in human output.
     fn name(self) -> &'static str {
         match self {
-            AudioCodec::Pulse => "pulse",
+            AudioCodec::Cinder => "cinder",
             AudioCodec::Aura => "aura",
-            AudioCodec::Vox => "vox",
+            AudioCodec::Reed => "reed",
         }
     }
+}
+
+/// The native video codecs. The `encode`/`decode`/`transcode`/`benchmark`
+/// commands drive raw video nowhere yet (they are WAV-in/WAV-out), so a
+/// video codec ID reaching them is rejected with an explicit message
+/// rather than a generic "no encoder registered" that would read as if
+/// the codec did not exist.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum VideoCodec {
+    Thrum,
+}
+
+impl VideoCodec {
+    fn from_id(id: CodecId) -> Option<VideoCodec> {
+        if id == CodecId::new(*b"THRM") {
+            Some(VideoCodec::Thrum)
+        } else {
+            None
+        }
+    }
+
+    /// Lower-case display name used in human output.
+    fn name(self) -> &'static str {
+        match self {
+            VideoCodec::Thrum => "thrum",
+        }
+    }
+}
+
+/// The message shown when a video codec is passed to an audio-only
+/// command.
+fn video_codec_unsupported_here(codec: VideoCodec) -> String {
+    format!(
+        "{} is a video codec and the encode/decode/transcode/benchmark \
+         commands are audio-only (WAV in, WAV out); drive the \
+         tpt-video-thrum crate directly, or run `tpt list-codecs` to \
+         see what the CLI has wired",
+        codec.name()
+    )
 }
 
 /// Reserved metadata key written into `.tpt` by `tpt encode` carrying the
@@ -457,7 +496,6 @@ impl AudioCodec {
 /// block-size padding added during encoding. A caller-supplied
 /// `--set-meta` value for the same key wins (it is written after).
 const TRACK_SAMPLE_COUNT_KEY: &str = "tpt.io.sample_count";
-
 /// Boxed native encoder (trait objects; no generic repetition at call sites).
 type EncoderBox = Box<dyn Encoder<Frame = tpt_media_core::AudioFrame>>;
 /// Boxed native decoder.
@@ -480,18 +518,18 @@ struct EncodeJob {
     extra_meta: Vec<(String, MetadataValue)>,
 }
 
-/// Samples per encode block per codec — Pulse's 512 = its 2×256-sample
-/// window, Aura's 1024, Vox's 20 ms frame (160/320 samples at 8/16 kHz,
+/// Samples per encode block per codec — Cinder's 512 = its 2×256-sample
+/// window, Aura's 1024, Reed's 20 ms frame (160/320 samples at 8/16 kHz,
 /// hence the rate).
 fn samples_per_block(codec: AudioCodec, rate: u32) -> usize {
     match codec {
-        AudioCodec::Pulse => 2 * 256,
+        AudioCodec::Cinder => 2 * 256,
         AudioCodec::Aura => 1024,
-        AudioCodec::Vox => rate as usize / 50,
+        AudioCodec::Reed => rate as usize / 50,
     }
 }
 
-/// `--quality 0..=100` mapped onto Vox's per-coefficient LSF bit depth.
+/// `--quality 0..=100` mapped onto Reed's per-coefficient LSF bit depth.
 /// The floor is 4, not 2: the wire needs `2^lsf_bits > lpc_order` (10) for
 /// a valid strictly-increasing index set to exist at all.
 fn quality_to_lsf_bits(quality: Option<u8>) -> u8 {
@@ -511,12 +549,12 @@ fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
     let mut track = Track::new(0, MediaType::Audio, job.codec.codec_id(), track_timebase);
     track.codec_config.version = encoder.info().version;
     track.codec_config.data = match job.codec {
-        AudioCodec::Pulse => vec![job.bits_per_coef],
+        AudioCodec::Cinder => vec![job.bits_per_coef],
         AudioCodec::Aura => (samples_per_block as u16).to_le_bytes().to_vec(),
-        AudioCodec::Vox => VoxConfig {
+        AudioCodec::Reed => ReedConfig {
             sample_rate: job.rate,
             lsf_bits: job.bits_per_coef,
-            ..VoxConfig::default()
+            ..ReedConfig::default()
         }
         .to_codec_private(),
     };
@@ -580,20 +618,20 @@ fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
 /// resampler — feed the rate the codec speaks).
 fn supported_input_rates(codec: AudioCodec) -> &'static [u32] {
     match codec {
-        AudioCodec::Pulse | AudioCodec::Aura => &[44_100, 48_000],
-        AudioCodec::Vox => &[8_000, 16_000],
+        AudioCodec::Cinder | AudioCodec::Aura => &[44_100, 48_000],
+        AudioCodec::Reed => &[8_000, 16_000],
     }
 }
 
 /// `tpt encode`: WAV -> codec -> `.tpt`.
 ///
 /// Reads a 16-bit mono WAV at one of the codec's supported rates (44.1/48
-/// kHz for Pulse/Aura, 8/16 kHz for Vox), chunks it into codec blocks,
+/// kHz for Cinder/Aura, 8/16 kHz for Reed), chunks it into codec blocks,
 /// encodes each block, and muxes everything into a `.tpt` container with
 /// full track metadata (track timebase `1/sample_rate`, codec version,
 /// sample rate, channel layout, `--set-meta` tags). `--quality` maps onto
-/// Pulse/Aura coefficient bit depth and Vox's per-coefficient LSF bit
-/// depth; `--bitrate` is validated but not yet applied (Pulse has no
+/// Cinder/Aura coefficient bit depth and Reed's per-coefficient LSF bit
+/// depth; `--bitrate` is validated but not yet applied (Cinder has no
 /// rate control).
 pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     if spec.container != ContainerKind::Tpt {
@@ -608,7 +646,10 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     };
     let codec = match AudioCodec::from_id(codec) {
         Some(c) => c,
-        None => return Outcome::fail(1, "no encoder registered for this codec"),
+        None => match VideoCodec::from_id(codec) {
+            Some(v) => return Outcome::fail(1, video_codec_unsupported_here(v)),
+            None => return Outcome::fail(1, "no encoder registered for this codec"),
+        },
     };
     let input = match read_source(&spec.input, ctx) {
         Ok(b) => b,
@@ -693,7 +734,10 @@ fn demux_and_decode(
     }
     let codec = match AudioCodec::from_id(codec_id) {
         Some(c) => c,
-        None => return Err((1, "no decoder registered for this codec".into())),
+        None => match VideoCodec::from_id(codec_id) {
+            Some(v) => return Err((1, video_codec_unsupported_here(v))),
+            None => return Err((1, "no decoder registered for this codec".into())),
+        },
     };
     let rate = track.media.sample_rate.unwrap_or(48_000);
     let mut decoder = build_decoder(codec, rate, &track).map_err(|e| (1, e))?;
@@ -722,7 +766,7 @@ fn demux_and_decode(
 ///
 /// Opens any `.tpt` container, finds its first audio track, decodes every
 /// packet with the track's codec (the `--codec` argument, if given, must
-/// match), and writes a single 16-bit WAV. Unimplemented codecs (vox) and
+/// match), and writes a single 16-bit WAV. Unimplemented codecs (reed) and
 /// non-`.tpt` inputs are rejected up front.
 pub fn decode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     if spec.container != ContainerKind::Wav {
@@ -796,16 +840,16 @@ fn trim_padding(frames: &mut [tpt_media_core::AudioFrame], track: &tpt_media_cor
 }
 
 /// Map `--quality 0..=100` onto the codec's per-coefficient bit count —
-/// Pulse/Aura coefficient bit depth, Vox LSF bit depth (default 8 and 5
+/// Cinder/Aura coefficient bit depth, Reed LSF bit depth (default 8 and 5
 /// bits respectively when unspecified).
 fn quality_param(codec: AudioCodec, quality: Option<u8>) -> u8 {
     match codec {
-        AudioCodec::Vox => quality_to_lsf_bits(quality),
+        AudioCodec::Reed => quality_to_lsf_bits(quality),
         _ => quality_to_bits(quality),
     }
 }
 
-/// Map `--quality 0..=100` onto coefficient bit depth (Pulse/Aura support
+/// Map `--quality 0..=100` onto coefficient bit depth (Cinder/Aura support
 /// a per-coefficient bit count; default 8 bits when unspecified).
 fn quality_to_bits(quality: Option<u8>) -> u8 {
     match quality {
@@ -817,16 +861,16 @@ fn quality_to_bits(quality: Option<u8>) -> u8 {
 fn build_encoder(codec: AudioCodec, rate: u32, bits_per_coef: u8) -> Result<EncoderBox, String> {
     let fw = FrameworkCodecConfig::default();
     match codec {
-        AudioCodec::Pulse => Ok(Box::new(
-            PulseEncoder::new(
+        AudioCodec::Cinder => Ok(Box::new(
+            CinderEncoder::new(
                 fw,
-                PulseEncoderConfig {
+                CinderEncoderConfig {
                     sample_rate: rate,
                     bits_per_coef,
-                    ..PulseEncoderConfig::default()
+                    ..CinderEncoderConfig::default()
                 },
             )
-            .map_err(|e| format!("pulse encoder: {e}"))?,
+            .map_err(|e| format!("cinder encoder: {e}"))?,
         ) as EncoderBox),
         AudioCodec::Aura => Ok(Box::new(
             AuraEncoder::new(
@@ -839,16 +883,16 @@ fn build_encoder(codec: AudioCodec, rate: u32, bits_per_coef: u8) -> Result<Enco
             )
             .map_err(|e| format!("aura encoder: {e}"))?,
         ) as EncoderBox),
-        AudioCodec::Vox => Ok(Box::new(
-            VoxEncoder::new(
+        AudioCodec::Reed => Ok(Box::new(
+            ReedEncoder::new(
                 fw,
-                VoxConfig {
+                ReedConfig {
                     sample_rate: rate,
                     lsf_bits: bits_per_coef,
-                    ..VoxConfig::default()
+                    ..ReedConfig::default()
                 },
             )
-            .map_err(|e| format!("vox encoder: {e}"))?,
+            .map_err(|e| format!("reed encoder: {e}"))?,
         ) as EncoderBox),
     }
 }
@@ -883,22 +927,22 @@ fn make_decoder(
         limits: ResourceLimits::default(),
     };
     match codec {
-        AudioCodec::Pulse => {
+        AudioCodec::Cinder => {
             let bits = private
                 .first()
                 .copied()
                 .filter(|b| (4..=12).contains(b))
                 .unwrap_or(8);
             Ok(Box::new(
-                PulseDecoder::new(
+                CinderDecoder::new(
                     fw,
-                    PulseEncoderConfig {
+                    CinderEncoderConfig {
                         sample_rate: rate,
                         bits_per_coef: bits,
-                        ..PulseEncoderConfig::default()
+                        ..CinderEncoderConfig::default()
                     },
                 )
-                .map_err(|e| format!("pulse decoder: {e}"))?,
+                .map_err(|e| format!("cinder decoder: {e}"))?,
             ) as DecoderBox)
         }
         AudioCodec::Aura => {
@@ -919,11 +963,11 @@ fn make_decoder(
                 .map_err(|e| format!("aura decoder: {e}"))?,
             ) as DecoderBox)
         }
-        AudioCodec::Vox => {
-            let cfg = VoxConfig::from_codec_private(rate, private)
-                .map_err(|e| format!("vox decoder: {e}"))?;
+        AudioCodec::Reed => {
+            let cfg = ReedConfig::from_codec_private(rate, private)
+                .map_err(|e| format!("reed decoder: {e}"))?;
             Ok(
-                Box::new(VoxDecoder::new(fw, cfg).map_err(|e| format!("vox decoder: {e}"))?)
+                Box::new(ReedDecoder::new(fw, cfg).map_err(|e| format!("reed decoder: {e}"))?)
                     as DecoderBox,
             )
         }
@@ -950,7 +994,7 @@ fn write_output(spec: &OpSpec, bytes: Vec<u8>, summary: String, ctx: &Ctx<'_>) -
 /// a tag of the same key), and the sample-count bookkeeping is refreshed
 /// so the output decodes back to exactly the decoded sample count.
 /// Transcoding is always lossy-with-respect-to-the-*source* when the
-/// target is Pulse (lossy of lossy compounds); Aura targets re-mux the
+/// target is Cinder (lossy of lossy compounds); Aura targets re-mux the
 /// decoded samples bit-exactly.
 pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     if spec.container != ContainerKind::Tpt {
@@ -965,7 +1009,10 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     };
     let target = match AudioCodec::from_id(target) {
         Some(c) => c,
-        None => return Outcome::fail(1, "no encoder registered for this codec"),
+        None => match VideoCodec::from_id(target) {
+            Some(v) => return Outcome::fail(1, video_codec_unsupported_here(v)),
+            None => return Outcome::fail(1, "no encoder registered for this codec"),
+        },
     };
     let input = match read_source(&spec.input, ctx) {
         Ok(b) => b,
@@ -986,7 +1033,7 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     };
     let source = match AudioCodec::from_id(track.codec_config.codec_id) {
         Some(c) => c,
-        None => AudioCodec::Vox, // unknown source: name is display-only
+        None => AudioCodec::Reed, // unknown source: name is display-only
     };
     let rate = track.media.sample_rate.unwrap_or(48_000);
     if !supported_input_rates(target).contains(&rate) {
@@ -1125,7 +1172,10 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     };
     let codec = match AudioCodec::from_id(codec) {
         Some(c) => c,
-        None => return Outcome::fail(1, "no encoder registered for this codec"),
+        None => match VideoCodec::from_id(codec) {
+            Some(v) => return Outcome::fail(1, video_codec_unsupported_here(v)),
+            None => return Outcome::fail(1, "no encoder registered for this codec"),
+        },
     };
     let input = match read_source(&spec.input, ctx) {
         Ok(b) => b,
@@ -1168,12 +1218,12 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Err(e) => return Outcome::fail(1, e),
     };
     let private = match codec {
-        AudioCodec::Pulse => vec![bits_per_coef],
+        AudioCodec::Cinder => vec![bits_per_coef],
         AudioCodec::Aura => (block as u16).to_le_bytes().to_vec(),
-        AudioCodec::Vox => VoxConfig {
+        AudioCodec::Reed => ReedConfig {
             sample_rate: rate,
             lsf_bits: bits_per_coef,
-            ..VoxConfig::default()
+            ..ReedConfig::default()
         }
         .to_codec_private(),
     };
@@ -1354,6 +1404,204 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     }
 }
 
+/// `tpt video-corpus`: run a video codec over the synthetic corpus of
+/// todo.md §36 and report the §37 metrics for every scene.
+///
+/// This is deliberately *self-contained*: it generates its own content
+/// and never touches a file, because raw-video I/O (todo.md §43) is not
+/// built yet. Everything it prints comes from a real encode/decode round
+/// trip through the codec, not an estimate.
+///
+/// Output is a table by default and JSON with `--json`, matching `probe`.
+/// Bitrate is reported next to quality on purpose: a PSNR with no bitrate
+/// hides the cost that bought it.
+pub fn video_corpus_cmd(json: bool, fps: u32, frames: usize) -> Outcome {
+    use crate::quality::{psnr_db, ssim, Timing, VideoReport};
+    use crate::video::corpus;
+    use tpt_media_codec::{CodecConfig, Decoder, Encoder};
+    use tpt_media_core::PixelFormat;
+    use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+
+    // QCIF: the smallest resolution at which the macroblock structure and
+    // the motion search are meaningfully exercised, and small enough
+    // that a full corpus sweep stays interactive.
+    let (w, h) = (176u32, 144u32);
+    let format = PixelFormat::Yuv420;
+    let cfg = ThrumConfig {
+        width: w,
+        height: h,
+        format,
+        ..ThrumConfig::default()
+    };
+
+    let mut rows: Vec<(&'static str, VideoReport)> = Vec::new();
+    for scene in corpus(w, h, format, frames, fps, 0x5EED_A11A) {
+        let fw = CodecConfig::default();
+        let enc = ThrumEncoder::new(fw.clone(), cfg.clone());
+        let dec = ThrumDecoder::new(fw, cfg.clone());
+        let (mut enc, mut dec) = match (enc, dec) {
+            (Ok(e), Ok(d)) => (e, d),
+            _ => return Outcome::fail(1, "thrum encoder/decoder unavailable"),
+        };
+
+        let t0 = std::time::Instant::now();
+        let mut packets = Vec::new();
+        for f in &scene.frames {
+            match enc.encode(f) {
+                Ok(p) => packets.extend(p),
+                Err(e) => return Outcome::fail(1, format!("{}: encode failed: {e}", scene.name)),
+            }
+        }
+        let encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let t1 = std::time::Instant::now();
+        let (mut psnr_sum, mut psnr_n) = (0f64, 0usize);
+        let (mut ssim_sum, mut ssim_n) = (0f64, 0usize);
+        for (pkt, src) in packets.iter().zip(scene.frames.iter()) {
+            let out = match dec.decode(pkt) {
+                Ok(o) => o,
+                Err(e) => return Outcome::fail(1, format!("{}: decode failed: {e}", scene.name)),
+            };
+            for got in &out {
+                // A bit-exact frame has no finite PSNR, so it is left out
+                // of the mean rather than poisoning it with infinity.
+                if let Some(p) = psnr_db(src, got) {
+                    if p.is_finite() {
+                        psnr_sum += p;
+                        psnr_n += 1;
+                    }
+                }
+                if let Some(s) = ssim(src, got) {
+                    ssim_sum += s;
+                    ssim_n += 1;
+                }
+            }
+        }
+        let decode_ms = t1.elapsed().as_secs_f64() * 1000.0;
+
+        rows.push((
+            scene.name,
+            VideoReport {
+                frames: packets.len(),
+                encoded_bytes: packets.iter().map(|p| p.data.len() as u64).sum(),
+                psnr_db: (psnr_n > 0).then(|| psnr_sum / psnr_n as f64),
+                ssim: (ssim_n > 0).then(|| ssim_sum / ssim_n as f64),
+                encode: Timing {
+                    elapsed_ms: encode_ms,
+                    frames: scene.frames.len(),
+                },
+                decode: Timing {
+                    elapsed_ms: decode_ms,
+                    frames: scene.frames.len(),
+                },
+                memory: None,
+            },
+        ));
+    }
+    let pixels = u64::from(w) * u64::from(h);
+    if json {
+        render_corpus_json(&rows, pixels, w, h, fps)
+    } else {
+        render_corpus_table(&rows, pixels, w, h, fps)
+    }
+}
+
+/// Render `video-corpus` as JSON, one object per scene.
+fn render_corpus_json(
+    rows: &[(&'static str, crate::quality::VideoReport)],
+    pixels: u64,
+    w: u32,
+    h: u32,
+    fps: u32,
+) -> Outcome {
+    use crate::json::J;
+    let mut j = J::new();
+    j.object();
+    j.field("codec");
+    j.value_str("thrum");
+    j.field("width");
+    j.value_u64(u64::from(w));
+    j.field("height");
+    j.value_u64(u64::from(h));
+    j.field("fps");
+    j.value_u64(u64::from(fps));
+    j.field("scenes");
+    j.arr();
+    for (name, r) in rows {
+        j.object();
+        j.field("name");
+        j.value_str(name);
+        j.field("frames");
+        j.value_u64(r.frames as u64);
+        j.field("encoded_bytes");
+        j.value_u64(r.encoded_bytes);
+        j.field("bits_per_pixel");
+        j.value_f64(r.bpp(pixels).unwrap_or(f64::NAN));
+        j.field("bitrate_bps");
+        j.value_u64(r.bitrate_bps(fps).unwrap_or(0));
+        j.field("psnr_db");
+        j.value_f64(r.psnr_db.unwrap_or(f64::INFINITY));
+        j.field("ssim");
+        j.value_f64(r.ssim.unwrap_or(f64::NAN));
+        j.field("encode_ms_per_frame");
+        j.value_f64(r.encode.ms_per_frame().unwrap_or(f64::NAN));
+        j.field("decode_ms_per_frame");
+        j.value_f64(r.decode.ms_per_frame().unwrap_or(f64::NAN));
+        j.field("latency_ms");
+        j.value_f64(r.latency_ms().unwrap_or(f64::NAN));
+        j.field("fits_frame_budget");
+        j.value_bool(r.fits_frame_budget(fps).unwrap_or(false));
+        j.close();
+    }
+    j.close();
+    j.close();
+    Outcome::ok(j.finish())
+}
+
+/// Render the human-readable `video-corpus` table. Split out of
+/// [`video_corpus_cmd`] so the JSON branch stays readable.
+fn render_corpus_table(
+    rows: &[(&'static str, crate::quality::VideoReport)],
+    pixels: u64,
+    w: u32,
+    h: u32,
+    fps: u32,
+) -> Outcome {
+    use crate::quality::Timing;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "video corpus: thrum {w}x{h} 4:2:0, {fps} fps, {} frames/scene\n\n",
+        rows.first().map_or(0, |(_, r)| r.frames)
+    ));
+    out.push_str(&format!(
+        "{:<22} {:>8} {:>8} {:>8} {:>9} {:>7} {:>8} {:>8}\n",
+        "scene", "PSNR dB", "SSIM", "bytes", "bit/s", "bpp", "enc ms", "dec ms"
+    ));
+    for (name, r) in rows {
+        out.push_str(&format!(
+            "{:<22} {:>8} {:>8} {:>8} {:>9} {:>7} {:>8} {:>8}\n",
+            name,
+            r.psnr_db
+                .map_or_else(|| "exact".into(), |p| format!("{p:.2}")),
+            r.ssim.map_or("n/a".into(), |s| format!("{s:.4}")),
+            r.encoded_bytes,
+            r.bitrate_bps(fps).unwrap_or(0),
+            r.bpp(pixels).map_or("n/a".into(), |b| format!("{b:.3}")),
+            r.encode
+                .ms_per_frame()
+                .map_or("n/a".into(), |e| format!("{e:.1}")),
+            r.decode
+                .ms_per_frame()
+                .map_or("n/a".into(), |e| format!("{e:.1}")),
+        ));
+    }
+    let budget = Timing::frame_budget_ms(fps).unwrap_or(0.0);
+    out.push_str(&format!(
+        "\nframe budget at {fps} fps: {budget:.1} ms per frame (encode + decode must fit inside it)\n"
+    ));
+    Outcome::ok(out)
+}
+
 /// Execute a parsed command.
 pub fn execute(cmd: &Command, ctx: &Ctx<'_>) -> Outcome {
     match cmd {
@@ -1364,6 +1612,7 @@ pub fn execute(cmd: &Command, ctx: &Ctx<'_>) -> Outcome {
         Command::Decode(spec) => decode_cmd(spec, ctx),
         Command::Transcode(spec) => transcode_cmd(spec, ctx),
         Command::Benchmark(spec) => benchmark_cmd(spec, ctx),
+        Command::VideoCorpus { json, fps, frames } => video_corpus_cmd(*json, *fps, *frames),
         Command::Help => Outcome::ok(crate::args::USAGE.into()),
     }
 }

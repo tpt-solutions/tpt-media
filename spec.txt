@@ -12,12 +12,12 @@ tpt-media/
 ├── README.md
 ├── crates/
 │   ├── tpt-core/              # Shared foundation (Bitstream, Math, Container)
-│   ├── tpt-audio-pulse/       # Audio Tier 1: Real-time
+│   ├── tpt-audio-cinder/       # Audio Tier 1: Real-time
 │   ├── tpt-audio-aura/        # Audio Tier 2: High-Fi / Archival
-│   ├── tpt-audio-vox/         # Audio Tier 3: Edge / Speech
-│   ├── tpt-video-livelink/    # Video Tier 1: Real-time
+│   ├── tpt-audio-reed/         # Audio Tier 3: Edge / Speech
+│   ├── tpt-video-thrum/    # Video Tier 1: Real-time
 │   ├── tpt-video-vault/       # Video Tier 2: Archival
-│   └── tpt-video-whisper/     # Video Tier 3: Edge / IoT
+│   └── tpt-video-mote/     # Video Tier 3: Edge / IoT
 ├── apps/
 │   ├── tpt-cli/               # Command-line encoder/decoder
 │   └── tpt-web/               # WASM-based browser player
@@ -57,7 +57,7 @@ dct.rs: 1D and 2D Type-II DCT and inverse DCT (up to 8x8).
 mdct.rs: Modified DCT with overlapping windows (256, 1024, 2048, 4096 points).
 lpc.rs: Autocorrelation and Levinson-Durbin recursion for Linear Predictive Coding.
 5. The Audio Codecs
-5.1 tpt-audio-pulse (Real-Time)
+5.1 tpt-audio-cinder (Real-Time)
 Target: WebRTC, Gaming, Live Streaming.
 Algorithm: Pure Transform Coding.
 Window Size: 128 or 256 samples (approx 2.5ms to 5ms at 48kHz) for ultra-low algorithmic latency.
@@ -70,14 +70,14 @@ Mode A (Lossless): High-order LPC (up to order 32) to predict the signal. The re
 Mode B (Lossy): Large MDCT (2048 or 4096 points).
 Psychoacoustics: Calculates Bark-scale critical bands. Applies simultaneous frequency masking and temporal masking. Quantization noise is shaped to fall below the masking threshold.
 Precision: Internal math uses f64 to prevent rounding artifacts in high frequencies.
-5.3 tpt-audio-vox (Edge / IoT)
+5.3 tpt-audio-reed (Edge / IoT)
 Target: Smart devices, Walkie-talkies, $2 microcontrollers.
 Algorithm: Code-Excited Linear Prediction (CELP) / Pure LPC.
 Constraints: Hardcoded to 8kHz or 16kHz sample rate. Mono only.
 Vector Quantization (VQ): Instead of sending raw LPC residuals, the encoder matches the residual to a pre-generated, public-domain codebook (dictionary) of 1024 speech shapes. Sends only a 10-bit index.
 Rust Implementation: #![no_std]. Uses fixed-point i16/i32 math. No floating-point unit (FPU) required.
 6. The Video Codecs
-6.1 tpt-video-livelink (Real-Time)
+6.1 tpt-video-thrum (Real-Time)
 Target: Video conferencing, Cloud gaming.
 Frame Types: I-frames and P-frames ONLY. No B-frames.
 Intra-Refresh: Instead of massive keyframes, 5% of macroblocks are forced to Intra-mode every frame to recover from packet loss without bandwidth spikes.
@@ -97,7 +97,7 @@ D
 R
 J=D+λR) to find the absolute minimum file size.
 Reference Frames: Up to 16 previous frames.
-6.3 tpt-video-whisper (Edge / IoT)
+6.3 tpt-video-mote (Edge / IoT)
 Target: Security cameras, Drones, Low-bandwidth telemetry.
 Algorithm: Dictionary Coding / Vector Quantization.
 How it works: The encoder and decoder share a pre-trained dictionary of 4096 common 8x8 pixel patches (e.g., grass, sky, brick walls).

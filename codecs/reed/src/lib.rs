@@ -1,4 +1,4 @@
-//! `tpt-audio-vox` — Vox: extremely low-bandwidth speech codec.
+//! `tpt-audio-reed` — Reed: extremely low-bandwidth speech codec.
 //!
 //! ## Design (v0.1)
 //!
@@ -45,13 +45,13 @@
 //! 10-bit pitch period (voiced) or codebook index (unvoiced), then
 //! `order` LSF indices of `lsf_bits` bits each, then a CRC-32 trailer
 //! over the preceding bytes (the same per-packet integrity convention
-//! as Aura/Pulse). The default configuration's parameter payload is a
+//! as Aura/Cinder). The default configuration's parameter payload is a
 //! fixed 90 bits per 20 ms frame = **4.5 kbps** of coded parameters;
 //! packets round up to 12 payload bytes and add the 4-byte CRC, so the
 //! container-level rate (what `tpt probe` reports) is 16 bytes/frame =
 //! 6.4 kbps.
 //!
-//! Packet loss: [`VoxDecoder::conceal`] repeats the last good frame's
+//! Packet loss: [`ReedDecoder::conceal`] repeats the last good frame's
 //! envelope/voicing/pitch with the excitation gain decayed 6 dB per
 //! concealed frame, so gaps fade out instead of buzzing.
 //!
@@ -81,8 +81,8 @@ use tpt_media_core::{
     AudioFrame, ChannelLayout, Frame, Packet, PacketFlags, SampleFormat, Timebase, Timestamp,
 };
 
-/// Codec id for Vox.
-pub const CODEC_ID: [u8; 4] = *b"VOX ";
+/// Codec id for Reed.
+pub const CODEC_ID: [u8; 4] = *b"REED";
 
 /// Bitstream version.
 pub const VERSION: u16 = 1;
@@ -181,9 +181,9 @@ pub fn codebook_entry(entry: usize, len: usize, out: &mut [f64]) {
     }
 }
 
-/// Vox configuration.
+/// Reed configuration.
 #[derive(Clone, Debug)]
-pub struct VoxConfig {
+pub struct ReedConfig {
     /// Sample rate: 8 kHz or 16 kHz (§31's initial targets).
     pub sample_rate: u32,
     /// LPC order (even, 2..=16); quantized as LSPs, `order` indices per
@@ -195,9 +195,9 @@ pub struct VoxConfig {
     pub lsf_bits: u8,
 }
 
-impl Default for VoxConfig {
+impl Default for ReedConfig {
     fn default() -> Self {
-        VoxConfig {
+        ReedConfig {
             sample_rate: 16_000,
             lpc_order: 10,
             lsf_bits: 5,
@@ -205,7 +205,7 @@ impl Default for VoxConfig {
     }
 }
 
-impl VoxConfig {
+impl ReedConfig {
     /// Frame size in samples: a fixed 20 ms frame at any supported rate
     /// (160 samples at 8 kHz, 320 at 16 kHz).
     pub fn frame_size(&self) -> usize {
@@ -222,16 +222,16 @@ impl VoxConfig {
     fn validate(&self) -> CodecResult<()> {
         if self.sample_rate != 8_000 && self.sample_rate != 16_000 {
             return Err(CodecError::InvalidConfig(
-                "vox sample_rate must be 8000 or 16000",
+                "reed sample_rate must be 8000 or 16000",
             ));
         }
         if self.lpc_order < 2 || self.lpc_order > 16 || self.lpc_order % 2 != 0 {
             return Err(CodecError::InvalidConfig(
-                "vox lpc_order must be even, 2..=16",
+                "reed lpc_order must be even, 2..=16",
             ));
         }
         if (self.lsf_bits as u32) < 2 || (self.lsf_bits as u32) > MAX_LSF_BITS {
-            return Err(CodecError::InvalidConfig("vox lsf_bits must be 2..=12"));
+            return Err(CodecError::InvalidConfig("reed lsf_bits must be 2..=12"));
         }
         // The wire carries one strictly-increasing index per LSP
         // coefficient, so there must be strictly more levels than
@@ -239,7 +239,7 @@ impl VoxConfig {
         // all (e.g. 10 coefficients need at least 4 bits/coefficient).
         if (1u32 << self.lsf_bits) as usize <= self.lpc_order as usize {
             return Err(CodecError::InvalidConfig(
-                "vox needs 2^lsf_bits > lpc_order so LSP indices stay strictly increasing",
+                "reed needs 2^lsf_bits > lpc_order so LSP indices stay strictly increasing",
             ));
         }
         Ok(())
@@ -252,12 +252,12 @@ impl VoxConfig {
         vec![self.lpc_order, self.lsf_bits]
     }
 
-    /// Inverse of [`VoxConfig::to_codec_private`] for the fields it
+    /// Inverse of [`ReedConfig::to_codec_private`] for the fields it
     /// carries; `sample_rate` comes from the container track instead.
     pub fn from_codec_private(sample_rate: u32, private: &[u8]) -> CodecResult<Self> {
-        let mut cfg = VoxConfig {
+        let mut cfg = ReedConfig {
             sample_rate,
-            ..VoxConfig::default()
+            ..ReedConfig::default()
         };
         if private.len() >= 2 {
             cfg.lpc_order = private[0];
@@ -270,7 +270,7 @@ impl VoxConfig {
 
 fn static_info(caps: Capabilities) -> CodecInfo {
     CodecInfo {
-        name: "Vox",
+        name: "Reed",
         codec_id: CODEC_ID,
         version: VERSION,
         capabilities: caps,
@@ -340,11 +340,11 @@ fn dequantize_lsf_indices(indices: &[u16], lsf_bits: u8, out: &mut [f64]) {
     }
 }
 
-/// Vox encoder.
-pub struct VoxEncoder {
+/// Reed encoder.
+pub struct ReedEncoder {
     info: CodecInfo,
     cfg: CodecConfig,
-    enc: VoxConfig,
+    enc: ReedConfig,
     /// Precomputed analysis window (one-time cost, reused every frame).
     win: Vec<f32>,
     /// Last successfully transmitted LSF index vector — the fallback when
@@ -353,12 +353,12 @@ pub struct VoxEncoder {
     last_lsf: Option<Vec<u16>>,
 }
 
-impl VoxEncoder {
-    pub fn new(codec_cfg: CodecConfig, enc: VoxConfig) -> CodecResult<Self> {
+impl ReedEncoder {
+    pub fn new(codec_cfg: CodecConfig, enc: ReedConfig) -> CodecResult<Self> {
         enc.validate()?;
         let mut win = vec![0f32; enc.frame_size()];
         windowed(ANALYSIS_WINDOW, enc.frame_size(), &mut win);
-        Ok(VoxEncoder {
+        Ok(ReedEncoder {
             info: static_info(Capabilities {
                 // The unvoiced shape-gain search (1024 candidate
                 // excitations per frame) is deliberately not claimed
@@ -391,7 +391,7 @@ impl VoxEncoder {
     }
 }
 
-impl Encoder for VoxEncoder {
+impl Encoder for ReedEncoder {
     type Frame = AudioFrame;
     fn info(&self) -> &CodecInfo {
         &self.info
@@ -557,20 +557,20 @@ struct DecodeState {
     cb_idx: usize,
 }
 
-/// Vox decoder.
-pub struct VoxDecoder {
+/// Reed decoder.
+pub struct ReedDecoder {
     info: CodecInfo,
     cfg: CodecConfig,
-    enc: VoxConfig,
+    enc: ReedConfig,
     state: Option<DecodeState>,
     /// Consecutively concealed frames — drives [`PLC_DECAY_DB`]/frame.
     concealed: u32,
 }
 
-impl VoxDecoder {
-    pub fn new(codec_cfg: CodecConfig, enc: VoxConfig) -> CodecResult<Self> {
+impl ReedDecoder {
+    pub fn new(codec_cfg: CodecConfig, enc: ReedConfig) -> CodecResult<Self> {
         enc.validate()?;
-        Ok(VoxDecoder {
+        Ok(ReedDecoder {
             info: static_info(Capabilities {
                 real_time_decoder: true,
                 lossy: true,
@@ -669,7 +669,7 @@ impl VoxDecoder {
     }
 }
 
-impl Decoder for VoxDecoder {
+impl Decoder for ReedDecoder {
     type Frame = AudioFrame;
     fn info(&self) -> &CodecInfo {
         &self.info
@@ -681,7 +681,7 @@ impl Decoder for VoxDecoder {
     }
 }
 
-impl VoxDecoder {
+impl ReedDecoder {
     fn decode_inner(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
         if packet.data.len() < CRC_TRAILER_BYTES {
             return Err(CodecError::MalformedPacket);
@@ -697,7 +697,7 @@ impl VoxDecoder {
         // were this version's layout.
         let wire_version = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
         if wire_version != VERSION {
-            return Err(CodecError::Unsupported("unsupported Vox packet version"));
+            return Err(CodecError::Unsupported("unsupported Reed packet version"));
         }
         let order = (r.read(3).map_err(|_| CodecError::MalformedPacket)? as usize + 1) * 2;
         let lsf_bits = r.read(4).map_err(|_| CodecError::MalformedPacket)? as u32;
@@ -774,8 +774,8 @@ impl VoxDecoder {
 }
 
 /// Type-erased decoder factory.
-pub struct VoxDecoderFactory;
-impl DynDecoderFactory for VoxDecoderFactory {
+pub struct ReedDecoderFactory;
+impl DynDecoderFactory for ReedDecoderFactory {
     fn codec_id(&self) -> &[u8; 4] {
         &CODEC_ID
     }
@@ -787,14 +787,14 @@ impl DynDecoderFactory for VoxDecoderFactory {
         })
     }
     fn build(&self, cfg: &CodecConfig) -> CodecResult<alloc::boxed::Box<dyn DynDecoder>> {
-        let d = VoxDecoder::new(cfg.clone(), VoxConfig::default())?;
-        Ok(alloc::boxed::Box::new(VoxDynDecoder { inner: d }))
+        let d = ReedDecoder::new(cfg.clone(), ReedConfig::default())?;
+        Ok(alloc::boxed::Box::new(ReedDynDecoder { inner: d }))
     }
 }
-pub struct VoxDynDecoder {
-    inner: VoxDecoder,
+pub struct ReedDynDecoder {
+    inner: ReedDecoder,
 }
-impl DynDecoder for VoxDynDecoder {
+impl DynDecoder for ReedDynDecoder {
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
         let frames = Decoder::decode(&mut self.inner, packet)?;
         Ok(frames
@@ -819,8 +819,8 @@ impl DynDecoder for VoxDynDecoder {
     }
 }
 
-pub struct VoxEncoderFactory;
-impl DynEncoderFactory for VoxEncoderFactory {
+pub struct ReedEncoderFactory;
+impl DynEncoderFactory for ReedEncoderFactory {
     fn codec_id(&self) -> &[u8; 4] {
         &CODEC_ID
     }
@@ -832,14 +832,14 @@ impl DynEncoderFactory for VoxEncoderFactory {
         })
     }
     fn build(&self, cfg: &CodecConfig) -> CodecResult<alloc::boxed::Box<dyn DynEncoder>> {
-        let e = VoxEncoder::new(cfg.clone(), VoxConfig::default())?;
-        Ok(alloc::boxed::Box::new(VoxDynEncoder { inner: e }))
+        let e = ReedEncoder::new(cfg.clone(), ReedConfig::default())?;
+        Ok(alloc::boxed::Box::new(ReedDynEncoder { inner: e }))
     }
 }
-pub struct VoxDynEncoder {
-    inner: VoxEncoder,
+pub struct ReedDynEncoder {
+    inner: ReedEncoder,
 }
-impl DynEncoder for VoxDynEncoder {
+impl DynEncoder for ReedDynEncoder {
     fn encode(&mut self, frame: &tpt_media_codec::DynFrame) -> CodecResult<Vec<Packet>> {
         let audio = match frame {
             tpt_media_codec::DynFrame::Audio {
@@ -860,7 +860,7 @@ impl DynEncoder for VoxDynEncoder {
                 channel_layout: *channel_layout,
                 sample_rate: *sample_rate,
             },
-            _ => return Err(CodecError::Unsupported("Vox expects audio frames")),
+            _ => return Err(CodecError::Unsupported("Reed expects audio frames")),
         };
         Encoder::encode(&mut self.inner, &audio)
     }
@@ -959,17 +959,17 @@ mod tests {
         frame_from(s16_bytes(&x), start_tick)
     }
 
-    fn pair(cfg: VoxConfig) -> (VoxEncoder, VoxDecoder) {
+    fn pair(cfg: ReedConfig) -> (ReedEncoder, ReedDecoder) {
         let fw = CodecConfig::default();
         (
-            VoxEncoder::new(fw.clone(), cfg.clone()).unwrap(),
-            VoxDecoder::new(fw, cfg).unwrap(),
+            ReedEncoder::new(fw.clone(), cfg.clone()).unwrap(),
+            ReedDecoder::new(fw, cfg).unwrap(),
         )
     }
 
     #[test]
     fn vowel_round_trip_preserves_level_and_pitch() {
-        let (mut enc, mut dec) = pair(VoxConfig::default());
+        let (mut enc, mut dec) = pair(ReedConfig::default());
         let input = vowel_frame(0);
         let in_rms = rms(&input);
         let packet = enc.encode(&input).unwrap().into_iter().next().unwrap();
@@ -1035,7 +1035,7 @@ mod tests {
 
     #[test]
     fn silence_round_trips_to_exact_silence() {
-        let (mut enc, mut dec) = pair(VoxConfig::default());
+        let (mut enc, mut dec) = pair(ReedConfig::default());
         let input = frame_from(vec![0u8; FS * 2], 0);
         let packet = enc.encode(&input).unwrap().into_iter().next().unwrap();
         let out = &dec.decode(&packet).unwrap()[0];
@@ -1047,7 +1047,7 @@ mod tests {
 
     #[test]
     fn unvoiced_noise_carries_finite_energy() {
-        let (mut enc, mut dec) = pair(VoxConfig::default());
+        let (mut enc, mut dec) = pair(ReedConfig::default());
         let input = white_noise_frame(0, 0xDEAD_BEEF);
         let in_rms = rms(&input);
         let packet = enc.encode(&input).unwrap().into_iter().next().unwrap();
@@ -1063,7 +1063,7 @@ mod tests {
 
     #[test]
     fn packet_carries_crc_trailer() {
-        let (mut enc, _) = pair(VoxConfig::default());
+        let (mut enc, _) = pair(ReedConfig::default());
         let pkt = enc
             .encode(&vowel_frame(0))
             .unwrap()
@@ -1080,7 +1080,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_corrupted_body() {
-        let (mut enc, mut dec) = pair(VoxConfig::default());
+        let (mut enc, mut dec) = pair(ReedConfig::default());
         let mut pkt = enc
             .encode(&vowel_frame(0))
             .unwrap()
@@ -1094,7 +1094,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_corrupted_checksum() {
-        let (mut enc, mut dec) = pair(VoxConfig::default());
+        let (mut enc, mut dec) = pair(ReedConfig::default());
         let mut pkt = enc
             .encode(&vowel_frame(0))
             .unwrap()
@@ -1108,7 +1108,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_undersized_packet() {
-        let (mut enc, mut dec) = pair(VoxConfig::default());
+        let (mut enc, mut dec) = pair(ReedConfig::default());
         let mut pkt = enc
             .encode(&vowel_frame(0))
             .unwrap()
@@ -1141,16 +1141,16 @@ mod tests {
             track_id: 0,
             duration: None,
         };
-        let (_, mut dec) = pair(VoxConfig::default());
+        let (_, mut dec) = pair(ReedConfig::default());
         assert_eq!(
             dec.decode(&pkt).unwrap_err(),
-            CodecError::Unsupported("unsupported Vox packet version")
+            CodecError::Unsupported("unsupported Reed packet version")
         );
     }
 
     #[test]
     fn decode_enforces_resource_limits() {
-        let (mut enc, _) = pair(VoxConfig::default());
+        let (mut enc, _) = pair(ReedConfig::default());
         let packet = enc
             .encode(&vowel_frame(0))
             .unwrap()
@@ -1164,7 +1164,7 @@ mod tests {
             },
             ..CodecConfig::default()
         };
-        let mut dec = VoxDecoder::new(tight, VoxConfig::default()).unwrap();
+        let mut dec = ReedDecoder::new(tight, ReedConfig::default()).unwrap();
         assert_eq!(
             dec.decode(&packet).unwrap_err(),
             CodecError::ResourceLimit(tpt_media_codec::ResourceLimitKind::Allocation)
@@ -1175,26 +1175,26 @@ mod tests {
     fn rejects_bad_config() {
         let fw = CodecConfig::default();
         for cfg in [
-            VoxConfig {
+            ReedConfig {
                 sample_rate: 44_100,
-                ..VoxConfig::default()
+                ..ReedConfig::default()
             },
-            VoxConfig {
+            ReedConfig {
                 lpc_order: 7, // odd
-                ..VoxConfig::default()
+                ..ReedConfig::default()
             },
-            VoxConfig {
+            ReedConfig {
                 lsf_bits: 1, // below the 2-bit floor
-                ..VoxConfig::default()
+                ..ReedConfig::default()
             },
-            VoxConfig {
+            ReedConfig {
                 lsf_bits: 2, // 4 levels < 10 coefficients: no valid
                 // strictly-increasing LSP set fits
-                ..VoxConfig::default()
+                ..ReedConfig::default()
             },
         ] {
             assert!(
-                VoxEncoder::new(fw.clone(), cfg.clone()).is_err(),
+                ReedEncoder::new(fw.clone(), cfg.clone()).is_err(),
                 "config must be rejected: {cfg:?}"
             );
         }
@@ -1206,11 +1206,11 @@ mod tests {
         // to a stable LSP set and finite LPC coefficients, at every
         // supported LSF bit depth.
         // 4 bits is the floor for this order (2^4 = 16 > 10 coefficients);
-        // see VoxConfig::validate.
+        // see ReedConfig::validate.
         for lsf_bits in [4u8, 5, 8] {
-            let cfg = VoxConfig {
+            let cfg = ReedConfig {
                 lsf_bits,
-                ..VoxConfig::default()
+                ..ReedConfig::default()
             };
             for frame in [
                 vowel_frame(0),
@@ -1250,7 +1250,7 @@ mod tests {
 
     #[test]
     fn conceal_fades_after_packet_loss() {
-        let (mut enc, mut dec) = pair(VoxConfig::default());
+        let (mut enc, mut dec) = pair(ReedConfig::default());
         let p0 = enc
             .encode(&vowel_frame(0))
             .unwrap()
@@ -1289,7 +1289,7 @@ mod tests {
 
     #[test]
     fn conceal_without_prior_state_is_silent() {
-        let (_, mut dec) = pair(VoxConfig::default());
+        let (_, mut dec) = pair(ReedConfig::default());
         let f = dec
             .conceal(Timestamp::zero(Timebase::new(1, RATE)))
             .unwrap();
@@ -1298,7 +1298,7 @@ mod tests {
 
     #[test]
     fn jittered_pts_are_preserved_not_reordered() {
-        let (mut enc, mut dec) = pair(VoxConfig::default());
+        let (mut enc, mut dec) = pair(ReedConfig::default());
         let packets: Vec<Packet> = (0..4i64)
             .map(|i| {
                 enc.encode(&vowel_frame(i * FS as i64))
@@ -1321,8 +1321,8 @@ mod tests {
 
     #[test]
     fn encoding_is_deterministic() {
-        let (mut pa, _) = pair(VoxConfig::default());
-        let (mut pb, _) = pair(VoxConfig::default());
+        let (mut pa, _) = pair(ReedConfig::default());
+        let (mut pb, _) = pair(ReedConfig::default());
         for i in 0..3i64 {
             let f = vowel_frame(i * FS as i64);
             let x = pa.encode(&f).unwrap();
@@ -1361,7 +1361,7 @@ mod tests {
         // §38 "codec fuzzing": the project's deterministic corruption
         // sweep — arbitrary bytes, full truncation, bit flips — must
         // always return a `Result`, never panic.
-        let (_, mut dec) = pair(VoxConfig::default());
+        let (_, mut dec) = pair(ReedConfig::default());
         let mut state = 0x1234_5678_9ABC_DEF0u64;
         let mut lcg = || {
             state = state
@@ -1385,7 +1385,7 @@ mod tests {
             let _ = dec.decode(&pkt);
         }
 
-        let (mut enc, _) = pair(VoxConfig::default());
+        let (mut enc, _) = pair(ReedConfig::default());
         let valid = enc
             .encode(&vowel_frame(0))
             .unwrap()

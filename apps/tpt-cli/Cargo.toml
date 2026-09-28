@@ -22,7 +22,8 @@ tpt-media-container = { workspace = true, features = ["std"] }
 tpt-media-io = { workspace = true, features = ["std"] }
 tpt-media-probe = { workspace = true, features = ["std"] }
 tpt-container = { workspace = true, features = ["std"] }
-tpt-audio-pulse = { workspace = true, features = ["std"] }
+tpt-audio-cinder = { workspace = true, features = ["std"] }
 tpt-audio-aura = { workspace = true, features = ["std"] }
-tpt-audio-vox = { workspace = true, features = ["std"] }
+tpt-audio-reed = { workspace = true, features = ["std"] }
+tpt-video-thrum = { workspace = true, features = ["std"] }
 tpt-dsp-core = { workspace = true, features = ["std"] }

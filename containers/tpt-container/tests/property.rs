@@ -51,7 +51,7 @@ fn mux(stream: &[Packet]) -> Vec<u8> {
         num: 1,
         den: 48_000,
     });
-    muxer.add_track(1, b"PULS", &[]);
+    muxer.add_track(1, b"CIND", &[]);
     for p in stream {
         muxer
             .write_packet_raw(p)

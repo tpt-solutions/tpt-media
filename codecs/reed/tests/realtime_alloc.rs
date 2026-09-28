@@ -1,17 +1,17 @@
 //! §42 "real-time allocation assertions": a counting global allocator
-//! verifies that Vox's steady-state encode/decode paths allocate in
+//! verifies that Reed's steady-state encode/decode paths allocate in
 //! small, bounded chunks — no allocation proportional to the *number of
-//! frames processed*, no accidental multi-megabyte scratch. Vox's decoder
+//! frames processed*, no accidental multi-megabyte scratch. Reed's decoder
 //! claims `real_time_decoder`, so this is the property that claim rests
-//! on (same approach as `codecs/pulse/tests/realtime_alloc.rs`).
+//! on (same approach as `codecs/cinder/tests/realtime_alloc.rs`).
 //!
 //! Fidelity caveat: the test harness's other threads allocate too, so the
 //! asserted budget is deliberately generous (512 KiB across 32 blocks —
-//! orders of magnitude above what Vox actually moves per 320-sample
+//! orders of magnitude above what Reed actually moves per 320-sample
 //! frame). The property guarded is *order-of-magnitude* stability: a
 //! per-frame `Vec` growth, a linearly-growing history buffer, or a
 //! multi-MB scratch allocation trips this immediately, while ordinary
-//! scheduler noise cannot. (Vox's encoder runs a 1024-entry codebook
+//! scheduler noise cannot. (Reed's encoder runs a 1024-entry codebook
 //! search per unvoiced frame; even that regenerates entries into one
 //! fixed scratch frame rather than allocating per candidate.)
 
@@ -68,7 +68,7 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
-use tpt_audio_vox::{VoxConfig, VoxDecoder, VoxEncoder};
+use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
 
@@ -82,8 +82,8 @@ fn steady_state_encode_decode_allocations_are_bounded() {
     // measured region: the real-time contract is about the per-frame
     // path.
     let fw = CodecConfig::default();
-    let mut encoder = VoxEncoder::new(fw.clone(), VoxConfig::default()).unwrap();
-    let mut decoder = VoxDecoder::new(fw, VoxConfig::default()).unwrap();
+    let mut encoder = ReedEncoder::new(fw.clone(), ReedConfig::default()).unwrap();
+    let mut decoder = ReedDecoder::new(fw, ReedConfig::default()).unwrap();
 
     let mut state = 0x5EED_A11A_0000_0003u64;
     let mut blocks = Vec::new();

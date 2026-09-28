@@ -84,8 +84,8 @@ that CI already runs:
   post-`EndOfInput` `RangeDecoder` (2026-09-11).
 - `tpt-container` — `corruption_never_panics_and_truncation_never_panics`
   (every truncation point + 512 seeded bit-flips of a full fixture).
-- `tpt-audio-{aura,pulse}` — arbitrary packets + truncation + bit-flip
-  sweeps of each decoder. Found and fixed Pulse's out-of-bounds
+- `tpt-audio-{aura,cinder}` — arbitrary packets + truncation + bit-flip
+  sweeps of each decoder. Found and fixed Cinder's out-of-bounds
   spectrum write on malformed band counts (2026-09-11).
 - `tpt-media-probe` — truncation/bit-flip/arbitrary sweeps over `probe()`.
 - Randomized *round-trip* property tests (`tests/property.rs` in
@@ -139,7 +139,7 @@ invariants are:
 | Audit                                   | Status   | Owner      |
 | --------------------------------------- | -------- | ---------- |
 | Integer-overflow audit                  | done (2026-09-11, `decode_tmta` 32-bit wrap fixed) | TPT |
-| Bounds-check audit                      | done (2026-09-11, Pulse OOB write fixed) | TPT |
+| Bounds-check audit                      | done (2026-09-11, Cinder OOB write fixed) | TPT |
 | Allocation-exhaustion audit             | done (2026-09-11, `decode_idx` entry-count bomb fixed) | TPT |
 | Decompression-bomb protection test      | done (2026-09-11, same fix + §19 limits) | TPT |
 | Fuzzing CI operational                  | done (deterministic sweeps run in CI; see Fuzzing) | TPT |

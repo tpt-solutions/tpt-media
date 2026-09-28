@@ -211,11 +211,11 @@ mod tests {
         let mut track = Track::new(
             0,
             MediaType::Video,
-            CodecId::new(*b"LIVE"),
+            CodecId::new(*b"THRM"),
             Timebase::new(90, 1),
         );
         track.codec_config = CodecConfig {
-            codec_id: CodecId::new(*b"LIVE"),
+            codec_id: CodecId::new(*b"THRM"),
             version: 0x00_03,
             data: vec![0xAA, 0xBB],
         };
@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(tracks.len(), 1);
         let t = &tracks[0];
         assert_eq!(t.media_type, MediaType::Video);
-        assert_eq!(t.codec_config.codec_id, CodecId::new(*b"LIVE"));
+        assert_eq!(t.codec_config.codec_id, CodecId::new(*b"THRM"));
         assert_eq!(t.codec_config.version, 0x00_03);
         assert_eq!(t.codec_config.data, vec![0xAA, 0xBB]);
         assert_eq!(t.timebase, Timebase::new(90, 1));
@@ -261,7 +261,7 @@ mod tests {
         let mut track = Track::new(
             0,
             MediaType::Audio,
-            CodecId::new(*b"PULS"),
+            CodecId::new(*b"CIND"),
             Timebase::new(1, 48_000),
         );
         // `ResourceLimits::strict()`'s default max_metadata_bytes is 64KiB;
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn trak_defaults_when_fields_absent() {
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
-        m.add_track(0, b"PULS", &[1, 2, 3]);
+        m.add_track(0, b"CIND", &[1, 2, 3]);
         let bytes = m.finish();
         let (_h, tracks, _p) = parse_tpt(&bytes).unwrap();
         let t = &tracks[0];
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn clus_pts_dts_duration_round_trip_through_container() {
-        let tracks: [(u8, &[u8; 4], &[u8]); 1] = [(0, b"PULS", &[])];
+        let tracks: [(u8, &[u8; 4], &[u8]); 1] = [(0, b"CIND", &[])];
         let mut p0 = packet(0, 1000, &[1, 2], PacketFlags::KEYFRAME);
         p0.dts = Timestamp {
             ticks: 990,
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn discontinuity_flag_round_trips_through_container() {
-        let tracks: [(u8, &[u8; 4], &[u8]); 1] = [(0, b"PULS", &[])];
+        let tracks: [(u8, &[u8; 4], &[u8]); 1] = [(0, b"CIND", &[])];
         let packets = vec![
             packet(
                 0,
@@ -422,13 +422,13 @@ mod tests {
         m.register_track(&Track::new(
             0,
             MediaType::Audio,
-            CodecId::new(*b"PULS"),
+            CodecId::new(*b"CIND"),
             Timebase::MILLISECONDS,
         ));
         m.register_track(&Track::new(
             1,
             MediaType::Video,
-            CodecId::new(*b"LIVE"),
+            CodecId::new(*b"THRM"),
             Timebase::MILLISECONDS,
         ));
         m.add_cluster(10, 0x00, 1, &[1]); // video non-key
@@ -480,7 +480,7 @@ mod tests {
         // A future index version is ignored; the scan index (recovery)
         // still serves packets.
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
-        m.add_track(0, b"PULS", &[]);
+        m.add_track(0, b"CIND", &[]);
         m.add_cluster(5, 0x01, 0, &[1]);
         let mut bytes = m.raw_bytes().to_vec();
         let mut tracks: BTreeMap<u8, Vec<IndexEntry>> = BTreeMap::new();
@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn forward_compat_unknown_and_reserved_chunk_types_are_skipped() {
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
-        m.add_track(0, b"PULS", &[]);
+        m.add_track(0, b"CIND", &[]);
         m.append_raw(&encode_chunk(b"XYZ!", &[1, 2, 3, 4]));
         m.append_raw(&encode_chunk(&[0x05, 0x00, 0x00, 0x00], &[9, 9]));
         m.add_cluster(10, 0x01, 0, &[0xAA]);
@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(d.verify_checksum(), Some(true));
         // Live buffer without a trailer: no footer to verify.
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
-        m.add_track(0, b"PULS", &[]);
+        m.add_track(0, b"CIND", &[]);
         m.add_cluster(0, 0x01, 0, &[1]);
         let raw = m.raw_bytes().to_vec();
         let d = TptDemuxer::new_streaming(&raw).unwrap();
@@ -539,7 +539,7 @@ mod tests {
     fn cluster_checksums_verify_when_enabled() {
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
         m.enable_cluster_checksums();
-        m.add_track(0, b"PULS", &[]);
+        m.add_track(0, b"CIND", &[]);
         m.add_cluster(10, 0x01, 0, &[1, 2, 3]);
         let bytes = m.finish();
         let d = TptDemuxer::new(&bytes).unwrap();
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn live_append_resumes_mid_chunk() {
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
-        m.add_track(0, b"PULS", &[]);
+        m.add_track(0, b"CIND", &[]);
         m.add_cluster(10, CLUS_KEYFRAME, 0, &[1]);
         m.add_cluster(20, 0x00, 0, &[2]);
         let mut stream = m.raw_bytes().to_vec(); // live buffer: no trailer yet
@@ -605,7 +605,7 @@ mod tests {
         // reproduces every packet; EOF is signalled via next_packet
         // returning Truncated after the last cluster.
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
-        m.add_track(0, b"PULS", &[]);
+        m.add_track(0, b"CIND", &[]);
         m.add_cluster(0, CLUS_KEYFRAME, 0, &[1]);
         m.add_cluster(5, 0x00, 0, &[2]);
         m.add_cluster(9, CLUS_KEYFRAME, 0, &[3]);
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn full_mux_demux_round_trip() {
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
-        m.add_track(0, b"PULS", &[1, 2, 3]);
+        m.add_track(0, b"CIND", &[1, 2, 3]);
         m.add_cluster(100, 0x01, 0, &[0xDE, 0xAD, 0xBE, 0xEF]);
         m.add_cluster(200, 0x00, 0, &[0xCA, 0xFE]);
         let bytes = m.finish();
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn seek_to_keyframe_finds_first_at_or_after_target() {
         let mut m = TptMuxer::new(Timebase::MILLISECONDS);
-        m.add_track(0, b"PULS", &[]);
+        m.add_track(0, b"CIND", &[]);
         m.add_cluster(10, 0x00, 0, &[1]);
         m.add_cluster(20, 0x01, 0, &[2]);
         m.add_cluster(30, 0x00, 0, &[3]);
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn build_tpt_helper() {
-        let tracks: [(u8, &[u8; 4], &[u8]); 1] = [(0, b"PULS", &[0])];
+        let tracks: [(u8, &[u8; 4], &[u8]); 1] = [(0, b"CIND", &[0])];
         let packets = vec![
             packet(0, 0, &[1, 2, 3], PacketFlags::KEYFRAME),
             packet(0, 100, &[4, 5, 6], PacketFlags::empty()),

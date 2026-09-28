@@ -1,18 +1,18 @@
-//! `tpt-audio-pulse` — Pulse: low-latency real-time audio codec.
+//! `tpt-audio-cinder` — Cinder: low-latency real-time audio codec.
 //!
 //! ## Algorithm
 //!
 //! - Frame sizes: 128 or 256 samples (default 256).
 //! - Transform: MDCT with sine window.
 //! - Quantisation: uniform scalar with per-band step size, with an
-//!   optional perceptual reweighting (see [`PulseEncoderConfig::perceptual_weighting`]).
+//!   optional perceptual reweighting (see [`CinderEncoderConfig::perceptual_weighting`]).
 //! - Entropy: fixed-width bit fields (uniform quantiser index).
 //! - PLC: phase-randomised sign perturbation of previous frame's MDCT.
 //!
 //! ## Optional perceptual weighting
 //!
 //! Unlike Aura's lossy mode (full simultaneous-masking model, §10 of
-//! `todo.md`), Pulse is a low-latency, low-complexity real-time codec, so
+//! `todo.md`), Cinder is a low-latency, low-complexity real-time codec, so
 //! it deliberately uses only the cheapest piece of that toolkit: the
 //! absolute threshold of hearing
 //! ([`tpt_dsp_core::threshold_in_quiet`]), evaluated once per band at
@@ -25,7 +25,7 @@
 //! never sharpens it below its configured value, since the wire format's
 //! step field is an integer with no sub-configured granularity to
 //! sharpen into. Zero added real-time cost, no wire-format change, since
-//! Pulse already transmits the actual per-band step used.
+//! Cinder already transmits the actual per-band step used.
 //!
 //! See `docs/provenance.md` for algorithm sources.
 
@@ -48,15 +48,15 @@ pub const FRAME_128: u16 = 128;
 /// Supported frame size.
 pub const FRAME_256: u16 = 256;
 
-/// Codec id for Pulse.
-pub const CODEC_ID: [u8; 4] = *b"PULS";
+/// Codec id for Cinder.
+pub const CODEC_ID: [u8; 4] = *b"CIND";
 
 /// Bitstream version.
 pub const VERSION: u16 = 1;
 
 fn static_info(caps: Capabilities) -> CodecInfo {
     CodecInfo {
-        name: "Pulse",
+        name: "Cinder",
         codec_id: CODEC_ID,
         version: VERSION,
         capabilities: caps,
@@ -97,9 +97,9 @@ fn dequantize(q: i32, step: f32) -> f32 {
     q as f32 * step
 }
 
-/// Pulse encoder configuration.
+/// Cinder encoder configuration.
 #[derive(Clone, Debug)]
-pub struct PulseEncoderConfig {
+pub struct CinderEncoderConfig {
     pub frame_size: u16,
     pub sample_rate: u32,
     pub n_bands: u8,
@@ -113,9 +113,9 @@ pub struct PulseEncoderConfig {
     pub perceptual_weighting: bool,
 }
 
-impl Default for PulseEncoderConfig {
+impl Default for CinderEncoderConfig {
     fn default() -> Self {
-        PulseEncoderConfig {
+        CinderEncoderConfig {
             frame_size: 256,
             sample_rate: 48_000,
             n_bands: 16,
@@ -162,11 +162,11 @@ fn perceptual_band_weights(
     weights
 }
 
-/// Pulse encoder.
-pub struct PulseEncoder {
+/// Cinder encoder.
+pub struct CinderEncoder {
     info: CodecInfo,
     cfg: CodecConfig,
-    enc: PulseEncoderConfig,
+    enc: CinderEncoderConfig,
     last_spectrum: Vec<f32>,
     mdct_plan: FastMdctPlan,
     /// Per-band perceptual weight multiplier (all `1.0` when
@@ -176,8 +176,8 @@ pub struct PulseEncoder {
     perceptual_weights: Vec<f32>,
 }
 
-impl PulseEncoder {
-    pub fn new(codec_cfg: CodecConfig, enc: PulseEncoderConfig) -> CodecResult<Self> {
+impl CinderEncoder {
+    pub fn new(codec_cfg: CodecConfig, enc: CinderEncoderConfig) -> CodecResult<Self> {
         if enc.frame_size != 128 && enc.frame_size != 256 {
             return Err(CodecError::InvalidConfig("frame_size must be 128 or 256"));
         }
@@ -193,7 +193,7 @@ impl PulseEncoder {
             enc.n_bands as usize,
             enc.sample_rate,
         );
-        Ok(PulseEncoder {
+        Ok(CinderEncoder {
             info: static_info(Capabilities {
                 real_time_encoder: true,
                 ..Capabilities::default()
@@ -207,7 +207,7 @@ impl PulseEncoder {
     }
 }
 
-impl Encoder for PulseEncoder {
+impl Encoder for CinderEncoder {
     type Frame = AudioFrame;
     fn info(&self) -> &CodecInfo {
         &self.info
@@ -291,29 +291,29 @@ impl Encoder for PulseEncoder {
     }
 }
 
-/// Pulse decoder.
+/// Cinder decoder.
 ///
 /// Holds a pre-built [`FastMdctPlan`] for each supported frame size (128 and
 /// 256). The wire format self-describes its frame size per packet
 /// (`decode_inner` reads it from the bitstream), independent of `enc`'s own
 /// configured default, so a single fixed-size plan is not enough — the
 /// decoder must be able to invert whichever size the sender actually used.
-pub struct PulseDecoder {
+pub struct CinderDecoder {
     info: CodecInfo,
     cfg: CodecConfig,
-    enc: PulseEncoderConfig,
+    enc: CinderEncoderConfig,
     last_spectrum: Vec<f32>,
     plc_phase: u32,
     mdct_plan_128: FastMdctPlan,
     mdct_plan_256: FastMdctPlan,
 }
 
-impl PulseDecoder {
-    pub fn new(codec_cfg: CodecConfig, enc: PulseEncoderConfig) -> CodecResult<Self> {
+impl CinderDecoder {
+    pub fn new(codec_cfg: CodecConfig, enc: CinderEncoderConfig) -> CodecResult<Self> {
         if enc.frame_size != 128 && enc.frame_size != 256 {
             return Err(CodecError::InvalidConfig("frame_size must be 128 or 256"));
         }
-        Ok(PulseDecoder {
+        Ok(CinderDecoder {
             info: static_info(Capabilities {
                 real_time_decoder: true,
                 ..Capabilities::default()
@@ -377,7 +377,7 @@ impl PulseDecoder {
     }
 }
 
-impl Decoder for PulseDecoder {
+impl Decoder for CinderDecoder {
     type Frame = AudioFrame;
     fn info(&self) -> &CodecInfo {
         &self.info
@@ -389,14 +389,14 @@ impl Decoder for PulseDecoder {
     }
 }
 
-impl PulseDecoder {
+impl CinderDecoder {
     fn decode_inner(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
         let mut r = BitReader::new(&packet.data);
         // §35: reject an unrecognized wire version before interpreting
         // any further bits as if they were this decoder's own layout.
         let wire_version = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
         if wire_version != VERSION {
-            return Err(CodecError::Unsupported("unsupported Pulse packet version"));
+            return Err(CodecError::Unsupported("unsupported Cinder packet version"));
         }
         let fs_code = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
         let frame_size = 128 * (fs_code as u16 + 1);
@@ -468,8 +468,8 @@ impl PulseDecoder {
 }
 
 /// Type-erased decoder factory.
-pub struct PulseDecoderFactory;
-impl DynDecoderFactory for PulseDecoderFactory {
+pub struct CinderDecoderFactory;
+impl DynDecoderFactory for CinderDecoderFactory {
     fn codec_id(&self) -> &[u8; 4] {
         &CODEC_ID
     }
@@ -480,16 +480,16 @@ impl DynDecoderFactory for PulseDecoderFactory {
         })
     }
     fn build(&self, cfg: &CodecConfig) -> CodecResult<alloc::boxed::Box<dyn DynDecoder>> {
-        let cfg2 = PulseEncoderConfig::default();
-        let decoder = PulseDecoder::new(cfg.clone(), cfg2)?;
-        Ok(alloc::boxed::Box::new(PulseDynDecoder { inner: decoder }))
+        let cfg2 = CinderEncoderConfig::default();
+        let decoder = CinderDecoder::new(cfg.clone(), cfg2)?;
+        Ok(alloc::boxed::Box::new(CinderDynDecoder { inner: decoder }))
     }
 }
 
-pub struct PulseDynDecoder {
-    inner: PulseDecoder,
+pub struct CinderDynDecoder {
+    inner: CinderDecoder,
 }
-impl DynDecoder for PulseDynDecoder {
+impl DynDecoder for CinderDynDecoder {
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
         let frames = Decoder::decode(&mut self.inner, packet)?;
         Ok(frames
@@ -515,8 +515,8 @@ impl DynDecoder for PulseDynDecoder {
 }
 
 /// Type-erased encoder factory.
-pub struct PulseEncoderFactory;
-impl DynEncoderFactory for PulseEncoderFactory {
+pub struct CinderEncoderFactory;
+impl DynEncoderFactory for CinderEncoderFactory {
     fn codec_id(&self) -> &[u8; 4] {
         &CODEC_ID
     }
@@ -527,16 +527,16 @@ impl DynEncoderFactory for PulseEncoderFactory {
         })
     }
     fn build(&self, cfg: &CodecConfig) -> CodecResult<alloc::boxed::Box<dyn DynEncoder>> {
-        let cfg2 = PulseEncoderConfig::default();
-        let enc = PulseEncoder::new(cfg.clone(), cfg2)?;
-        Ok(alloc::boxed::Box::new(PulseDynEncoder { inner: enc }))
+        let cfg2 = CinderEncoderConfig::default();
+        let enc = CinderEncoder::new(cfg.clone(), cfg2)?;
+        Ok(alloc::boxed::Box::new(CinderDynEncoder { inner: enc }))
     }
 }
 
-pub struct PulseDynEncoder {
-    inner: PulseEncoder,
+pub struct CinderDynEncoder {
+    inner: CinderEncoder,
 }
-impl DynEncoder for PulseDynEncoder {
+impl DynEncoder for CinderDynEncoder {
     fn encode(&mut self, frame: &tpt_media_codec::DynFrame) -> CodecResult<Vec<Packet>> {
         let audio = match frame {
             tpt_media_codec::DynFrame::Audio {
@@ -557,7 +557,7 @@ impl DynEncoder for PulseDynEncoder {
                 channel_layout: *channel_layout,
                 sample_rate: *sample_rate,
             },
-            _ => return Err(CodecError::Unsupported("Pulse expects audio frames")),
+            _ => return Err(CodecError::Unsupported("Cinder expects audio frames")),
         };
         Encoder::encode(&mut self.inner, &audio)
     }
@@ -587,14 +587,14 @@ mod tests {
     #[test]
     fn encode_decode_round_trip_silence() {
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
             n_bands: 4,
             band_steps: alloc::vec![1.0; 4],
             ..Default::default()
         };
-        let mut enc = PulseEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
-        let mut dec = PulseDecoder::new(cfg, enc_cfg).unwrap();
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
         let mut frame = make_silence_frame(256);
         frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
         let packets = enc.encode(&frame).unwrap();
@@ -613,15 +613,15 @@ mod tests {
         // regardless of input. A real (non-silent) tone must survive
         // encode+decode with most of its energy intact.
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
             n_bands: 8,
             band_steps: alloc::vec![50.0; 8],
             bits_per_coef: 8,
             ..Default::default()
         };
-        let mut enc = PulseEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
-        let mut dec = PulseDecoder::new(cfg, enc_cfg).unwrap();
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
 
         let n = 256usize;
         let mut frame = AudioFrame::alloc(n as u32, SampleFormat::S16, ChannelLayout::Mono, 48_000);
@@ -651,8 +651,8 @@ mod tests {
     #[test]
     fn plc_synthesises_a_frame() {
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig::default();
-        let mut dec = PulseDecoder::new(cfg, enc_cfg).unwrap();
+        let enc_cfg = CinderEncoderConfig::default();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
         let pts = Timestamp::zero(Timebase::new(1, 48_000));
         let f = dec.conceal(pts).unwrap();
         assert_eq!(f.sample_count, 512);
@@ -664,9 +664,9 @@ mod tests {
         // default frame_size 256 overflowed to 0 and the decoder rejected
         // every packet. The header now carries a 1-bit 128/256 selector.
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig::default();
-        let mut enc = PulseEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
-        let mut dec = PulseDecoder::new(cfg, enc_cfg).unwrap();
+        let enc_cfg = CinderEncoderConfig::default();
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
 
         let mut frame = AudioFrame::alloc(512, SampleFormat::S16, ChannelLayout::Mono, 48_000);
         for (i, s) in frame.samples.chunks_mut(2).enumerate() {
@@ -685,17 +685,17 @@ mod tests {
     #[test]
     fn rejects_bad_frame_size() {
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 333,
             ..Default::default()
         };
-        assert!(PulseEncoder::new(cfg.clone(), enc_cfg.clone()).is_err());
+        assert!(CinderEncoder::new(cfg.clone(), enc_cfg.clone()).is_err());
     }
 
     #[test]
     fn factory_builds_decoder() {
-        let f = PulseDecoderFactory;
-        assert_eq!(f.codec_id(), b"PULS");
+        let f = CinderDecoderFactory;
+        assert_eq!(f.codec_id(), b"CIND");
         let dec = f.build(&CodecConfig::default()).unwrap();
         assert_eq!(dec.info().codec_id, CODEC_ID);
     }
@@ -705,13 +705,13 @@ mod tests {
         // §19: a decoder must refuse work whose internal buffers exceed the
         // caller's configured `ResourceLimits`, not just packet size. Same
         // packet as the passing round-trip, but a tight allocation budget.
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
             n_bands: 4,
             band_steps: alloc::vec![1.0; 4],
             ..Default::default()
         };
-        let mut encoder = PulseEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
+        let mut encoder = CinderEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
         let mut frame = make_silence_frame(256);
         frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
         let packets = encoder.encode(&frame).unwrap();
@@ -724,7 +724,7 @@ mod tests {
             },
             ..CodecConfig::default()
         };
-        let mut dec = PulseDecoder::new(tight, enc_cfg).unwrap();
+        let mut dec = CinderDecoder::new(tight, enc_cfg).unwrap();
         assert_eq!(
             dec.decode(&packets[0]).unwrap_err(),
             CodecError::ResourceLimit(tpt_media_codec::ResourceLimitKind::Allocation)
@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn factory_builds_encoder() {
-        let f = PulseEncoderFactory;
+        let f = CinderEncoderFactory;
         let enc = f.build(&CodecConfig::default()).unwrap();
         assert_eq!(enc.info().codec_id, CODEC_ID);
     }
@@ -772,7 +772,7 @@ mod tests {
         // carries energy (it reuses the last decoded spectrum), and both
         // the packet before and after the gap still decode cleanly.
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
             n_bands: 8,
             band_steps: alloc::vec![12.0; 8],
@@ -781,8 +781,8 @@ mod tests {
         };
         let fs = 128usize;
         let frame_len = 2 * fs;
-        let mut dec = PulseDecoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
-        let mut encoder = PulseEncoder::new(cfg, enc_cfg).unwrap();
+        let mut dec = CinderDecoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut encoder = CinderEncoder::new(cfg, enc_cfg).unwrap();
 
         let mut packets = alloc::vec![];
         for frame_idx in 0..4 {
@@ -824,7 +824,7 @@ mod tests {
         // panic, must not reorder or drop on its own, and must echo each
         // packet's own PTS back on its output frame.
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
             n_bands: 8,
             band_steps: alloc::vec![12.0; 8],
@@ -833,8 +833,8 @@ mod tests {
         };
         let fs = 128usize;
         let frame_len = 2 * fs;
-        let mut dec = PulseDecoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
-        let mut encoder = PulseEncoder::new(cfg, enc_cfg).unwrap();
+        let mut dec = CinderDecoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut encoder = CinderEncoder::new(cfg, enc_cfg).unwrap();
 
         let mut packets = alloc::vec![];
         for frame_idx in 0..4 {
@@ -855,7 +855,7 @@ mod tests {
         }
     }
 
-    /// Parse a Pulse packet's header far enough to recover the transmitted
+    /// Parse a Cinder packet's header far enough to recover the transmitted
     /// per-band step values (skipping over each band's coefficients),
     /// without going through a full decode.
     fn extract_band_steps(pkt: &Packet, bits_per_coef: u32) -> alloc::vec::Vec<u16> {
@@ -876,7 +876,7 @@ mod tests {
     #[test]
     fn perceptual_weighting_off_by_default_leaves_step_unchanged() {
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
             n_bands: 8,
             band_steps: alloc::vec![12.0; 8],
@@ -884,7 +884,7 @@ mod tests {
             ..Default::default()
         };
         assert!(!enc_cfg.perceptual_weighting);
-        let mut enc = PulseEncoder::new(cfg, enc_cfg.clone()).unwrap();
+        let mut enc = CinderEncoder::new(cfg, enc_cfg.clone()).unwrap();
         let frame = make_tone_audio_frame(256, 0);
         let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
         let steps = extract_band_steps(&packet, enc_cfg.bits_per_coef as u32);
@@ -904,7 +904,7 @@ mod tests {
         // step field is an integer, so there's no sub-configured
         // granularity to sharpen into) — see `perceptual_band_weights`.
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
             n_bands: 8,
             band_steps: alloc::vec![12.0; 8],
@@ -912,7 +912,7 @@ mod tests {
             perceptual_weighting: true,
             ..Default::default()
         };
-        let mut enc = PulseEncoder::new(cfg, enc_cfg.clone()).unwrap();
+        let mut enc = CinderEncoder::new(cfg, enc_cfg.clone()).unwrap();
         let frame = make_tone_audio_frame(256, 0);
         let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
         let steps = extract_band_steps(&packet, enc_cfg.bits_per_coef as u32);
@@ -930,7 +930,7 @@ mod tests {
     #[test]
     fn perceptual_weighting_round_trip_carries_signal() {
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
             n_bands: 8,
             band_steps: alloc::vec![12.0; 8],
@@ -938,8 +938,8 @@ mod tests {
             perceptual_weighting: true,
             ..Default::default()
         };
-        let mut enc = PulseEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
-        let mut dec = PulseDecoder::new(cfg, enc_cfg).unwrap();
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
         let frame = make_tone_audio_frame(256, 0);
         let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
         let decoded = dec.decode(&packet).unwrap();
@@ -973,10 +973,10 @@ mod tests {
             duration: None,
         };
         let mut dec =
-            PulseDecoder::new(CodecConfig::default(), PulseEncoderConfig::default()).unwrap();
+            CinderDecoder::new(CodecConfig::default(), CinderEncoderConfig::default()).unwrap();
         assert_eq!(
             dec.decode(&pkt).unwrap_err(),
-            CodecError::Unsupported("unsupported Pulse packet version")
+            CodecError::Unsupported("unsupported Cinder packet version")
         );
     }
 
@@ -1009,7 +1009,7 @@ mod tests {
             duration: None,
         };
         let mut dec =
-            PulseDecoder::new(CodecConfig::default(), PulseEncoderConfig::default()).unwrap();
+            CinderDecoder::new(CodecConfig::default(), CinderEncoderConfig::default()).unwrap();
         assert_eq!(dec.decode(&pkt).unwrap_err(), CodecError::MalformedPacket);
     }
 
@@ -1033,7 +1033,7 @@ mod tests {
             duration: None,
         };
         let mut dec =
-            PulseDecoder::new(CodecConfig::default(), PulseEncoderConfig::default()).unwrap();
+            CinderDecoder::new(CodecConfig::default(), CinderEncoderConfig::default()).unwrap();
         assert_eq!(dec.decode(&pkt).unwrap_err(), CodecError::MalformedPacket);
     }
 
@@ -1045,15 +1045,15 @@ mod tests {
         // no external fuzz-harness dependency. Every call must return a
         // `Result`, never panic.
         let cfg = CodecConfig::default();
-        let enc_cfg = PulseEncoderConfig {
+        let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
             n_bands: 8,
             band_steps: alloc::vec![12.0; 8],
             bits_per_coef: 8,
             ..Default::default()
         };
-        let mut encoder = PulseEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
-        let mut dec = PulseDecoder::new(cfg, enc_cfg).unwrap();
+        let mut encoder = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
         let mut state = 0xC0FF_EE12_3456_789Au64;
         let mut lcg = || {
             state = state

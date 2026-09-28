@@ -98,7 +98,7 @@ bounded work` in their docstring and ensure they appear in the
 We use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```text
-feat(pulse): add packet loss concealment
+feat(cinder): add packet loss concealment
 fix(container): reject truncated CLUS chunks
 docs(readme): clarify licensing
 test(aura): add bit-perfect lossless round-trip

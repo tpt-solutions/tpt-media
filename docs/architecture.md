@@ -21,7 +21,7 @@ The bitstream reader and writer use 64-bit accumulators for two reasons:
    than slicing the buffer byte-by-byte.
 
 The workspace builds for a 32-bit bare-metal target in CI
-(`thumbv7em-none-eabi`, via `tpt-audio-vox`), but performance
+(`thumbv7em-none-eabi`, via `tpt-audio-reed`), but performance
 *measurement* is 64-bit only; the API itself is platform-agnostic.
 
 ## 3. Why no `f64` timestamps?
@@ -59,12 +59,12 @@ memory-safe Rust, which is already true today: the workspace is safe
 Rust throughout. The `cbindgen`-generated header would be considered a
 stable ABI artifact; the safe-Rust APIs above it can evolve freely.
 
-## 7. Why `no_std` for `vox` only?
+## 7. Why `no_std` for `reed` only?
 
-Vox targets 8/16 kHz speech on microcontrollers. The other codecs are
-either desktop-class (aura, vault, whisper) or have non-trivial
-allocation patterns on real-time paths (pulse, livelink) that benefit
-from `std`. Vox builds `no_std` + `alloc` with `f64` math via `libm`
+Reed targets 8/16 kHz speech on microcontrollers. The other codecs are
+either desktop-class (aura, vault, mote) or have non-trivial
+allocation patterns on real-time paths (cinder, thrum) that benefit
+from `std`. Reed builds `no_std` + `alloc` with `f64` math via `libm`
 (it is *not* a fixed-point implementation — a Q-format port is future
 work, todo.md §31), which is what makes it cleanly
 `no_std`-compatible.

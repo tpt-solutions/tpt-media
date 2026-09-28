@@ -34,7 +34,7 @@ fn container_packets_flow_through_with_pts_intact() {
         })
         .collect();
 
-    let bytes = build_tpt(tb(), &[(1, b"PULS", &[][..])], &packets);
+    let bytes = build_tpt(tb(), &[(1, b"CIND", &[][..])], &packets);
     // Sanity: the container round-trips through its own demuxer losslessly.
     let (_, tracks, reloaded) = tpt_container::parse_tpt(&bytes).expect("valid tpt");
     assert_eq!(tracks[0].id, 1);

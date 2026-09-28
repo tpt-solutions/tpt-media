@@ -605,7 +605,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tpt-audio-pulse"
+name = "tpt-audio-cinder"
 version = "0.1.0"
 dependencies = [
  "criterion",
@@ -617,7 +617,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tpt-audio-vox"
+name = "tpt-audio-reed"
 version = "0.1.0"
 dependencies = [
  "criterion",
@@ -633,8 +633,8 @@ name = "tpt-cli"
 version = "0.1.0"
 dependencies = [
  "tpt-audio-aura",
- "tpt-audio-pulse",
- "tpt-audio-vox",
+ "tpt-audio-cinder",
+ "tpt-audio-reed",
  "tpt-container",
  "tpt-dsp-core",
  "tpt-media-codec",
@@ -642,6 +642,7 @@ dependencies = [
  "tpt-media-core",
  "tpt-media-io",
  "tpt-media-probe",
+ "tpt-video-thrum",
 ]
 
 [[package]]
@@ -751,6 +752,17 @@ dependencies = [
  "criterion",
  "tpt-dsp-core",
  "tpt-media-representation",
+]
+
+[[package]]
+name = "tpt-video-thrum"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "tpt-dsp-core",
+ "tpt-media-bitstream",
+ "tpt-media-codec",
+ "tpt-media-core",
 ]
 
 [[package]]

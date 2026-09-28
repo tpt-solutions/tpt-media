@@ -12,10 +12,19 @@ use tpt_media_probe::ContainerKind;
 
 /// The native TPT codec family (name -> 4-byte codec ID), shared by
 /// `--codec` resolution and `tpt list-codecs`.
+///
+/// This is the *codec* table. Which of them `encode`/`decode` can
+/// actually drive is a separate question — see `crate::commands::VideoCodec` and the
+/// audio-only note in `tpt-cli`'s `lib.rs`.
 pub const NATIVE_CODECS: &[(&str, &str, &str)] = &[
-    ("pulse", "PULS", "lossy audio (MDCT + noise shaping)"),
+    ("cinder", "CIND", "lossy audio (MDCT + noise shaping)"),
     ("aura", "AURA", "lossless audio (residual + range coding)"),
-    ("vox", "VOX ", "narrowband speech"),
+    ("reed", "REED", "narrowband speech"),
+    (
+        "thrum",
+        "THRM",
+        "low-latency video (I/P, intra refresh, 8x8 DCT)",
+    ),
 ];
 
 /// A requested pipeline operation.
@@ -33,6 +42,16 @@ pub enum Command {
     Transcode(OpSpec),
     /// `tpt benchmark ...` — measure encode/decode throughput.
     Benchmark(OpSpec),
+    /// `tpt video-corpus [--json] [--fps N] [--frames N]` — measure a
+    /// video codec over the synthetic corpus of todo.md §36.
+    VideoCorpus {
+        /// Emit machine-readable JSON instead of a table.
+        json: bool,
+        /// Frame rate used for the timestamp timebase and bitrate math.
+        fps: u32,
+        /// Frames generated per scene.
+        frames: usize,
+    },
     /// `tpt list-codecs` — list the native codec family.
     ListCodecs,
     /// `tpt --help`.
@@ -80,13 +99,20 @@ impl Default for OpSpec {
 }
 
 /// Resolve a `--codec` argument: a familiar name or a raw 4-byte codec ID.
+///
+/// This resolves against the whole native family ([`NATIVE_CODECS`]),
+/// including the video codecs. Resolving a name is not the same as being
+/// able to *drive* it: the `encode`/`decode`/`transcode` commands are
+/// audio-only and reject video codecs with an explicit message.
 pub fn resolve_codec(name: &str) -> Option<CodecId> {
-    match name.to_ascii_lowercase().as_str() {
-        "pulse" | "puls" => Some(CodecId::new(*b"PULS")),
-        "aura" => Some(CodecId::new(*b"AURA")),
-        "vox" => Some(CodecId::new(*b"VOX ")),
-        _ => CodecId::from_str(name).ok(),
+    let lower = name.to_ascii_lowercase();
+    if let Some((_, id, _)) = NATIVE_CODECS
+        .iter()
+        .find(|(n, id, _)| *n == lower || *id == name)
+    {
+        return CodecId::from_str(id).ok();
     }
+    CodecId::from_str(name).ok()
 }
 
 /// Parse `--bitrate`: plain bits/s, or `k`/`m` suffixes.
@@ -115,6 +141,40 @@ pub fn parse(argv: &[String]) -> Result<Command, String> {
     match argv.first().map(String::as_str) {
         None | Some("--help") | Some("-h") | Some("help") => Ok(Command::Help),
         Some("list-codecs") => Ok(Command::ListCodecs),
+        Some("video-corpus") => {
+            let mut json = false;
+            let mut fps = 30u32;
+            let mut frames = 6usize;
+            let mut i = 1;
+            while i < argv.len() {
+                match argv[i].as_str() {
+                    "--json" => json = true,
+                    "--fps" => {
+                        i += 1;
+                        let v = argv.get(i).ok_or("video-corpus --fps needs a value")?;
+                        fps = v.parse().map_err(|_| format!("invalid --fps `{v}`"))?;
+                        if fps == 0 {
+                            return Err("--fps must be greater than zero".into());
+                        }
+                    }
+                    "--frames" => {
+                        i += 1;
+                        let v = argv.get(i).ok_or("video-corpus --frames needs a value")?;
+                        frames = v.parse().map_err(|_| format!("invalid --frames `{v}`"))?;
+                        if frames == 0 {
+                            return Err("--frames must be greater than zero".into());
+                        }
+                    }
+                    "--help" | "-h" => return Ok(Command::Help),
+                    flag if flag.starts_with('-') && flag != "-" => {
+                        return Err(format!("unknown option `{flag}` for video-corpus"))
+                    }
+                    _ => return Err("unexpected argument for video-corpus".to_string()),
+                }
+                i += 1;
+            }
+            Ok(Command::VideoCorpus { json, fps, frames })
+        }
         Some(cmd @ ("probe" | "inspect")) => {
             let mut json = false;
             let mut input: Option<String> = None;
@@ -241,17 +301,29 @@ USAGE:
   tpt decode --codec <name> [..] <in> [<out>]   decompress
   tpt transcode --codec <name> [..] <in> [<out>]
   tpt benchmark --codec <name> [..] <in>
+  tpt video-corpus [--json] [--fps <n>] [--frames <n>]
   tpt list-codecs
   tpt --help
 
 OPTIONS:
-  --codec <name>       codec: pulse | aura | vox | <4cc>
+  --codec <name>       codec: cinder | aura | reed | thrum | <4cc>
+                       (the encode/decode commands drive the audio
+                       codecs only; thrum is a library codec)
   --container <kind>   tpt (default) | wav
   --quality <0..=100>  quality setting
   --bitrate <n>[k|m]   target bitrate (bits/s)
   --set-meta <k=v>     set a metadata pair (repeatable)
-  --json               machine-readable output (probe, benchmark)
+  --json               machine-readable output (probe, benchmark,
+                       video-corpus)
   --runs <n>           benchmark repetitions (default 5)
+  --fps <n>            video-corpus frame rate (default 30)
+  --frames <n>         video-corpus frames per scene (default 6)
   --                    nothing else; `-` means stdin/stdout
+
+COMMANDS:
+  video-corpus         measure thrum over the synthetic video corpus
+                       (todo.md 36): PSNR, SSIM, bitrate, encode/decode
+                       CPU and frame latency per scene. Generates its own
+                       content, so it reads no files.
 
 Use `-` as <input> to read from stdin. <out> defaults to stdout.";

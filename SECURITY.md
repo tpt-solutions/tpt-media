@@ -42,7 +42,7 @@ Scheduled for the 1.0 release; completed ones are recorded with the date
 they landed and what they found:
 
 - [x] Integer-overflow audit (every public API) — done 2026-09-11; fixed a 32-bit wrap in `decode_tmta`.
-- [x] Bounds-check audit (every reader) — done 2026-09-11; fixed an out-of-bounds spectrum write in Pulse.
+- [x] Bounds-check audit (every reader) — done 2026-09-11; fixed an out-of-bounds spectrum write in Cinder.
 - [x] Allocation-exhaustion audit (every decoder entry point) — done 2026-09-11; fixed the `decode_idx` entry-count bomb.
 - [x] Decompression-bomb protection test (every codec) — done 2026-09-11 (same fix + §19 resource limits).
 - [x] Fuzzing CI operational for bitstream, container, codec, and probe targets — done: deterministic, seeded corruption/truncation sweeps run as ordinary tests in CI (see `docs/security.md`).

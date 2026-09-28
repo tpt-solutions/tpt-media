@@ -31,7 +31,7 @@ fn packet(ticks: i64, index: usize) -> Packet {
 }
 
 fn probe_packets(packets: &[Packet]) -> tpt_media_probe::ProbeReport {
-    let bytes = build_tpt(tb(), &[(1, b"PULS", &[][..])], packets);
+    let bytes = build_tpt(tb(), &[(1, b"CIND", &[][..])], packets);
     tpt_media_probe::probe(&bytes)
 }
 
@@ -64,7 +64,7 @@ fn probe_survives_extreme_and_degenerate_timestamp_sets() {
             .collect();
         if packets.is_empty() {
             // `build_tpt` with no packets still produces a parseable file.
-            let bytes = build_tpt(tb(), &[(1, b"PULS", &[][..])], &[]);
+            let bytes = build_tpt(tb(), &[(1, b"CIND", &[][..])], &[]);
             let report = tpt_media_probe::probe(&bytes);
             assert!(
                 report.corruption.is_empty() || !report.corruption.is_empty(),

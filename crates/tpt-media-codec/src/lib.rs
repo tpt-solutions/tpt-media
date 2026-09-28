@@ -277,9 +277,9 @@ impl SupportedFormat {
 /// Static information about a codec implementation.
 #[derive(Clone, Debug)]
 pub struct CodecInfo {
-    /// Human name (e.g. "Pulse").
+    /// Human name (e.g. "Cinder").
     pub name: &'static str,
-    /// 4-byte codec identifier (e.g. "PULS").
+    /// 4-byte codec identifier (e.g. "CIND").
     pub codec_id: [u8; 4],
     /// Bitstream version this implementation understands.
     pub version: u16,
