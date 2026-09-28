@@ -25,7 +25,7 @@ real filesystem or stdin.
 
 | # | §43 requirement | implementation |
 |---|---|---|
-| 1 | codec selection | `--codec <name>` → `args::resolve_codec` (`cinder\|aura\|reed` or a raw 4-byte codec ID). Unknown codec = usage error (2). |
+| 1 | codec selection | `--codec <name>` → `args::resolve_codec` (any native codec name — `cinder\|aura\|reed\|thrum` — or a raw 4-byte codec ID). Unknown codec = usage error (2); `thrum` resolves but the audio-only commands reject it with an explicit "video codec, audio-only" error (1) rather than a misleading unknown-codec. |
 | 2 | container selection | `--container tpt\|wav` → `probe::ContainerKind`. Default `tpt`. Invalid = usage error (2). |
 | 3 | quality configuration | `--quality 0..=100` → validated `u8`. Out of range = usage error (2). |
 | 4 | bitrate configuration | `--bitrate <n>[k\|m]` → `args::parse_bitrate` (`k` = ×1e3, `m` = ×1e6). Overflow / non-numeric = usage error (2). |
@@ -41,7 +41,10 @@ real filesystem or stdin.
 | 0 | success |
 | 1 | runtime / I/O error (missing input, unreadable/unsupported media, codec mismatch, write failure) |
 | 2 | usage error (unknown command, unknown option, bad value, missing required) |
-| 3 | requested operation is not wired yet (the skeletal `reed` codec) |
+
+There is no exit code 3. An earlier draft reserved it for "codec not
+wired yet"; with Reed wired, every listed codec is implemented and no
+code path produces it.
 
 ## Wiring status
 
@@ -65,10 +68,12 @@ real filesystem or stdin.
   supplies Cinder `bits_per_coef` and Aura `block_size`), trims block
   padding using `tpt.io.sample_count`, and writes a single 16-bit WAV.
   Decodes only to `wav` output (any other `--container` value is an
-  error). `reed` tracks exit 3.
+  error). `reed` is wired through the same path (`--codec reed`, 8/16
+  kHz inputs, `--quality` mapping below).
 - `--quality` maps `0..=100` onto the codec coefficient bit depth
-  (Cinder/Aura `bits_per_coef`, 4–12 bits). `--bitrate` is parsed and
-  validated but has no effect yet (neither codec has rate control).
+  (Cinder/Aura `bits_per_coef`, 4–12 bits; Reed LSF bit depth).
+  `--bitrate` is parsed and validated but has no effect yet (no codec
+  has rate control).
 - `transcode` is live (2026-09-14): decodes the input `.tpt` (first
   audio track, padding trimmed via `tpt.io.sample_count`), re-encodes
   with the `--codec` target through the same encode path as `encode`,

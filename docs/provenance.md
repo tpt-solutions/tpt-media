@@ -39,8 +39,9 @@ derivation path. RED sources are forbidden.
 
 ## Per-Crate Records
 
-Each codec crate and each non-trivial module has a `PROVENANCE.md`
-that records the algorithms it implements. Example:
+Per-crate records live in this document (sections below) rather than in
+per-crate `PROVENANCE.md` files — there are deliberately none. The shape
+such a record takes:
 
 ```markdown
 ## Cinder — Lossless Mode
@@ -52,6 +53,61 @@ that records the algorithms it implements. Example:
 | Uniform scalar quantizer | Widrow & Kollár, ch. 4         | GREEN  | -       | 2026-09-07 PT | reviewed |
 | Static Huffman  | Sayood, "Introduction to Data Compression", ch. 5 | GREEN | - | 2026-09-07 PT | reviewed |
 ```
+
+The real per-crate records follow.
+
+## Cinder — v0.1
+
+Implemented from textbook/public-domain descriptions only
+(`codecs/cinder/src/lib.rs`); no code was derived from any reference
+implementation. As everywhere in `tpt-media`, no absolute patent-free
+claim is made — patent status is jurisdictional (todo.md §1).
+
+| Algorithm | Reference | Source | License | Patent review | Status |
+| --------- | --------- | ------ | ------- | ------------- | ------ |
+| MDCT analysis/synthesis (N=128/256) | Princen & Bradley (1986), "Analysis/Synthesis Filter Bank Design Based on Time Domain Aliasing Cancellation"; implementation is `tpt-dsp-core`'s `FastMdctPlan` (todo.md §5.1) | GREEN | - | 2026-09-28 PT | reviewed |
+| Sine analysis/synthesis window | Princen & Bradley (1986), same paper — the `h[i]²+h[i+n]²=1` condition | GREEN | - | 2026-09-28 PT | reviewed |
+| Uniform scalar quantizer with per-band integer step | textbook scalar quantization (Widrow & Kollár, "Quantization Noise", 2008, ch. 4) | GREEN | - | 2026-09-28 PT | reviewed |
+| Fixed-width level coding (no entropy coder) | the trivial baseline, deliberately: v0.1 codes each level in `bits_per_coef` bits — Rice/range/Huffman live in `tpt-media-bitstream` for a future mode | GREEN | - | 2026-09-28 PT | reviewed |
+| Optional threshold-in-quiet band weighting | Terhardt (1979), "Calculating Virtual Pitch" (absolute-threshold component); implementation is `tpt-dsp-core::psychoacoustic::threshold_in_quiet` (todo.md §10) | GREEN | - | 2026-09-28 PT | reviewed |
+| No packet integrity trailer | v0.1 predates the family CRC-32 convention Aura/Reed/Thrum adopted; retrofitting one is a wire-format break, so the limitation is documented rather than silently patched — per-cluster/packet integrity is the container's job for Cinder streams today | GREEN | - | 2026-09-28 PT | reviewed (documented limitation) |
+
+Deliberately *not* used, so the record above stays complete: entropy
+coding of levels, mid/side or intensity stereo, a bit reservoir, window
+switching, and noise shaping — all standard in MDCT audio codecs and
+all beyond the low-latency v0.1 scope; revisiting any of them is a
+version-bump event for the wire format.
+
+## Aura — v0.1
+
+Everything below is implemented from textbook/public-domain
+descriptions only (`codecs/aura/src/lib.rs`); no code was derived from
+any reference implementation. As everywhere in `tpt-media`, no absolute
+patent-free claim is made — patent status is jurisdictional (todo.md
+§1).
+
+| Algorithm | Reference | Source | License | Patent review | Status |
+| --------- | --------- | ------ | ------- | ------------- | ------ |
+| Autocorrelation LPC analysis + Levinson-Durbin (order ≤ 32) | Markel & Gray, "Linear Prediction of Speech" (1976), ch. 3–4; implemented in `tpt-dsp-core` (todo.md §6) | GREEN | - | 2026-09-28 PT | reviewed |
+| Q15 coefficient quantization + shared integer prediction (lossless bit-exactness) | the standard lossless-audio arrangement — predict with the *quantized* coefficients over exactly-reconstructed history so prediction error only shrinks the residual, never changes decode (Shorten/FLAC-family practice; this implementation is independent) | GREEN | - | 2026-09-28 PT | reviewed |
+| Zigzag-mapped Exp-Golomb residual coding | Golomb (1966), "Run-length encodings"; the exponential-Golomb variant and zigzag sign mapping per ITU-T H.264 (public standard) | GREEN | - | 2026-09-28 PT | reviewed |
+| MDCT analysis/synthesis (2048/4096) | Princen & Bradley (1986), as for Cinder; implementation is `tpt-dsp-core`'s `mdct`/`imdct` | GREEN | - | 2026-09-28 PT | reviewed |
+| Bark-scale critical-band mapping | Traunmüller (1990), "Analytical Expressions for the Tonotopic Sensitivity Scale"; implementation is `tpt-dsp-core::bark` (todo.md §10.1) | GREEN | - | 2026-09-28 PT | reviewed |
+| Tonal/noise classification | simplified from ISO/IEC 11172-3 (MPEG-1) psychoacoustic model 1's tonality determination — a local-peak-with-prominence test, documented as such in `tpt-dsp-core` (todo.md §10.2) | GREEN | - | 2026-09-28 PT | reviewed |
+| Simultaneous masking (spreading function) | Schroeder (1979), "Optimizing Digital Speech Coders by Hearing Masks"; implementation is `tpt-dsp-core::psychoacoustic` (todo.md §10.2) | GREEN | - | 2026-09-28 PT | reviewed |
+| Threshold in quiet | Terhardt (1979), as for Cinder | GREEN | - | 2026-09-28 PT | reviewed |
+| Masking-matched quantizer step selection | the standard psychoacoustic quantization philosophy of ISO/IEC 11172-3 — choose the step whose uniform-quantizer noise (`step²/12`) matches the band's combined masking threshold | GREEN | - | 2026-09-28 PT | reviewed |
+| First-order spectral noise shaping | delta-sigma error feedback (`NTF = 1 − z⁻¹`), Inose & Yasuda (1962); implementation is `tpt-dsp-core::noise_shaping` (todo.md §11) | GREEN | - | 2026-09-28 PT | reviewed |
+| Transmitted per-band step table (f32 per Bark band) | this project's own convention: side information rides in the packet so the decoder needs no shared state — chosen over an implicit step model for exactly reproducible decode | GREEN | - | 2026-09-28 PT | reviewed |
+| CRC-32 packet trailer | IEEE 802.3 reflected polynomial (public standard), the Aura/Reed/Thrum family convention | GREEN | - | 2026-09-28 PT | reviewed |
+
+Deliberately *not* used, so the record above stays complete: stereo or
+mid/side coding, temporal masking, window switching / short blocks, a
+bit reservoir, entropy coding of the quantized spectrum (fixed 16-bit
+indices today), and scalefactor-band splitting below the Bark resolution
+— all appear in the MPEG-4 AAC literature and are beyond v0.1 scope;
+revisiting any of them extends this table and bumps the wire version
+before landing.
 
 ## Reed — v0.1
 
@@ -114,8 +170,10 @@ this table before landing.
 
 ## Contribution Rules
 
-See [`CONTRIBUTING.md`](../CONTRIBUTING.md) §2 for the clean-room rules
-every contributor must follow.
+Development is issues only — external code contributions are not
+accepted (see [`CONTRIBUTING.md`](../CONTRIBUTING.md)). §2 there holds
+the clean-room rules every line of the project's code — whoever writes
+it — must follow.
 
 ## When in Doubt
 

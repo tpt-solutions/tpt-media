@@ -17,11 +17,18 @@
 //!   DCT codec reproduces them; asserting a floor there would be
 //!   asserting a falsehood. What is asserted for them instead is the
 //!   honest negative: they are strictly the worst-scoring category.
+//!
+//! # Memory
+//!
+//! Memory is measured in a *dedicated* test binary
+//! (`tests/memory_budget.rs`), not here. A tracking global allocator
+//! instruments every allocation in the process, and this binary runs
+//! eight quality tests in parallel whose allocations are
+//! indistinguishable from the ones under measurement — enough noise to
+//! swamp the number. See [`crate::memprobe`].
 
-use std::time::Instant;
-
-use tpt_cli::quality::{psnr_db, ssim, Timing, VideoReport};
-use tpt_cli::video::{corpus, Scene};
+use tpt_cli::quality::VideoReport;
+use tpt_cli::video::{corpus, measure_instrumented, Scene};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::PixelFormat;
 use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
@@ -33,59 +40,7 @@ const FRAMES: usize = 6;
 
 /// Encode and decode one scene, measuring quality, rate and CPU.
 fn measure(scene: &Scene, cfg: &ThrumConfig) -> VideoReport {
-    let fw = CodecConfig::default();
-    let mut enc = ThrumEncoder::new(fw.clone(), cfg.clone()).expect("encoder");
-    let mut dec = ThrumDecoder::new(fw, cfg.clone()).expect("decoder");
-
-    let t0 = Instant::now();
-    let mut packets = Vec::new();
-    for f in &scene.frames {
-        packets.extend(enc.encode(f).expect("encode"));
-    }
-    let encode = Timing {
-        elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
-        frames: scene.frames.len(),
-    };
-
-    let t1 = Instant::now();
-    let mut psnr_sum = 0f64;
-    let mut psnr_n = 0usize;
-    let mut ssim_sum = 0f64;
-    let mut ssim_n = 0usize;
-    for (pkt, src) in packets.iter().zip(scene.frames.iter()) {
-        let out = dec.decode(pkt).expect("decode");
-        assert_eq!(out.len(), 1, "one frame per packet");
-        let got = &out[0];
-        assert_eq!(got.width, src.width);
-        assert_eq!(got.height, src.height);
-        assert_eq!(got.format, src.format);
-        assert_eq!(got.pixels.len(), src.pixels.len());
-        // A bit-exact frame contributes no finite PSNR to the mean.
-        if let Some(p) = psnr_db(src, got) {
-            if p.is_finite() {
-                psnr_sum += p;
-                psnr_n += 1;
-            }
-        }
-        if let Some(s) = ssim(src, got) {
-            ssim_sum += s;
-            ssim_n += 1;
-        }
-    }
-    let decode = Timing {
-        elapsed_ms: t1.elapsed().as_secs_f64() * 1000.0,
-        frames: scene.frames.len(),
-    };
-
-    VideoReport {
-        frames: packets.len(),
-        encoded_bytes: packets.iter().map(|p| p.data.len() as u64).sum(),
-        psnr_db: (psnr_n > 0).then(|| psnr_sum / psnr_n as f64),
-        ssim: (ssim_n > 0).then(|| ssim_sum / ssim_n as f64),
-        encode,
-        decode,
-        memory: None,
-    }
+    measure_instrumented(scene, cfg, false)
 }
 
 fn default_cfg() -> ThrumConfig {

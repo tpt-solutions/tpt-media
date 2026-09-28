@@ -18,14 +18,18 @@
 //! exactly the regimes a talking-head call actually spends its life in.
 //!
 //! All scenes are generated as [`VideoFrame`]s in
-//! [`PixelFormat::Yuv420`](tpt_media_core::PixelFormat::Yuv420) at
+//! [`PixelFormat::Yuv420`] at
 //! `w x h`, with dimensions required to be multiples of 16 so they are
 //! macroblock-aligned for `tpt-video-thrum` (todo.md section 32).
 //! The `Gray8` variants exist too, since the corpus must exercise both
 //! of Thrum's coded formats.
 
+use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{PixelFormat, Timebase, Timestamp, VideoFrame};
+use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
 
+use crate::memprobe::MemoryProbe;
+use crate::quality::{psnr_db, ssim, MemoryReport, Timing, VideoReport};
 use crate::signals::splitmix64;
 
 /// A generated scene: a name plus its frames.
@@ -534,6 +538,148 @@ pub fn corpus(
         synthetic_patterns(width, height, format, frames, fps, seed),
         pathological_frames(width, height, format, frames, fps),
     ]
+}
+
+/// Encode and decode `scene` through Thrum, scoring the round trip and
+/// timing both passes.
+///
+/// This is the §37 "video" measurement in one place: quality (PSNR,
+/// SSIM), rate (encoded bytes), CPU (per-pass wall clock) and — when
+/// `instrument` is set — memory, all in a single
+/// [`VideoReport`]. The report is only
+/// meaningful as a *set*: a bitrate with no quality number is
+/// meaningless, and quality with no bitrate hides the cost that bought
+/// it.
+///
+/// `instrument` is opt-in because [`MemoryProbe`] only counts when the
+/// process has installed [`crate::memprobe::TrackingAlloc`] as its
+/// global allocator, and doing so taxes every allocation in the binary.
+/// Callers that have not installed it should pass `false` and treat
+/// `report.memory` as `None`.
+///
+/// # Panics
+///
+/// Panics if the codec rejects a frame, which for a scene generated at
+/// this module's own geometry cannot happen; an `expect` is the honest
+/// response in a measurement helper.
+pub fn measure_instrumented(scene: &Scene, cfg: &ThrumConfig, instrument: bool) -> VideoReport {
+    let fw = CodecConfig::default();
+    let mut enc = ThrumEncoder::new(fw.clone(), cfg.clone()).expect("thrum encoder");
+    let mut dec = ThrumDecoder::new(fw, cfg.clone()).expect("thrum decoder");
+
+    let ((packets, encode), encode_mem) = probed(instrument, || {
+        let t0 = std::time::Instant::now();
+        let mut packets = Vec::new();
+        for f in &scene.frames {
+            packets.extend(enc.encode(f).expect("encode"));
+        }
+        let timing = Timing {
+            elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
+            frames: scene.frames.len(),
+        };
+        (packets, timing)
+    });
+
+    // The decode probe wraps the whole decode-and-score loop, which is
+    // exact here because both video metrics are allocation-free — they
+    // only read the two pixel buffers already on the heap.
+    let (scored, decode_mem) = probed(instrument, || {
+        let t0 = std::time::Instant::now();
+        let mut psnr_sum = 0f64;
+        let mut psnr_n = 0usize;
+        let mut ssim_sum = 0f64;
+        let mut ssim_n = 0usize;
+        for (pkt, src) in packets.iter().zip(scene.frames.iter()) {
+            let out = dec.decode(pkt).expect("decode");
+            assert_eq!(out.len(), 1, "thrum emits one frame per packet");
+            let got = &out[0];
+            assert_eq!(got.width, src.width);
+            assert_eq!(got.height, src.height);
+            assert_eq!(got.format, src.format);
+            assert_eq!(got.pixels.len(), src.pixels.len());
+            // A bit-exact frame contributes no finite PSNR to the mean.
+            if let Some(p) = psnr_db(src, got) {
+                if p.is_finite() {
+                    psnr_sum += p;
+                    psnr_n += 1;
+                }
+            }
+            if let Some(s) = ssim(src, got) {
+                ssim_sum += s;
+                ssim_n += 1;
+            }
+        }
+        let timing = Timing {
+            elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
+            frames: scene.frames.len(),
+        };
+        ((psnr_sum, psnr_n, ssim_sum, ssim_n), timing)
+    });
+    let ((psnr_sum, psnr_n, ssim_sum, ssim_n), decode) = scored;
+
+    // The two passes are sequential and independently probed, so the
+    // clip-level peak is the larger of the two and the cumulative figure
+    // is their sum.
+    let memory = encode_mem.zip(decode_mem).map(|(enc, dec)| MemoryReport {
+        peak_bytes: enc.peak_bytes.max(dec.peak_bytes),
+        total_bytes: enc.total_bytes + dec.total_bytes,
+    });
+
+    VideoReport {
+        frames: packets.len(),
+        encoded_bytes: packets.iter().map(|p| p.data.len() as u64).sum(),
+        psnr_db: (psnr_n > 0).then(|| psnr_sum / psnr_n as f64),
+        ssim: (ssim_n > 0).then(|| ssim_sum / ssim_n as f64),
+        encode,
+        decode,
+        memory,
+    }
+}
+
+/// Run `f` under a [`MemoryProbe`], or not.
+fn probed<T>(on: bool, f: impl FnOnce() -> T) -> (T, Option<MemoryReport>) {
+    if !on {
+        return (f(), None);
+    }
+    let (value, report) = MemoryProbe::measure(f);
+    (value, Some(report))
+}
+
+/// Peak live heap while a clip is encoded and decoded *streaming*: each
+/// frame's packets and decoded frames are dropped as soon as they are
+/// produced.
+///
+/// Streaming is the whole point. Retaining the whole clip in the caller
+/// would make the peak a function of clip length and would measure the
+/// caller rather than the codec — the caller's buffer is the caller's
+/// memory, not the codec's working set. This is the number a
+/// "constant working set" claim has to be made about.
+///
+/// Requires [`crate::memprobe::TrackingAlloc`] to be installed as the
+/// process's global allocator, or it reports zeros.
+pub fn working_set_peak(scene: &Scene, cfg: &ThrumConfig) -> MemoryReport {
+    let fw = CodecConfig::default();
+    let mut enc = ThrumEncoder::new(fw.clone(), cfg.clone()).expect("thrum encoder");
+    let mut dec = ThrumDecoder::new(fw, cfg.clone()).expect("thrum decoder");
+
+    // Warm up outside the window: the first frame takes the encoder's
+    // reference-allocation path and the decoder's first-frame path, and
+    // the real-time contract is about the steady state after that.
+    for f in scene.frames.iter().take(1) {
+        for pkt in enc.encode(f).expect("encode") {
+            dec.decode(&pkt).expect("decode");
+        }
+    }
+
+    let probe = MemoryProbe::start();
+    for f in &scene.frames {
+        for pkt in enc.encode(f).expect("encode") {
+            for out in dec.decode(&pkt).expect("decode") {
+                std::hint::black_box(&out);
+            }
+        }
+    }
+    probe.stop()
 }
 
 #[cfg(test)]

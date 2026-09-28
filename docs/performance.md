@@ -171,10 +171,23 @@ frame buffer per call, which is inherently ~1.5 bytes per pixel; the
 property guarded is still order-of-magnitude stability, not a tight
 ceiling). That test is what caught the encoder retaining its
 worst-case packet capacity (2.5 MB per packet for a 176×144 frame,
-59 MB over 24 packets) instead of the few kilobytes actually written —
-`shrink_to_fit` on the emitted packet fixed it. Peak-memory measurement
-for Aura and the container remains `criterion`-profiler work, not yet
-scripted.
+59 MB over 24 packets) instead of the few kilobytes actually written;
+the initial `shrink_to_fit` fix was itself superseded — the encoder now
+allocates that worst-case buffer once at construction and reuses it for
+every frame, emitting an exact-size copy per packet, so the steady-state
+path does not allocate it at all.
+
+*Peak* working sets — the high-water mark of live heap bytes, which is
+the number a memory budget is stated in — are measured by
+`apps/tpt-cli/tests/memory_budget.rs` through `tpt-cli`'s `memprobe`
+harness (a `TrackingAlloc` global allocator whose `MemoryProbe` windows
+report live-heap peaks and cumulative churn). It measures Cinder, Aura,
+Reed, and Thrum in a steady-state streaming pass where nothing is
+retained, asserts each against the budget table below, and asserts
+Thrum's working set is independent of clip length (8× the input does
+not cost 8× the memory). Results: see the "Measured" column below.
+The container, pipeline, and probe layers are not yet measured by that
+harness; that remains `criterion`-profiler follow-up work.
 
 ## SIMD Equivalence (todo.md §40)
 
@@ -238,19 +251,46 @@ results are tagged with the target architecture.
 
 ## Memory Budgets
 
-Default memory budgets per codec:
+Default memory budgets per codec, with the measured steady-state
+streaming working set next to each (see "Allocations" above for how the
+measurement is taken):
 
-| Codec  | Per-frame scratch | Reference frames | Total working set |
-| ------ | ----------------- | ---------------- | ----------------- |
-| Cinder  | 4 KiB             | 0                | < 32 KiB          |
-| Aura   | 64 KiB            | 0                | < 256 KiB         |
-| Reed    | 1 KiB             | 0                | < 8 KiB           |
-| Thrum | 64 KiB          | 1                | < 1 MiB           |
-| Vault  | 4 MiB             | 16               | < 128 MiB         |
-| Mote | 16 KiB           | 0                | < 64 KiB          |
+| Codec | Per-frame scratch | Reference frames | Total working set | Measured peak |
+| ----- | ----------------- | ---------------- | ----------------- | ------------- |
+| Cinder | 4 KiB            | 0                | < 32 KiB          | 6 645 B       |
+| Aura   | 64 KiB           | 0                | < 256 KiB         | 25 330 B      |
+| Reed   | 1 KiB            | 0                | < 16 KiB          | 8 140 B       |
+| Thrum  | 64 KiB           | 1                | < 1 MiB           | 152 503 B (length-independent: 152 200 B over 6 frames vs 152 503 B over 48) |
+| Vault  | 4 MiB            | 16               | < 128 MiB         | — (no implementation) |
+| Mote   | 16 KiB           | 0                | < 64 KiB          | — (no implementation) |
 
-These are starting points; actual numbers are measured and recorded
-in each codec's `PROVENANCE.md`.
+The budget column is the ceiling each codec's streaming working set must
+stay under; the measured column is what the current implementation
+actually peaks at, over a steady-state encode+decode pass in which
+nothing is retained (`apps/tpt-cli/tests/memory_budget.rs`, x86_64
+Windows, `cargo test`'s unoptimized test profile — the numbers are
+allocation-structure-dependent, not timing-dependent, so they are
+stable across runs; platform struct-size differences can move them
+slightly). The same test pins every budget row above to its documented
+value, so the table cannot silently drift away from the code.
+
+Two numbers moved because of the measurement, both worth recording:
+
+* Reed's budget was originally "< 8 KiB"; the first measurement came in
+  at 8 140 B — 99% of the ceiling, passing by 52 bytes. A budget the
+  implementation fills is a flake in waiting, so it was raised to the
+  next sane power of two rather than kept as a false precision point.
+* Thrum's encoder initially allocated its worst-case packet buffer
+  (~2.4 MB for a 176×144 frame) *per frame*; the buffer is now allocated
+  once and reused, which is why the measured peak (~149 KiB, one frame
+  plus one reference plus the reused scratch) is two orders of
+  magnitude below what the per-frame allocation would have produced.
+
+Cumulative per-frame *churn* is a separate figure from the peak and is
+deliberately not budgeted to zero: Thrum's measured churn is
+~263 KB/frame (exact-size payload copy + the decoded frame the decoder
+must hand back), bounded by `thrum_per_frame_churn_is_bounded` to
+proportionality with a frame rather than to nothing.
 
 ## Profiling
 

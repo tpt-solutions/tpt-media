@@ -5,7 +5,7 @@
 **Language:** Rust
 **Status:** Early Implementation
 **Document version:** 2.3
-**Last updated:** 2026-09-28
+**Last updated:** 2026-09-29
 
 ---
 
@@ -73,6 +73,20 @@
   converting the envelope through the track timebase in the `Display`
   impl; the existing probe tests still pass (they never asserted the
   seconds line, which is why this survived).
+
+* **2026-09-29 — the declared MSRV was never true** (found by
+  *testing it* for the first time, while establishing the §51
+  policies): `rust-version = "1.75"` dated from the workspace's
+  creation and had never been verified against the real dependency
+  tree. The committed `Cargo.lock` cannot even be *parsed* by Cargo
+  1.75 — `clap_builder` 4.6 ships an edition-2024 manifest — and 1.85
+  falls one minor short (`criterion` 0.8.2 declares rustc 1.86).
+  1.86 builds the whole workspace clean (`cargo check --workspace
+  --locked --all-targets`). Corrected `rust-version` to 1.86, added an
+  `msrv` job to CI so the claim is enforced rather than presumed, and
+  wrote the bump policy (CONTRIBUTING §9.3). The lesson is the usual
+  one for this list: a `rust-version` nobody tests is a plausible
+  falsehood, and plausible falsehoods survive every review.
 
 * ~~**Range coder is broken.**~~ **Correction (2026-09-07, later same day):**
   re-ran `cargo test -p tpt-media-bitstream --lib range` 5× — all 4 range
@@ -1375,10 +1389,15 @@ Additional work not on the original list, and why:
       derives the worst case from `MAX_LEVEL` and `MAX_RICE_BITS` rather
       than estimating it, so the encoder's single allocation can never
       overflow
-* [x] `shrink_to_fit` on the emitted packet — without it each packet
-      carried the full worst-case capacity (megabytes for a mid-size
-      frame) despite holding a few kilobytes. Caught by
-      `tests/realtime_alloc.rs`
+* [x] no worst-case packet retention — originally each packet carried
+      the full `max_packet_bits` capacity (megabytes for a mid-size
+      frame) despite holding a few kilobytes (caught by
+      `tests/realtime_alloc.rs`); the first fix (`shrink_to_fit`) was
+      itself superseded 2026-09-28 when the §42 byte-level measurement
+      showed the encoder still *allocated* that buffer every frame —
+      it is now allocated once at construction and reused, with each
+      packet emitted as an exact-size copy, so the steady-state path
+      does not allocate it at all
 * [x] rate-aware skip threshold — `skip_threshold(step)`: skip when the
       mean absolute prediction error is below one quantiser step, i.e.
       when the residual would quantise to zero anyway. A fixed SAD
@@ -1543,14 +1562,38 @@ Create reference corpora.
 
 ## Video
 
-* [ ] talking head
-* [ ] camera motion
-* [ ] static scenes
-* [ ] high-motion scenes
-* [ ] animation
-* [ ] screen content
-* [ ] synthetic patterns
-* [ ] pathological frames
+All eight categories below are 2026-09-28 work:
+`apps/tpt-cli/src/video.rs::corpus` generates each as a deterministic
+seeded scene (SplitMix64 + closed-form fields, no committed fixtures —
+same rule as the audio corpus), and
+`apps/tpt-cli/tests/video_quality.rs` drives every scene through real
+Thrum round trips in both coded formats, pinning per-scene rate/quality
+floors and the corpus-wide bitrate ordering. The module doc carries the
+same honesty note as the audio corpus: the real-world names describe
+the *measurable structure* each case contributes (a locally-smooth
+drifting region for a head, a global translation for a camera pan), not
+genuine photographic content, which cannot be synthesized faithfully.
+
+* [x] talking head — `video::talking_head`: slow-drifting smooth oval on
+      a textured background; the regime a real call spends its life in
+* [x] camera motion — `video::camera_motion`: the static field under a
+      global translation; must compress like a static scene because
+      integer motion estimation cancels it
+* [x] static scenes — `video::static_scene`: identical frames; the skip
+      path should carry the whole frame (pinned near-zero rate)
+* [x] high-motion scenes — `video::high_motion`: per-frame decorrelated
+      content; the regime inter prediction cannot help
+* [x] animation — `video::animation`: flat regions with hard edges and
+      step-wise motion
+* [x] screen content — `video::screen_content`: text-like glyph rows
+      with high-contrast edges and long static runs
+* [x] synthetic patterns — `video::synthetic_patterns`: checkerboards,
+      ramps, grids — known-answer geometry a DCT codec must reproduce
+      exactly
+* [x] pathological frames — `video::pathological_frames`: full-scale
+      noise, full-scale DC, alternating (Nyquist) patterns — rate
+      explosions and worst-case PSNR, asserted only as bounds/ordering,
+      never as floors
 
 ---
 
@@ -1581,15 +1624,30 @@ and the §36 corpus tests):
 * [x] CPU/quality curves — same mechanism: `encode_ms`/`decode_ms`
       alongside the quality numbers in the same JSON record
 
-Video:
+Video (all 2026-09-28, in `apps/tpt-cli/src/quality.rs` and
+`apps/tpt-cli/src/video.rs`; consumed by
+`apps/tpt-cli/tests/video_quality.rs`, which drives every §36 video
+scene through real Thrum round trips):
 
-* [ ] PSNR
-* [ ] SSIM
-* [ ] bitrate
-* [ ] frame latency
-* [ ] encode CPU
-* [ ] decode CPU
-* [ ] memory
+* [x] PSNR — `psnr_db`: `None` for bit-exact frames (undefined, not
+      infinite; the corpus has real bit-exact cases — static scenes on
+      the skip path — so this is exercised, not theoretical)
+* [x] SSIM — `ssim`: 8×8-window luminance/contrast/structure over the
+      luma plane, `None` when the inputs are identical
+* [x] bitrate — `video_bitrate_bits_per_second` + `bits_per_pixel`, and
+      `VideoReport::bitrate_bps`/`bpp` accessors; the corpus-wide
+      ordering test pins that rate tracks inter-frame predictability
+* [x] frame latency — `Timing::latency_ms`/`realtime_factor`/
+      `fits_frame_budget` against a caller-supplied fps; Thrum never
+      buffers frames, so one P-frame's encode+decode is the one-way
+      latency contribution (§41)
+* [x] encode CPU — `VideoReport.encode` (`Timing`, per-frame)
+* [x] decode CPU — `VideoReport.decode` (`Timing`, per-frame)
+* [x] memory — `VideoReport.memory`: a `MemoryReport` carrying the
+      measured peak live heap and cumulative churn, filled by the
+      `tpt-cli::memprobe` tracking allocator when the process installed
+      it (§42) and honestly `None` when it did not — an absent
+      measurement and a measurement of zero are different facts
 
 ---
 
@@ -1800,9 +1858,19 @@ allocations
 
 # 42. Memory Testing
 
-* [ ] allocation profiling — systematic profiling (criterion
-      allocator hooks / tracing) not yet set up; only the Cinder bound
-      below exists
+* [x] allocation profiling — 2026-09-28:
+      `apps/tpt-cli/src/memprobe.rs` factors the counting-allocator
+      mechanism the per-codec `realtime_alloc.rs` tests each carried
+      (four near-identical copies) into one reusable harness:
+      `TrackingAlloc` (a `GlobalAlloc` mirroring live heap bytes into
+      atomics — the one `unsafe` block in `tpt-cli`, confined there on
+      purpose) plus `MemoryProbe`, a mutually-exclusive measurement
+      window reporting the high-water mark of *live* bytes and
+      cumulative churn, saturating on frees that predate the window so
+      a stale `dealloc` cannot wrap the counters into a nonsense peak.
+      The bound-style assertions stay in the codec crates where they
+      guard real-time paths; the container/pipeline layers are not yet
+      measured by this harness (still `criterion`-profiler follow-up)
 * [x] real-time allocation assertions — 2026-09-14:
       `codecs/cinder/tests/realtime_alloc.rs` runs the steady-state
       encode/decode path under a counting global allocator and asserts
@@ -1810,8 +1878,21 @@ allocations
       measured working set) — catches per-frame allocation growth or
       accidental multi-MB scratch, which is the property the real-time
       claim actually needs
-* [ ] peak memory measurements — per-codec working-set tables in
-      `docs/performance.md` are still design targets, not measured
+* [x] peak memory measurements — 2026-09-28:
+      `apps/tpt-cli/tests/memory_budget.rs` measures every implemented
+      codec's steady-state streaming working set (Cinder 6 645 B, Aura
+      25 330 B, Reed 8 140 B, Thrum 152 503 B — the last pinned
+      *length-independent*: 8× the clip does not cost 8× the memory)
+      against the budgets documented in `docs/performance.md`
+      ("Memory Budgets", now a measured table, with the stale
+      "recorded in each codec's `PROVENANCE.md`" pointer removed —
+      those files do not exist). The measurement reshaped two things:
+      Reed's documented budget rose from a pre-measurement "< 8 KiB"
+      (the measured peak filled 99% of it — a flake in waiting) to
+      "< 16 KiB", and Thrum's encoder stopped allocating its ~2.4 MB
+      worst-case packet buffer per frame (now allocated once and
+      reused), which is what the measured ~149 KiB peak actually
+      reflects
 * [x] hostile-input memory tests — covered: the §38 corruption/
       truncation/bit-flip sweeps (asserting no panic on hostile bytes)
       plus the §19/§47 resource-limit and bomb tests (asserting hostile
@@ -2016,14 +2097,35 @@ patent review
 status
 ```
 
-For each non-trivial algorithm:
+For each non-trivial algorithm (established 2026-09-29; the mechanism
+is the per-algorithm record in `docs/provenance.md`, which now carries
+a complete table for **all four implemented codecs** — Cinder, Aura,
+Reed, Thrum — with the two that were missing added this session; DSP
+primitives are covered by `tpt-dsp` §12's per-family contracts plus the
+references in those same tables):
 
-* [ ] identify mathematical source
-* [ ] record public references
-* [ ] record implementation derivation
-* [ ] record contributor provenance
-* [ ] review patent concerns
-* [ ] document uncertainty
+* [x] identify mathematical source — every row names its source paper /
+      textbook / public standard; rows that are this project's own
+      arrangement say so explicitly rather than borrowing a citation
+* [x] record public references — same tables (Princen & Bradley,
+      Markel & Gray, Schroeder, Terhardt, Traunmüller, Rice, Golomb,
+      ISO/IEC 11172-3, ITU-T H.261/H.263/H.264, IEEE 802.3, …)
+* [x] record implementation derivation — each table states where the
+      implementation lives (`codecs/*/src/lib.rs` vs. `tpt-dsp-core`)
+      and that no reference implementation was consulted or derived
+      from; the "Deliberately *not* used" closing list per codec pins
+      the derivation boundary
+* [x] record contributor provenance — single-contributor project:
+      authorship is the repository history; each record carries a
+      dated, initialed patent review, and CONTRIBUTING §2 requires
+      prior-project disclosure per algorithm touched
+* [x] review patent concerns — every row is classified GREEN with a
+      review date; CONTRIBUTING §3 lists the avoided technique
+      families (CABAC, sub-pel interpolation, SBR, parametric stereo)
+* [x] document uncertainty — the standing "no absolute patent-free
+      claim — patent status is jurisdictional" disclaimer in every
+      record and todo §1, the YELLOW-waiver policy, and the
+      "When in Doubt" escalation path in `docs/provenance.md`
 
 Source classifications:
 
@@ -2054,14 +2156,25 @@ Do not copy implementation code from external projects.
 
 # 49. Clean-Room Development
 
-For native codec implementations:
+For native codec implementations (established 2026-09-29, same
+mechanism as §48):
 
-* [ ] document algorithm sources
-* [ ] maintain implementation provenance
-* [ ] avoid copying implementation structure from reference codecs
-* [ ] do not derive code from proprietary source
-* [ ] document external references used
-* [ ] maintain codec-specific design notes
+* [x] document algorithm sources — `docs/provenance.md` carries a
+      complete per-codec table for all four implemented codecs
+* [x] maintain implementation provenance — records are updated in the
+      same change as the algorithm (e.g. the §42 buffer-reuse change
+      landed with its provenance/§32 note); wire changes also bump the
+      version table in `docs/codec-design.md`
+* [x] avoid copying implementation structure from reference codecs —
+      CONTRIBUTING §2's clean-room rules (no reading prohibited
+      sources, no borrowed structure/naming)
+* [x] do not derive code from proprietary source — same rules, plus
+      the prior-project disclosure requirement per algorithm touched
+* [x] document external references used — the `Reference` column of
+      every provenance row
+* [x] maintain codec-specific design notes — `docs/codec-design.md`'s
+      per-codec sections, each closing with "known v0.1
+      simplifications"/"sharp edges stated plainly"
 
 The purpose is provenance and independent implementation, not an absolute legal guarantee.
 
@@ -2098,8 +2211,14 @@ documentation-baseline note for what the audit found and fixed):
 * [x] security model — `SECURITY.md` (threat model) +
       `docs/security.md` (implementation mitigations, limit tables)
 * [x] provenance/IP policy — `docs/provenance.md` (per-algorithm
-      records for Cinder and Reed; GREEN-only policy)
-* [x] contributor guide — `CONTRIBUTING.md` (clean-room rules)
+      records for all four implemented codecs — Cinder, Aura, Reed,
+      Thrum; GREEN-only policy; per-crate records live in that one
+      document, there are no per-crate `PROVENANCE.md` files)
+* [x] contributor guide — `CONTRIBUTING.md` (states the contribution
+      model up front — development is issues only, no external code
+      contributions — then the clean-room rules, patent policy, and
+      the §9–§11 engineering policies: versioning/stability, MSRV,
+      feature flags, benchmarks)
 * [x] API documentation — rustdoc on every public item;
       `cargo doc --workspace --no-deps` is now **zero-warning** (the
       audit fixed 13 broken intra-doc links across 7 crates)
@@ -2129,11 +2248,34 @@ resampling
 SIMD
 ```
 
-* [ ] establish versioning strategy
-* [ ] establish MSRV compatibility
-* [ ] establish feature flags
-* [ ] establish benchmark ownership
-* [ ] establish API stability expectations
+* [x] establish versioning strategy — CONTRIBUTING §9.1: lockstep
+      workspace versions from `[workspace.package]`, SemVer with `0.y`
+      as the breaking-change counter pre-1.0, wire formats versioned
+      independently of crate versions (16-bit bitstream version +
+      fail-fast, §35), record-as-you-land changelog discipline
+* [x] establish MSRV compatibility — 2026-09-29: the declared
+      `rust-version` was **verified for the first time** and turned out
+      to be false: the committed lockfile cannot even be parsed by
+      1.75 (`clap_builder` 4.6 ships an edition-2024 manifest) and
+      1.85 falls one short (`criterion` 0.8.2 requires 1.86); 1.86
+      builds the whole workspace clean. `rust-version` is now 1.86, a
+      CI `msrv` job runs `cargo check --workspace --locked
+      --all-targets` on exactly that toolchain, and the bump policy
+      (dependency-forced only, prefer pinning lower, CHANGELOG +
+      job in the same change) is CONTRIBUTING §9.3
+* [x] establish feature flags — CONTRIBUTING §10: `std` is the only
+      default feature everywhere it exists (no_std + alloc beneath it),
+      features are additive-only, capability features gate modes not
+      correctness, new crates must be no_std-capable unless app/IO-bound
+* [x] establish benchmark ownership — CONTRIBUTING §11: each crate
+      owns its `benches/`, `docs/performance.md` is the canonical
+      record (a bench without recorded numbers isn't the §41
+      deliverable), benches deliberately stay out of CI, and a failed
+      documented budget is a failed build, not a noisy benchmark
+* [x] establish API stability expectations — CONTRIBUTING §9.2: no
+      pre-1.0 guarantee (pin exact versions), two tiers of public
+      surface (ecosystem crates vs. the explicitly experimental
+      §56 research crates), deprecation-not-removal
 
 ## `tpt-kinetix`
 
@@ -2263,12 +2405,19 @@ Before 0.3:
       and lossy (MDCT + Bark masking + noise shaping) paths with
       bit-exact lossless round trips, benchmarks (§41), and the §36
       corpus property tests
-* [ ] Thrum prototype
+* [x] Thrum prototype — §32: the I/P hybrid video codec with intra
+      refresh, rate-aware skip, real Rice coding, and the deblocked
+      reference loop; 45 unit + 6 property + §41/§42 tests, CLI codec
+      table wiring, measured latency/rate/memory in
+      `docs/performance.md`, design + provenance records (2026-09-28)
 * [ ] WASM decoder
 * [ ] stable container specification
-* [ ] benchmark suite — the workspace now has one (§41, 2026-09-14)
-      but Thrum/Vault/Mote-era benches and CI-recording are
-      still ahead of this gate's original intent
+* [ ] benchmark suite — the workspace now has one (§41), including
+      Thrum-era benches recorded 2026-09-28; what remains ahead of
+      this gate's original intent is Vault/Mote-era benches and
+      CI-side recording (CONTRIBUTING §11 keeps benches out of CI by
+      policy, so "CI-recording" means a release-time refresh ritual,
+      not a workflow job)
 
 Before 0.4:
 
@@ -2339,7 +2488,14 @@ The architecture must satisfy:
       §19 limits + §47 audits + §38 sweeps + §42 hostile-input memory
       tests, with the three real overflow/OOB/bomb bugs they found
       fixed (2026-09-11/14)
-* [ ] native codecs have explicit versioned specifications
+* [x] native codecs have explicit versioned specifications — 2026-09-29:
+      every implemented codec's wire layout is specified field-by-field
+      with its version in `docs/codec-design.md` ("Cinder v1 — wire
+      format", "Aura v1 — wire format", and the Reed/Thrum design
+      sections), the Bitstream Versioning section carries the
+      crate/`VERSION`/layout/integrity table for all four, and the
+      change discipline (version bump + table + provenance in the same
+      change) is stated there
 * [ ] `.tpt` is independently implementable
 * [ ] public APIs have documented contracts
 * [x] numerical algorithms have documented conventions — §12 in
@@ -2349,7 +2505,10 @@ The architecture must satisfy:
       fast path in `tpt-dsp` (`FastMdctPlan`, `FastDctIvPlan`,
       accelerated VQ, SIMD) is tested against a direct scalar reference
       (§5.1, §5.2, §8, §13)
-* [ ] provenance is recorded
+* [x] provenance is recorded — 2026-09-29: complete per-codec
+      provenance tables for all four implemented codecs in
+      `docs/provenance.md` (§48), maintained alongside algorithm
+      changes (§49)
 * [ ] security testing is continuous — CI runs the deterministic
       sweeps today; "continuous" in the §38/§47 sense (long-running
       coverage-guided fuzzing) is still pre-1.0 work

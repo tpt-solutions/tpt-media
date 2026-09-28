@@ -45,6 +45,7 @@
 pub mod args;
 pub mod commands;
 pub mod json;
+pub mod memprobe;
 pub mod quality;
 pub mod signals;
 pub mod video;
@@ -275,7 +276,15 @@ mod tests {
     #[test]
     fn encode_rejects_the_wav_container() {
         let o = run(
-            &argv(&["encode", "--codec", "cinder", "--container", "wav", "-", "-"]),
+            &argv(&[
+                "encode",
+                "--codec",
+                "cinder",
+                "--container",
+                "wav",
+                "-",
+                "-",
+            ]),
             &stdin_ctx(vec![]),
         );
         assert_eq!(o.code, 1);
@@ -518,10 +527,7 @@ mod tests {
             tpt_media_core::CodecId::new(*b"THRM")
         );
         for cmd in ["encode", "transcode", "benchmark"] {
-            let o = run(
-                &argv(&[cmd, "--codec", "thrum", "in.raw"]),
-                &file_ctx(&[]),
-            );
+            let o = run(&argv(&[cmd, "--codec", "thrum", "in.raw"]), &file_ctx(&[]));
             assert_eq!(o.code, 1, "{cmd} exit code");
             assert!(
                 o.err.contains("video codec"),

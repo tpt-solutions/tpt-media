@@ -50,6 +50,44 @@ convention): 90 bits of coded parameters = 4.5 kbps; the wire-rounded
   vowels can lock onto formant ringing near half the true period (the
   tests assert periodicity at the transmitted lag instead).
 
+### Cinder v1 — wire format
+
+`codecs/cinder/src/lib.rs` (`VERSION = 1`). One packet = one frame;
+fixed-width fields, bit-packed via `BitWriter` in this order:
+
+| Field | Width | Contents |
+| ----- | ----- | -------- |
+| `version` | 16 bits | bitstream version, `1`; a mismatching decoder rejects with `CodecError::Unsupported` before any further parse |
+| `frame_size` | 1 bit | `0` = 128 samples, `1` = 256 — self-described per packet, so a decoder configured for one size inverts the other correctly |
+| `n_bands` | 8 bits | number of spectral bands that follow |
+| per band: `step` | 16 bits | integer quantization step (the band's effective step after optional perceptual weighting; integer by wire definition, so weighting can only coarsen) |
+| per band: `n_coeffs` | 8 bits | coefficient count for the band |
+| per band: levels | `bits_per_coef` bits each | quantized MDCT levels, offset binary (wire value = level + 128, source clamped to ±127) |
+| `keyframe` | 1 bit | always `1` in v1 — every Cinder packet is self-contained (`PacketFlags::KEYFRAME` is set on every emitted packet) |
+
+No entropy coder and no integrity trailer in v1 — each level is stored
+at its full configured width, and packet integrity is the container's
+job at this layer. The per-packet bit budget is
+`16 + n_bands·(24 + bits_per_coef·band_size) + 8 + 16`, which bounds
+the encoder's allocation exactly.
+
+### Aura v1 — wire format
+
+`codecs/aura/src/lib.rs` (`VERSION = 1`). One packet = one block; a
+1-bit mode selects one of two layouts after a shared 4-byte header:
+
+| Field | Width | Contents |
+| ----- | ----- | -------- |
+| `version` | 16 bits | bitstream version, `1`; rejected up front on mismatch |
+| `mode` | 1 bit | `1` = lossless (LPC), `0` = lossy (MDCT) |
+| `lpc_order` | 5 bits | LPC order, 1–32 (used by both modes) |
+| `mdct_size` | 8 bits | `size/256 − 1` (so 2048 → 7, 4096 → 15) |
+| **lossless:** coefficients | 16 bits × order | Q15 fixed-point LPC coefficients |
+| **lossless:** residuals | Exp-Golomb each | zigzag-mapped prediction residual per sample — exact integer arithmetic over the *quantized* coefficients is what makes the round trip bit-exact |
+| **lossy:** step table | 32 bits × n_bands | f32 quantization step per Bark band, transmitted so the decoder needs no side information |
+| **lossy:** spectrum | 16 bits per bin | quantized MDCT bin index (noise-shaped before quantization) |
+| `crc32` | 32 bits | IEEE 802.3 CRC-32 (little-endian) over all preceding bytes, verified before parsing |
+
 ## Video
 
 One video codec is implemented (todo.md §32); the other two are still
@@ -187,6 +225,19 @@ reserved/extension *bits* inside a version yet, so every wire-format
 change so far has been a breaking version bump; the container side has
 the forward-compatible mechanism (reserved chunk ranges, unknown-chunk
 skipping).
+
+The current versions, and where each layout is specified:
+
+| Codec | Crate | `VERSION` | Layout specified | Integrity |
+| ----- | ----- | --------- | ---------------- | --------- |
+| Cinder | `tpt-audio-cinder` | 1 | above, "Cinder v1 — wire format" | none in v1 (documented limitation) |
+| Aura | `tpt-audio-aura` | 1 | above, "Aura v1 — wire format" | CRC-32 trailer |
+| Reed | `tpt-audio-reed` | 1 | above, "Reed v0.1 — implemented design" | CRC-32 trailer |
+| Thrum | `tpt-video-thrum` | 1 | above, "Thrum v0.1 — implemented design" | CRC-32 trailer |
+
+A wire-format change bumps `VERSION`, fails fast against every older
+decoder, and must land with its layout table extended here and its
+provenance entry updated (`docs/provenance.md`) in the same change.
 
 ## Patent-Conscious Design Choices
 

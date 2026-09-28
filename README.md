@@ -1,7 +1,7 @@
 # tpt-media
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.86%2B-orange.svg)](https://www.rust-lang.org)
 [![no_std](https://img.shields.io/badge/no__std-compatible-green.svg)](#)
 
 The native TPT media framework and codec ecosystem.
@@ -90,8 +90,11 @@ Copyright 2026 TPT Solutions.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the clean-room development rules,
-patent-conscious design policy, and provenance requirements.
+Development is **issues only** — we do not accept external code
+contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report
+bugs or propose work, and for the clean-room development rules,
+patent-conscious design policy, and provenance requirements the code
+is held to.
 
 ## Architecture
 

@@ -389,14 +389,15 @@ impl Timing {
 }
 
 /// Measured allocation of a pass, when a caller has instrumented one
-/// (the counting-allocator harness the crate's `realtime_alloc` tests
-/// use). Reported alongside the timing so a "fast enough" number is
-/// never read without its memory cost.
+/// (the [`crate::memprobe`] harness, driven by the crate's
+/// `realtime_alloc` and `memory_budget` tests). Reported alongside the
+/// timing so a "fast enough" number is never read without its memory cost.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub struct MemoryReport {
-    /// Peak bytes allocated during the measured pass.
+    /// High-water mark of live heap bytes during the measured pass — the
+    /// working set, and the number a memory *budget* is stated in.
     pub peak_bytes: u64,
-    /// Total bytes allocated across the pass (cumulative, not peak).
+    /// Total bytes allocated across the pass (cumulative churn, not peak).
     pub total_bytes: u64,
 }
 

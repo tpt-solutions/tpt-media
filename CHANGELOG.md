@@ -22,6 +22,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **§48/§49 provenance completion and §51 engineering policies**
+  (2026-09-29):
+  - `docs/provenance.md` — the two missing per-codec records added
+    (Cinder, Aura), so all four implemented codecs now carry complete
+    GREEN-classified algorithm tables with references, derivation
+    notes, dated patent reviews, and explicit "deliberately *not*
+    used" boundaries; the Per-Crate Records section now states that
+    records live in that one document — the per-crate
+    `PROVENANCE.md` files it previously promised do not exist and
+    never did (CONTRIBUTING's matching stale references fixed too,
+    and its real-time section now distinguishes the zero-allocation
+    rule for *new* APIs from the tested bounded-allocation claims of
+    current ones).
+  - `CONTRIBUTING.md` §9–§11 (todo.md §51): the versioning strategy
+    (lockstep workspace versions, `0.y`-is-breaking SemVer,
+    wire formats versioned separately from crates), API stability
+    expectations (no pre-1.0 guarantee, the research crates are
+    explicitly experimental, deprecation-not-removal), the feature-flag
+    convention (`std` is the only default feature, additive-only
+    features, no_std-first for new crates), benchmark ownership
+    (per-crate benches, `docs/performance.md` as the canonical record,
+    benches deliberately out of CI, a failed budget is a failed
+    build), and the MSRV policy (§9.3). The document now also states
+    the project's actual contribution model up front: development is
+    **issues only** — external code contributions (pull requests) are
+    not accepted — and it is framed as maintainer-facing development
+    policy rather than a contributor handbook (matching updates to the
+    README's Contributing section).
+  - `docs/codec-design.md` — field-by-field wire-format
+    specifications for Cinder v1 and Aura v1 (matching the existing
+    Reed/Thrum sections) plus a crate/`VERSION`/layout/integrity table
+    covering all four codecs and the change discipline for future
+    version bumps; closes todo.md §54's "native codecs have explicit
+    versioned specifications".
 - **Thrum, the low-latency video communication codec** (§32
   prototype, 2026-09-28): `tpt-video-thrum` is a real implementation
   of the I/P hybrid design — every item on §32's list is now `[x]`.
@@ -92,7 +126,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     now ~45 dB; (b) the encoder retained its worst-case packet
     *capacity* (2.5 MB per 176×144 packet) instead of the few kilobytes
     written, found by the allocation test and fixed with
-    `shrink_to_fit`.
+    `shrink_to_fit` — superseded the same day by the §42 work below:
+    the buffer is now allocated once at construction and reused, so the
+    steady-state path does not allocate it at all.
+- **§36 video corpus, §37 video quality metrics, and §42 measured
+  memory budgets** (2026-09-28):
+  - `apps/tpt-cli/src/video.rs` — the §36 video corpus: eight
+    deterministic seeded scenes (static, talking head, camera motion,
+    high motion, animation, screen content, synthetic patterns,
+    pathological frames), each generated closed-form from SplitMix64
+    like the audio corpus, in both coded formats, with the same honesty
+    note (the real-world names describe the *measurable structure* each
+    regime contributes, not photographic content).
+  - `apps/tpt-cli/src/quality.rs` — the §37 video metrics: `psnr_db`
+    (`None` for bit-exact frames — a real corpus case, not a corner),
+    `ssim` (8×8 luma windows), `video_bitrate_bits_per_second`,
+    `bits_per_pixel`, and `VideoReport` accessors for bitrate, latency,
+    and real-time fit at a target fps. Memory rides in the same report
+    as a `MemoryReport` that is `None` unless the process installed the
+    tracking allocator — an absent measurement and a measurement of
+    zero are different facts.
+  - `apps/tpt-cli/tests/video_quality.rs` — every corpus scene through
+    real Thrum round trips in both coded formats: per-scene rate and
+    quality pins (static scenes ride the skip path at near-zero rate
+    and bit-exact output; incompressible scenes cost orders of
+    magnitude more) plus a corpus-wide bitrate ordering that tracks
+    inter-frame predictability.
+  - `apps/tpt-cli/src/memprobe.rs` +
+    `apps/tpt-cli/tests/memory_budget.rs` (§42 "allocation profiling"
+    and "peak memory measurements") — the per-codec counting-allocator
+    mechanism factored into one reusable `TrackingAlloc`/`MemoryProbe`
+    harness that reports the high-water mark of *live* heap bytes (the
+    number a memory budget is written in) and cumulative churn, with a
+    saturating free path so a dealloc predating the window cannot wrap
+    the counters. The dedicated `memory_budget` test binary — the only
+    one that installs the allocator — measures every implemented codec's
+    steady-state streaming working set against `docs/performance.md`'s
+    budget table (now a measured table) and pins Thrum's working set
+    length-independent (8× the clip, same ~149 KiB peak). The
+    measurement reshaped two things: Reed's documented budget rose from
+    a pre-measurement "< 8 KiB" (the measured 8 140 B peak filled 99%
+    of it — a flake in waiting) to "< 16 KiB", and the Thrum encoder
+    above stopped allocating its ~2.4 MB worst-case packet buffer per
+    frame (allocated once, reused, exact-size copies emitted).
   - `tpt-video-thrum` is wired into the CLI's codec table
     (`--codec thrum` / `--codec LIVE` resolve, and `tpt list-codecs`
     advertises it), but the `encode`/`decode`/`transcode`/`benchmark`
@@ -256,6 +332,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **The declared MSRV was never true** (2026-09-29, found by testing it
+  for the first time): `rust-version = "1.75"` was falsified by the
+  committed lockfile — Cargo 1.75 cannot parse `clap_builder` 4.6's
+  edition-2024 manifest, and 1.85 falls one minor short because
+  `criterion` 0.8.2 declares rustc 1.86. Verified that 1.86 builds the
+  whole workspace clean (`cargo check --workspace --locked
+  --all-targets`); the field now says 1.86 and a new CI `msrv` job
+  enforces it on exactly that toolchain. README's badge and
+  CONTRIBUTING §4 updated to match; the bump policy for the future is
+  CONTRIBUTING §9.3.
 - `tpt-media-probe`'s human-readable audio track line printed the
   first→last PTS envelope **in raw ticks under a "{:.3} s" label** —
   no timebase conversion — so a 1-second 16 kHz file reported

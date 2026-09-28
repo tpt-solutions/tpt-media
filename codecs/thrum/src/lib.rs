@@ -1444,11 +1444,7 @@ impl ThrumConfig {
 
     /// Inverse of [`ThrumConfig::to_codec_private`], with the frame
     /// geometry supplied from the track header.
-    pub fn from_codec_private(
-        width: u32,
-        height: u32,
-        private: &[u8],
-    ) -> CodecResult<ThrumConfig> {
+    pub fn from_codec_private(width: u32, height: u32, private: &[u8]) -> CodecResult<ThrumConfig> {
         let mut cfg = ThrumConfig {
             width,
             height,
@@ -1514,6 +1510,9 @@ pub struct ThrumEncoder {
     /// Rotating cursor: the next macroblock to force intra in a P-frame.
     refresh_cursor: usize,
     scratch: BlockScratch,
+    /// Worst-case packet buffer, allocated once here and rewritten by
+    /// every frame (see `encode`).
+    packet_buf: Vec<u8>,
     /// Frames encoded so far (drives the I/P decision).
     frames: u64,
     keyframe_interval: u64,
@@ -1546,6 +1545,9 @@ impl ThrumEncoder {
                 ..Capabilities::default()
             },
         );
+        // The packet buffer is sized once, here, rather than per frame:
+        // see the note in `encode`.
+        let packet_buf = vec![0u8; enc.max_packet_bits().div_ceil(8) + CRC_TRAILER_BYTES];
         Ok(ThrumEncoder {
             info,
             cfg: codec_cfg,
@@ -1553,6 +1555,7 @@ impl ThrumEncoder {
             reference: None,
             refresh_cursor: 0,
             scratch: BlockScratch::new(),
+            packet_buf,
             frames: 0,
             keyframe_interval,
         })
@@ -1646,9 +1649,21 @@ impl Encoder for ThrumEncoder {
         };
 
         // Sized by the provable bound in `max_packet_bits`, so the encode
-        // path is a single allocation that can never overflow for a
-        // well-formed frame.
-        let mut buf = vec![0u8; self.enc.max_packet_bits().div_ceil(8) + CRC_TRAILER_BYTES];
+        // path can never overflow for a well-formed frame. The buffer is
+        // *reused* rather than reallocated: that bound is deliberately
+        // pessimistic (it charges every one of a block's 64 coefficients
+        // the worst case a Rice escape can take), so for a 176x144 frame
+        // it is ~2.4 MB against a few kB of actual payload. Allocating
+        // that per frame made the encoder's transient working set two
+        // orders of magnitude larger than the frame it was coding, and
+        // re-zeroed it on every frame. Caught by
+        // `apps/tpt-cli/tests/video_quality.rs`.
+        //
+        // `mem::take` leaves an empty (unallocated) `Vec` in its place so
+        // the `BitWriter` borrows a local rather than `self`, which the
+        // per-macroblock calls below need to mutate.
+        let mut buf = core::mem::take(&mut self.packet_buf);
+        debug_assert!(buf.len() >= self.enc.max_packet_bits().div_ceil(8) + CRC_TRAILER_BYTES);
         let written = {
             let mut w = BitWriter::new(&mut buf);
             w.write(16, VERSION as u64)
@@ -1681,15 +1696,19 @@ impl Encoder for ThrumEncoder {
             }
             w.finish().map_err(|_| CodecError::Internal)?
         };
-        buf.truncate(written);
+        // Copy the payload out at its exact size and hand the worst-case
+        // scratch back for the next frame. The copy is what a caller
+        // would have paid anyway (the packet owns its bytes); doing it
+        // here means the oversized buffer is never handed out, so a
+        // caller retaining N packets retains N *payloads* rather than N
+        // worst-case buffers. The earlier `shrink_to_fit` version fixed
+        // the same retention problem but still paid the allocation, and
+        // the zeroing, on every single frame.
         let crc = crc32(&buf[..written]);
-        buf.extend_from_slice(&crc.to_le_bytes());
-        // Release the worst-case capacity. Without this the packet would
-        // carry the full `max_packet_bits` allocation (megabytes for a
-        // mid-size frame) even though it holds a few kilobytes of actual
-        // payload, and a caller retaining N packets would retain N times
-        // that. Caught by `tests/realtime_alloc.rs`.
-        buf.shrink_to_fit();
+        let mut data = Vec::with_capacity(written + CRC_TRAILER_BYTES);
+        data.extend_from_slice(&buf[..written]);
+        data.extend_from_slice(&crc.to_le_bytes());
+        self.packet_buf = buf;
 
         self.reference = Some(recon);
         self.frames += 1;
@@ -1702,7 +1721,7 @@ impl Encoder for ThrumEncoder {
                 PacketFlags::empty()
             };
         Ok(vec![Packet {
-            data: buf,
+            data,
             pts: frame.frame.pts,
             dts: frame.frame.pts,
             flags,
@@ -1973,9 +1992,7 @@ impl Decoder for ThrumDecoder {
         // layout.
         let version = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
         if version != VERSION {
-            return Err(CodecError::Unsupported(
-                "unsupported Thrum packet version",
-            ));
+            return Err(CodecError::Unsupported("unsupported Thrum packet version"));
         }
         let intra = r.read(1).map_err(|_| CodecError::MalformedPacket)? == 1;
         let qp = r.read(QP_BITS).map_err(|_| CodecError::MalformedPacket)? as u8;
@@ -2198,8 +2215,7 @@ impl DynDecoderFactory for ThrumDecoderFactory {
     fn build(&self, cfg: &CodecConfig) -> CodecResult<Box<dyn DynDecoder>> {
         let mut merged = self.enc.clone();
         if cfg.extra.len() >= ThrumConfig::CODEC_PRIVATE_LEN {
-            merged =
-                ThrumConfig::from_codec_private(self.enc.width, self.enc.height, &cfg.extra)?;
+            merged = ThrumConfig::from_codec_private(self.enc.width, self.enc.height, &cfg.extra)?;
         }
         let d = ThrumDecoder::new(cfg.clone(), merged)?;
         Ok(Box::new(ThrumDynDecoder { inner: d }))
@@ -2221,10 +2237,7 @@ impl ThrumEncoderFactory {
     }
 
     /// Build a factory with an explicit I-frame interval in frames.
-    pub fn with_keyframe_interval(
-        enc: ThrumConfig,
-        keyframe_interval: u64,
-    ) -> CodecResult<Self> {
+    pub fn with_keyframe_interval(enc: ThrumConfig, keyframe_interval: u64) -> CodecResult<Self> {
         enc.validate()?;
         Ok(ThrumEncoderFactory {
             enc,
@@ -2252,11 +2265,9 @@ impl DynEncoderFactory for ThrumEncoderFactory {
     fn build(&self, cfg: &CodecConfig) -> CodecResult<Box<dyn DynEncoder>> {
         let mut merged = self.enc.clone();
         if cfg.extra.len() >= ThrumConfig::CODEC_PRIVATE_LEN {
-            merged =
-                ThrumConfig::from_codec_private(self.enc.width, self.enc.height, &cfg.extra)?;
+            merged = ThrumConfig::from_codec_private(self.enc.width, self.enc.height, &cfg.extra)?;
         }
-        let e =
-            ThrumEncoder::with_keyframe_interval(cfg.clone(), merged, self.keyframe_interval)?;
+        let e = ThrumEncoder::with_keyframe_interval(cfg.clone(), merged, self.keyframe_interval)?;
         Ok(Box::new(ThrumDynEncoder { inner: e }))
     }
 }
@@ -2816,8 +2827,7 @@ mod tests {
     #[test]
     fn a_keyframe_interval_renews_the_reference_periodically() {
         let c = cfg(64, 48, PixelFormat::Gray8);
-        let mut enc =
-            ThrumEncoder::with_keyframe_interval(CodecConfig::default(), c, 3).unwrap();
+        let mut enc = ThrumEncoder::with_keyframe_interval(CodecConfig::default(), c, 3).unwrap();
         let flags: Vec<bool> = (0..7)
             .map(|i| {
                 let f = test_picture(64, 48, PixelFormat::Gray8, i);

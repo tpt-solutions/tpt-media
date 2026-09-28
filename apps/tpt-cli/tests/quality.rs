@@ -267,7 +267,15 @@ fn transcode_aura_to_cinder_round_trips_audibly() {
     };
     let tr = run_stdin(
         &aura_tpt,
-        &["transcode", "--codec", "cinder", "--quality", "80", "-", "-"],
+        &[
+            "transcode",
+            "--codec",
+            "cinder",
+            "--quality",
+            "80",
+            "-",
+            "-",
+        ],
     );
     assert_eq!(tr.code, 0, "transcode stderr: {}", tr.err);
     let transcoded = tr.binary_stdout.expect("tpt on stdout");

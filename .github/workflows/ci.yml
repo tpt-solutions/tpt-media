@@ -35,6 +35,24 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --locked
 
+  msrv:
+    name: MSRV (rust-version from Cargo.toml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Kept in lockstep with `rust-version` in [workspace.package]; see
+      # CONTRIBUTING.md §9.3 for the bump policy.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.86"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo check on MSRV
+        run: cargo check --workspace --locked --all-targets
+
   no_std:
     name: no_std build (tpt-audio-reed)
     runs-on: ubuntu-latest
