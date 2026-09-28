@@ -637,6 +637,15 @@ impl DynDecoderFactory for AuraDecoderFactory {
 pub struct AuraDynDecoder {
     inner: AuraDecoder,
 }
+impl AuraDynDecoder {
+    /// Wrap a concrete decoder for direct type-erased use (the FFI
+    /// bridge, custom registries). The factory route stays
+    /// available for config-from-codec-private construction.
+    pub fn new(inner: AuraDecoder) -> Self {
+        Self { inner }
+    }
+}
+
 impl DynDecoder for AuraDynDecoder {
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
         let frames = Decoder::decode(&mut self.inner, packet)?;
@@ -683,6 +692,15 @@ impl DynEncoderFactory for AuraEncoderFactory {
 pub struct AuraDynEncoder {
     inner: AuraEncoder,
 }
+impl AuraDynEncoder {
+    /// Wrap a concrete encoder for direct type-erased use (the FFI
+    /// bridge, custom registries). The factory route stays
+    /// available for config-from-codec-private construction.
+    pub fn new(inner: AuraEncoder) -> Self {
+        Self { inner }
+    }
+}
+
 impl DynEncoder for AuraDynEncoder {
     fn encode(&mut self, frame: &tpt_media_codec::DynFrame) -> CodecResult<Vec<Packet>> {
         let audio = match frame {

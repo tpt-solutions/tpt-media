@@ -7,8 +7,6 @@
 //! See `ARCHITECTURE.md` §6 and `docs/codec-design.md`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-
-
 #![forbid(unsafe_code)]
 extern crate alloc;
 

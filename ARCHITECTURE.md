@@ -57,7 +57,7 @@ apps/
   tpt-web — WASM browser player        (planned, todo.md §45)
 
 ffi/
-  tpt-media-sys — stable C ABI         (planned, todo.md §46)
+  tpt-media-sys — stable C ABI         (todo.md §46)
 ```
 
 ## 3. Dependency Direction
@@ -196,13 +196,17 @@ is a planned consumer.
 
 ## 10. WASM and FFI
 
-Neither exists yet — both are gated milestones (todo.md §45/§46), and
-the descriptions below are the design intent, not shipped surface:
+`tpt-web` does not exist yet (todo.md §45). `tpt-media-sys` shipped its
+first slice 2026-09-29 (todo.md §46): the codec abstraction — packet,
+frame, encoder, decoder — as opaque, panic-guarded C handles with error
+codes, an ABI version, a hand-written kept-in-sync header, and a C
+integration test; container/demuxer/muxer handles are the v0.2 surface.
 
 - `tpt-web` will expose decoders and the `.tpt` parser to JavaScript via
   `wasm-bindgen`.
-- `tpt-media-sys` will wrap the safe Rust API in `extern "C"` functions
-  and use `cbindgen` to generate `tpt_media.h`.
+- `tpt-media-sys` wraps the codec abstraction in `extern "C"` functions;
+  the header is hand-written and kept in sync with the ABI by a test
+  (deliberately no `cbindgen` dependency).
 
 Both are documented as **stable** at the 1.0 release.
 

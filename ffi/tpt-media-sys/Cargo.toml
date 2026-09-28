@@ -1,0 +1,30 @@
+[package]
+name = "tpt-media-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Stable C ABI for the tpt-media codec abstraction: opaque handles, explicit ownership, error codes."
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+
+
+[lib]
+# `rlib` so the Rust-side tests (and any future Rust wrapper) can depend
+# on the crate; `staticlib` so a C application can link the archive
+# produced by `cargo build -p tpt-media-sys`.
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+tpt-media-core = { path = "../../crates/tpt-media-core" }
+tpt-media-codec = { path = "../../crates/tpt-media-codec" }
+tpt-audio-cinder = { path = "../../codecs/cinder" }
+tpt-audio-aura = { path = "../../codecs/aura" }
+tpt-audio-reed = { path = "../../codecs/reed" }
+
+[build-dependencies]
+cc = "1"

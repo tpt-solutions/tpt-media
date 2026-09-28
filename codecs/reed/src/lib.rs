@@ -62,8 +62,6 @@
 //! See `docs/provenance.md` for algorithm sources.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-
-
 #![forbid(unsafe_code)]
 extern crate alloc;
 
@@ -796,6 +794,15 @@ impl DynDecoderFactory for ReedDecoderFactory {
 pub struct ReedDynDecoder {
     inner: ReedDecoder,
 }
+impl ReedDynDecoder {
+    /// Wrap a concrete decoder for direct type-erased use (the FFI
+    /// bridge, custom registries). The factory route stays
+    /// available for config-from-codec-private construction.
+    pub fn new(inner: ReedDecoder) -> Self {
+        Self { inner }
+    }
+}
+
 impl DynDecoder for ReedDynDecoder {
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
         let frames = Decoder::decode(&mut self.inner, packet)?;
@@ -841,6 +848,15 @@ impl DynEncoderFactory for ReedEncoderFactory {
 pub struct ReedDynEncoder {
     inner: ReedEncoder,
 }
+impl ReedDynEncoder {
+    /// Wrap a concrete encoder for direct type-erased use (the FFI
+    /// bridge, custom registries). The factory route stays
+    /// available for config-from-codec-private construction.
+    pub fn new(inner: ReedEncoder) -> Self {
+        Self { inner }
+    }
+}
+
 impl DynEncoder for ReedDynEncoder {
     fn encode(&mut self, frame: &tpt_media_codec::DynFrame) -> CodecResult<Vec<Packet>> {
         let audio = match frame {

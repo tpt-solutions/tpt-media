@@ -22,6 +22,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`tpt-media-sys`, the stable C ABI — §46's first slice** (2026-09-29):
+  the codec abstraction (packet, frame, encoder, decoder) exposed to C
+  as opaque, exclusively-owned handles under `ffi/tpt-media-sys`,
+  covering all ten §46 mechanics items: `extern "C"` functions returning
+  frozen `enum tpt_error` codes; `tpt_abi_version()` with a stated
+  stability rule; explicit per-handle free functions (freeing NULL is a
+  no-op; packet payloads are copied in); an abstract `tpt_media_config`
+  (sample rate / channels / quality 0–100) that maps to per-codec
+  parameters exactly as the CLI's `--quality` does, so a C caller never
+  sees per-codec structs; thread-safety and per-function `# Safety` /
+  `// SAFETY:` documentation (the crate is the workspace's one
+  sanctioned `unsafe` home); every export panic-guarded (`TPT_ERR_PANIC`
+  instead of unwinding into C); a hand-written `include/tpt_media.h`
+  kept in sync with the ABI by a two-directional test; and a real C
+  integration test (`tests/integration.c` sees only the header) driving
+  a bit-exact Aura lossless round trip through `cargo test`. Built as
+  both `rlib` and `staticlib` (`tpt_media_sys.lib`). Supporting
+  changes: the six `*Dyn{Encoder,Decoder}` wrappers gained public
+  `new()` constructors (the FFI needs direct boxed construction; the
+  factories stay for config-from-codec-private), and the ABI owns PTS
+  association at the boundary because the type-erased `DynFrame`
+  carries no timestamps. `Context`/`Container`/`Demuxer`/`Muxer`
+  handles are the recorded v0.2 surface.
 - **§1 Core Design Principles audited and enforced** (2026-09-29): the
   one remaining un-audited block of todo.md now carries the same
   evidence-first annotations as everything else. Two of its claims

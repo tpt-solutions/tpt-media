@@ -491,6 +491,15 @@ impl DynDecoderFactory for CinderDecoderFactory {
 pub struct CinderDynDecoder {
     inner: CinderDecoder,
 }
+impl CinderDynDecoder {
+    /// Wrap a concrete decoder for direct type-erased use (the FFI
+    /// bridge, custom registries). The factory route stays
+    /// available for config-from-codec-private construction.
+    pub fn new(inner: CinderDecoder) -> Self {
+        Self { inner }
+    }
+}
+
 impl DynDecoder for CinderDynDecoder {
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
         let frames = Decoder::decode(&mut self.inner, packet)?;
@@ -538,6 +547,15 @@ impl DynEncoderFactory for CinderEncoderFactory {
 pub struct CinderDynEncoder {
     inner: CinderEncoder,
 }
+impl CinderDynEncoder {
+    /// Wrap a concrete encoder for direct type-erased use (the FFI
+    /// bridge, custom registries). The factory route stays
+    /// available for config-from-codec-private construction.
+    pub fn new(inner: CinderEncoder) -> Self {
+        Self { inner }
+    }
+}
+
 impl DynEncoder for CinderDynEncoder {
     fn encode(&mut self, frame: &tpt_media_codec::DynFrame) -> CodecResult<Vec<Packet>> {
         let audio = match frame {

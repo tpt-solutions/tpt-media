@@ -2088,32 +2088,77 @@ Create `tpt-web`.
 
 Create `tpt-media-sys`.
 
-The FFI should expose the **stable media abstraction**, not internal implementation details.
+The FFI exposes the **stable media abstraction**, not internal
+implementation details. **v0.1 shipped 2026-09-29** with the codec
+abstraction slice — packet, frame, encoder, decoder — for the three
+audio codecs; the full `Expose` list below is the surface contract,
+and `Context`/`Container`/`Demuxer`/`Muxer` handles are the v0.2
+slice (the `Probe` layer already covers container introspection from
+Rust). The abstract `tpt_media_config` (sample rate / channels /
+quality 0–100) maps to per-codec parameters exactly as the CLI's
+`--quality` does, so a C caller never touches per-codec structs.
 
 Expose:
 
 ```text
-Context
-Packet
-Frame
-Codec
-Encoder
-Decoder
-Container
-Demuxer
-Muxer
+Context          (v0.2)
+Packet           (v0.1)
+Frame            (v0.1 — audio; the video frame type lands with the video codecs' FFI slice)
+Codec            (v0.1, as a packed 4-byte codec id + tpt_encoder_block_size)
+Encoder          (v0.1)
+Decoder          (v0.1)
+Container        (v0.2)
+Demuxer          (v0.2)
+Muxer            (v0.2)
 ```
 
-* [ ] C ABI
-* [ ] opaque handles
-* [ ] explicit ownership
-* [ ] explicit allocation/free functions
-* [ ] error codes
-* [ ] ABI version
-* [ ] thread-safety documentation
-* [ ] safety documentation
-* [ ] C header generation
-* [ ] C integration tests
+All ten mechanics items are 2026-09-29, in `ffi/tpt-media-sys`:
+
+* [x] C ABI — `#[no_mangle] extern "C"` functions returning `i32`
+      error codes, built as both `rlib` (Rust tests) and `staticlib`
+      (`tpt_media_sys.lib`, what a C application links)
+* [x] opaque handles — `TptEncoder`/`TptDecoder`/`TptFrame`/
+      `TptPacket` are Rust structs behind `typedef struct X X;` in the
+      header; C never sees a field
+* [x] explicit ownership — documented per crate docs and per header
+      comment: allocating calls return through `tpt_xxx**` out-params,
+      the caller owns the handle, `const` handles are read-only for
+      the call's duration
+* [x] explicit allocation/free functions — every constructor has a
+      matching `tpt_xxx_free`; freeing NULL is a documented no-op;
+      `tpt_packet_new` copies the caller's bytes
+* [x] error codes — `enum tpt_error` (`TPT_OK`…`TPT_ERR_PANIC`,
+      `#[repr(i32)]`), mapped from the codec framework's `CodecError`;
+      values and meanings are ABI-frozen per the stability rule
+* [x] ABI version — `tpt_abi_version()` (`ABI_VERSION = 1`) with the
+      stated rule: additions are compatible, signature/meaning/layout
+      changes bump the version; `tpt_version_string()` for diagnostics
+* [x] thread-safety documentation — crate docs define the model
+      (exclusive `&mut`-style access per handle, distinct handles
+      usable concurrently, no `Send` promise in v0.1); the header
+      summarizes it
+* [x] safety documentation — every `unsafe` export carries a `#
+      Safety` section stating the caller's obligations, and every
+      `unsafe` block carries a `// SAFETY:` comment tying it to one of
+      those obligations; this crate is the one sanctioned `unsafe`
+      home in CONTRIBUTING §4
+* [x] C header generation — `include/tpt_media.h` is hand-written
+      (deliberately no `cbindgen` dependency) and kept in sync with
+      the ABI by `header_matches_the_abi`, which checks both
+      directions (every export in the header, every header symbol in
+      the library)
+* [x] C integration tests — `tests/integration.c` is a real C
+      translation unit that sees only the header (compiled by `cc`
+      through the build script), drives a full encode→decode round
+      trip plus NULL-argument rejection, and is asserted on by
+      `tests/c_abi.rs`
+
+Boundary behavior worth recording: the type-erased `DynFrame` carries
+no timestamps, so the ABI owns PTS association — `tpt_encoder_encode`
+stamps its packet with the frame's PTS, `tpt_decoder_decode` stamps
+its frame with the packet's (a flushed frame carries PTS 0). Every
+export also runs under `catch_unwind` — a Rust panic becomes
+`TPT_ERR_PANIC` and never unwinds into C.
 
 ---
 

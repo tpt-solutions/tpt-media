@@ -3,8 +3,8 @@ resolver = "2"
 # Note: as we work our way down todo.md, members are added to this list
 # one at a time. The foundation crates (crates/tpt-media-*),
 # tpt-container, the first three codecs (cinder/aura/reed), and the first
-# app (apps/tpt-cli) are enabled; the remaining codec crates, the web/ui
-# apps, and the FFI bridge are listed in todo.md §2 and will be enabled
+# app (apps/tpt-cli) are enabled; the remaining codec crates and
+# the web/ui apps are listed in todo.md §2 and will be enabled
 # as their implementations land.
 members = [
     "crates/tpt-media-core",
@@ -25,6 +25,8 @@ members = [
     "containers/tpt-container",
 
     "apps/tpt-cli",
+
+    "ffi/tpt-media-sys",
 ]
 
 [workspace.package]

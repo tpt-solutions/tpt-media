@@ -9,9 +9,9 @@ The native TPT media framework and codec ecosystem.
 `tpt-media` is the home of the TPT-native media stack: shared media data models,
 timestamps, packet/frame abstractions, codec interfaces, the `.tpt` container,
 bitstream and entropy primitives, media pipelines, native TPT codecs, a probing
-library, and the `tpt` command-line tool. A WASM browser player (`tpt-web`) and
-a stable C ABI (`tpt-media-sys`) are the next milestones (see
-[`todo.md`](todo.md) §45/§46).
+library, the `tpt` command-line tool, and a stable C ABI (`tpt-media-sys`,
+§46). A WASM browser player (`tpt-web`) is the remaining milestone (see
+[`todo.md`](todo.md) §45).
 
 `tpt-media` is **not** a general-purpose DSP library. All transforms,
 filters, signal analysis and SIMD live in the companion [`tpt-dsp`](https://github.com/TPT-Solutions/tpt-dsp)
@@ -58,7 +58,7 @@ marked *(planned)* below.
 | `tpt-video-vault`      | *(planned)* High-compression archival video             |
 | `tpt-video-mote`    | *(planned)* Extreme-edge dictionary-coded video         |
 | `tpt-web`              | *(planned)* WASM browser player                         |
-| `tpt-media-sys`        | *(planned)* Stable C ABI                                |
+| `tpt-media-sys`       | Stable C ABI (§46: opaque handles, error codes, C header)  |
 
 ## Building
 
