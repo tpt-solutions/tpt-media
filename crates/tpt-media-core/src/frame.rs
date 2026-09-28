@@ -120,9 +120,19 @@ pub struct VideoFrame {
 
 impl VideoFrame {
     /// Allocate an empty video frame for the given dimensions.
+    ///
+    /// For the subsampled planar formats ([`PixelFormat::Yuv420`] and
+    /// [`PixelFormat::Nv12`]) the buffer is `1.5 × w × h`: `stride × h`
+    /// luma bytes followed by `stride/2 × h/2` bytes for each of the two
+    /// chroma planes (U then V — the standard I420 plane order).
     pub fn alloc(width: u32, height: u32, format: PixelFormat) -> Self {
         let stride = width * format.bytes_per_pixel() as u32;
-        let pixels = vec![0u8; (stride * height) as usize];
+        let luma = (stride * height) as usize;
+        let extra = match format {
+            PixelFormat::Yuv420 | PixelFormat::Nv12 => luma / 2,
+            _ => 0,
+        };
+        let pixels = vec![0u8; luma + extra];
         VideoFrame {
             frame: Frame {
                 pts: Timestamp::zero(crate::timebase::Timebase::ONE_PER_SECOND),

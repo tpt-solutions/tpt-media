@@ -620,6 +620,9 @@ dependencies = [
 name = "tpt-audio-vox"
 version = "0.1.0"
 dependencies = [
+ "criterion",
+ "libm",
+ "tpt-dsp-core",
  "tpt-media-bitstream",
  "tpt-media-codec",
  "tpt-media-core",
@@ -631,6 +634,7 @@ version = "0.1.0"
 dependencies = [
  "tpt-audio-aura",
  "tpt-audio-pulse",
+ "tpt-audio-vox",
  "tpt-container",
  "tpt-dsp-core",
  "tpt-media-codec",

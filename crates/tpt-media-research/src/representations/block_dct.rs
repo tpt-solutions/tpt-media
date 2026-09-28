@@ -1,7 +1,7 @@
 //! `block_dct` — Avenue A: separable 2D block DCT-II.
 //!
 //! Each B×B tile of every frame is transformed by the single-frame separable
-//! 2D DCT-II in [`super::blockdct::BlockDct2D`] (row pass + column pass of
+//! 2D DCT-II in the sibling `blockdct::BlockDct2D` (row pass + column pass of
 //! `tpt-dsp-core`'s 1D `dct_ii`; inverse via `dct_iii` and the `4/B²` scale).
 //! The coefficient stream is one real value per signal sample — the same
 //! density as `baseline` — laid out tile-by-tile in each frame's own spatial

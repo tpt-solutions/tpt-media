@@ -333,7 +333,7 @@ pub trait Decoder {
     /// (reference frames, sample-rate-conversion history, etc.) so the
     /// decoder can be reused on an unrelated stream. For a graceful
     /// end-of-stream that emits the remaining buffered frames without
-    /// throwing state away, use [`drain`].
+    /// throwing state away, use [`Decoder::drain`].
     fn flush(&mut self) -> CodecResult<Vec<Self::Frame>> {
         Ok(Vec::new())
     }
@@ -371,7 +371,7 @@ pub trait Encoder {
     /// (rate-control history, B-frame queue, etc.) so the encoder can
     /// be reused on an unrelated stream. For a graceful end-of-stream
     /// that emits the remaining buffered packets without throwing
-    /// state away, use [`drain`].
+    /// state away, use [`Encoder::drain`].
     fn flush(&mut self) -> CodecResult<Vec<Packet>> {
         Ok(Vec::new())
     }

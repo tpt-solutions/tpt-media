@@ -23,7 +23,7 @@
 //!
 //! `tpt-dsp` is not modified for any of this: the 2D DCT is a separable row+
 //! column pass over `tpt-dsp-core`'s 1D `dct_ii`/`dct_iii` (see
-//! [`crate::representations::blockdct`]), and VQ uses `tpt-dsp-core`'s
+//! the private `representations::blockdct` module), and VQ uses `tpt-dsp-core`'s
 //! search/encode/decode with the codebook trained here.
 
 pub mod baseline;

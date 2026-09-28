@@ -3,13 +3,13 @@
 //! Layers (each covered in detail in `docs/media-io-design.md`):
 //!
 //! - [`pcm`] — PCM integration: interleaved raw-sample bytes ↔
-//!   [`AudioFrame`], chunked decoding with monotonic PTS, and the
+//!   [`tpt_media_core::AudioFrame`], chunked decoding with monotonic PTS, and the
 //!   `f32` `[-1, 1]` normalization/denormalization pair.
 //! - [`wav`] — WAV: byte-exact round trips for the codec pipeline plus a
 //!   normalized-`f32` bridge that reuses [`tpt_dsp_io`] ('reuse, don't
 //!   duplicate', §27).
 //! - [`raster`] — image/video frame I/O: dependency-free PPM P6 / PGM P5
-//!   readers and writers over [`VideoFrame`], plus fixture generators.
+//!   readers and writers over [`tpt_media_core::VideoFrame`], plus fixture generators.
 //! - [`source`] — streaming sources: the [`FrameSource`] pull trait and
 //!   concrete PCM chunk readers over slices and (with `std`) files/stdin.
 //! - [`sink`] — streaming sinks: the [`FrameSink`] push trait and

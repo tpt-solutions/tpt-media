@@ -6,13 +6,56 @@ video), each tuned for a specific use case.
 
 ## Audio
 
-| Codec  | Niche                  | Key technique             | Sample rate  | Channels  |
-| ------ | ---------------------- | ------------------------- | ------------ | --------- |
-| Pulse  | Real-time, low latency | MDCT + quantization       | 8–48 kHz     | mono–stereo |
-| Aura   | High-fidelity archival | LPC lossless / MDCT lossy | up to 96 kHz  | up to 8   |
-| Vox    | Edge / IoT speech      | LPC + VQ                  | 8–16 kHz     | mono      |
+The table below is the *design* matrix; the binding contract is each
+codec's `supported_formats` table in code, which is deliberately
+narrower today: every audio codec is S16 mono — 44.1/48 kHz for
+Pulse/Aura, 8/16 kHz for Vox.
+
+| Codec  | Niche                  | Key technique             | Sample rate  | Channels  | Status |
+| ------ | ---------------------- | ------------------------- | ------------ | --------- | ------ |
+| Pulse  | Real-time, low latency | MDCT + quantization       | 8–48 kHz     | mono–stereo | implemented (S16 mono, 44.1/48 kHz) |
+| Aura   | High-fidelity archival | LPC lossless / MDCT lossy | up to 96 kHz  | up to 8   | implemented (S16 mono, 44.1/48 kHz) |
+| Vox    | Edge / IoT speech      | LPC + VQ                  | 8–16 kHz     | mono      | implemented (S16 mono, 8/16 kHz) |
+
+### Vox v0.1 — implemented design (2026-09-28)
+
+A source-filter (LPC vocoder) model in the LPC-10 tradition, at a fixed
+20 ms frame (160/320 samples at 8/16 kHz). Per frame the encoder
+transmits a 90-bit parameter payload (+4-byte CRC-32 trailer, the family
+convention): 90 bits of coded parameters = 4.5 kbps; the wire-rounded
+16-byte packet = 6.4 kbps at the container level.
+
+- **Spectral envelope** — Hamming-windowed autocorrelation LPC (order 2–16,
+  default 10) → line spectral pairs → uniform per-coefficient
+  quantization. LSP representation is the safety story: stability under
+  coarse quantization is verifiable (`lsp_is_stable`) and the config
+  enforces `2^lsf_bits > lpc_order` so a strictly-increasing index set
+  always exists; the decoder re-enforces the ordering and rejects any
+  set that still fails the stability check.
+- **Excitation** — voiced frames transmit a 10-bit pitch
+  period (50 Hz–1 kHz searchable) and the decoder drives an impulse
+  train; unvoiced frames transmit a 10-bit index into a fixed 1024-entry
+  stochastic codebook (shape-gain VQ, the CELP fixed-codebook idea).
+  The codebook is *never transmitted*: both sides derive the identical
+  unit-RMS entry from a SplitMix64 stream seeded by the index, so it
+  costs zero wire bits and needs no training corpus.
+- **Gain** — LPC-residual RMS in 1 dB steps over a 62 dB range; index 0
+  is exact mute, so digital silence round-trips to digital silence.
+- **Packet loss** — `conceal()` repeats the last good envelope/voicing/
+  pitch with gain decayed 6 dB per concealed frame (fading to silence).
+- **Known v0.1 simplifications** — no cross-frame pitch-phase
+  continuity, no LSP interpolation across frames, no sign bit on the
+  codebook gain (negative-correlation entries simply score badly in the
+  search), and argmax pitch re-estimation on narrow-band synthetic
+  vowels can lock onto formant ringing near half the true period (the
+  tests assert periodicity at the transmitted lag instead).
 
 ## Video
+
+No video codec is implemented yet (todo.md §32–34); this table is the
+design target the representation research (§56,
+[`representation-research.md`](representation-research.md)) is meant to
+be measured against.
 
 | Codec     | Niche                    | Key technique             | Resolution | Bitrate target |
 | --------- | ------------------------ | ------------------------- | ---------- | -------------- |
@@ -32,31 +75,47 @@ All codecs share:
 
 ## Real-Time vs Offline
 
-Pulse, Livelink and Vox have two execution profiles:
+The two execution profiles, with the claims actually made per codec
+(`Capabilities` in code is binding; "real-time" means bounded allocation
+and bounded work per frame, not literal zero allocation):
 
-- **Real-time**: zero allocation, bounded work, caller-owned buffers,
-  deterministic execution time.
+- **Real-time**: bounded allocation, bounded work, deterministic
+  execution time.
 - **Offline**: allocation permitted, larger scratch buffers, parallel
-  search, expensive RDO (Livelink is offline-only on the encoder side).
+  search, expensive RDO.
 
-The decoder side of every codec is real-time safe by default; the encoder
-side of Pulse, Livelink, and Vox is also real-time safe; the encoder
-side of Aura, Vault, and Whisper is offline.
+Current claims: Pulse is real-time on both the encoder and decoder
+(pinned by `codecs/pulse/tests/realtime_alloc.rs`); Vox is real-time on
+the decoder only — its encoder runs a documented 1024-entry codebook
+search per unvoiced frame and deliberately does *not* claim real-time
+safety (pinned by `codecs/vox/tests/realtime_alloc.rs`); Aura is
+offline on both sides (archival profile). Livelink/Vault/Whisper do not
+exist yet.
 
 ## Determinism
 
 Decoding is always deterministic — any conformant bitstream produces
-identical samples across machines. Encoding is deterministic only when
-explicitly configured; in offline mode we allow non-deterministic
-choices (parallel search, hash-based tie-breaking).
+identical samples across machines (§39 pins this byte-for-byte for
+container generation, packets, and decodes). *Encoding is also fully
+deterministic for every implemented codec*: no RNG, wall-clock, thread
+count, or hash-order dependence exists anywhere in Pulse, Aura, or Vox,
+and the property tests assert byte-identical packets from independent
+encoder instances. The allowance for non-deterministic offline encoding
+(parallel search, hash tie-breaking) remains a policy for future codecs
+that may use it, not a license currently exercised.
 
 ## Bitstream Versioning
 
-Every codec embeds a 4-byte `CodecId` and a `BitstreamVersion` in its
-configuration. A decoder encountering a higher version may attempt to
-decode in compatibility mode but must surface a warning. Forward
-extensions are reserved via tag bits; backward-incompatible changes
-require a new `CodecId`.
+Every codec packet leads with a 16-bit wire-format version (§35) after
+its 4-byte `CodecId` (carried in the container's `TRAK` chunk, not per
+packet). A decoder encountering a version it does not understand fails
+fast with `CodecError::Unsupported` *before* interpreting any further
+bits — there is deliberately no compatibility-mode guesswork and no
+warning channel. Note the honest gap (§35): the codecs have no
+reserved/extension *bits* inside a version yet, so every wire-format
+change so far has been a breaking version bump; the container side has
+the forward-compatible mechanism (reserved chunk ranges, unknown-chunk
+skipping).
 
 ## Patent-Conscious Design Choices
 
@@ -76,31 +135,37 @@ The following choices are made specifically to reduce patent exposure
 
 ## Codec Internal Layout
 
-Each codec crate follows the same internal layout:
+Each codec crate follows the same internal layout (provenance lives
+centrally in [`provenance.md`](provenance.md), not per crate):
 
 ```text
-crates/<codec>/
+codecs/<codec>/
 ├── Cargo.toml
-├── README.md
-├── PROVENANCE.md
 ├── src/
-│   ├── lib.rs           — public API, Encoder/Decoder wrappers
-│   ├── config.rs        — CodecConfig + Capabilities
-│   ├── bitstream.rs     — codec-specific bitstream helpers (optional)
-│   ├── tables.rs        — codec-specific constant tables (optional)
-│   └── <algorithm>.rs   — internal algorithms
+│   └── lib.rs           — public API, config, Encoder/Decoder + factories
+├── benches/
+│   └── codec_bench.rs   — criterion encode/decode bench (§41)
 └── tests/
-    ├── round_trip.rs
-    └── corpus.rs
+    ├── property.rs      — seeded-random round trips + determinism (§38/§39)
+    └── realtime_alloc.rs — bounded-allocation pin (§42, codecs that claim it)
 ```
+
+The wire format, quantizers, and packetization live in `lib.rs` with the
+DSP itself delegated to `tpt-dsp-core` (§3 of `todo.md`); docs/design
+notes live in this directory, not in the crate.
 
 ## Codec Testing
 
-Every codec crate ships:
+Every codec crate ships (all three audio codecs do today):
 
-- Unit tests for every internal algorithm.
-- A round-trip test (synthetic input → encode → decode → compare).
-- A resource-limit test (oversized input must error, not crash).
-- A determinism test (same input → identical bitstream on repeat).
-- A real-time-safety test for codecs that claim it (compile-time
-  assertion + runtime allocation tracker).
+- Unit tests for the internal algorithms (quantizers, bitstream layout,
+  concealment).
+- Round-trip tests (synthetic input → encode → decode → compare).
+- A resource-limit test (oversized/tight-budget input must error, not
+  crash).
+- A determinism test (same input → identical bitstream, across
+  independent instances).
+- The §38 deterministic corruption sweep (arbitrary bytes, truncation,
+  bit flips — no panic, ever).
+- A bounded-allocation test for codecs that claim real-time paths
+  (counting global allocator, `realtime_alloc.rs`).

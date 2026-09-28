@@ -336,9 +336,11 @@ fn transcode_errors_are_stable() {
     );
     assert_eq!(o.code, 1);
     assert!(o.err.contains("use `tpt encode`"));
-    // Vox target → not wired.
+    // Vox target at a 48 kHz source → codec-specific rate gate (vox
+    // speaks 8/16 kHz; there is no CLI resampler).
     let o = run_stdin(&tpt, &["transcode", "--codec", "vox", "-", "-"]);
-    assert_eq!(o.code, 3);
+    assert_eq!(o.code, 1);
+    assert!(o.err.contains("8000 or 16000"), "unexpected err: {}", o.err);
     // Garbage input → not recognisable.
     let o = run_stdin(b"zzz", &["transcode", "--codec", "pulse", "-", "-"]);
     assert_eq!(o.code, 1);

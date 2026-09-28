@@ -174,7 +174,7 @@ impl FileHeader {
     ///
     /// Version checking is performed here:
     /// - version must be non-zero and no greater than [`VERSION`];
-    /// - `header_size` must be at least [`MIN_HEADER_SIZE`];
+    /// - `header_size` must be at least the private `MIN_HEADER_SIZE` constant;
     /// - reserved bytes are read if present (16-byte v0.1 headers parse as
     ///   `reserved == 0`) and otherwise ignored (forward compatibility).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, TptError> {

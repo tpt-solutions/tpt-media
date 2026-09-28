@@ -20,6 +20,7 @@ members = [
     "codecs/pulse",
     "codecs/aura",
     "codecs/vox",
+    "codecs/livelink",
 
     "containers/tpt-container",
 

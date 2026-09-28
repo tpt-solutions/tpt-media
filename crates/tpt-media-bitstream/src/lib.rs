@@ -14,7 +14,7 @@
 //! All types in this crate are allocation-free at runtime: they
 //! operate on caller-owned buffers.
 //!
-//! See [`docs/architecture.md`] §2 for the design rationale.
+//! See `docs/architecture.md` §2 for the design rationale.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 

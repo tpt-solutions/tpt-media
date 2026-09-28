@@ -29,7 +29,7 @@ pub enum NodeEvent<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeError {
     /// Stream/format negotiation failed between adjacent stages (see the
-    /// [`crate::negotiation`] module).
+    /// private `negotiation` module).
     FormatMismatch,
     /// The caller fed the node faster than it can accept; a downstream
     /// stage signalled backpressure for too long.

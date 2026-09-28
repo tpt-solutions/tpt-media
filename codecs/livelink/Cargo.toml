@@ -1,0 +1,29 @@
+[package]
+name = "tpt-video-livelink"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Livelink: TPT low-latency video communication codec (I/P frames, intra refresh, 8x8 DCT)."
+
+[dependencies]
+tpt-media-core = { workspace = true, features = ["std"] }
+tpt-media-bitstream = { workspace = true, features = ["std"] }
+tpt-media-codec = { workspace = true, features = ["std"] }
+tpt-dsp-core = { workspace = true, features = ["std"] }
+
+[features]
+default = ["std"]
+std = ["tpt-media-core/std", "tpt-media-bitstream/std", "tpt-media-codec/std", "tpt-dsp-core/std"]
+
+[[bench]]
+name = "codec_bench"
+harness = false
+
+[dev-dependencies]
+criterion = "0.8"

@@ -9,13 +9,24 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Vox: TPT edge / IoT speech codec (no_std, fixed-point LPC + VQ)."
+description = "Vox: TPT extremely-low-bandwidth speech codec (no_std LPC vocoder with LSP quantization and stochastic-excitation VQ)."
 
 [dependencies]
 tpt-media-core = { workspace = true, default-features = false }
 tpt-media-bitstream = { workspace = true, default-features = false }
 tpt-media-codec = { workspace = true, default-features = false }
+tpt-dsp-core = { workspace = true, features = ["alloc"] }
+# Float math (sqrt/round/log10/pow) that `core` does not provide on the
+# bare-metal thumbv7em target; matches tpt-media-core's approach.
+libm = "0.2"
 
 [features]
 default = ["std"]
-std = []
+std = ["tpt-media-core/std", "tpt-media-bitstream/std", "tpt-media-codec/std", "tpt-dsp-core/std"]
+
+[[bench]]
+name = "codec_bench"
+harness = false
+
+[dev-dependencies]
+criterion = "0.8"

@@ -2,6 +2,7 @@
 
 use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder, AuraMode};
 use tpt_audio_pulse::{PulseDecoder, PulseEncoder, PulseEncoderConfig};
+use tpt_audio_vox::{VoxConfig, VoxDecoder, VoxEncoder};
 use tpt_media_codec::{CodecConfig as FrameworkCodecConfig, Decoder, Encoder, ResourceLimits};
 use tpt_media_container::Container;
 use tpt_media_core::{
@@ -479,20 +480,31 @@ struct EncodeJob {
     extra_meta: Vec<(String, MetadataValue)>,
 }
 
-/// Samples per encode block per codec — the block sizes `tpt encode` has
-/// always used (Pulse's 512 = its 2×256-sample window, Aura's 1024).
-fn samples_per_block(codec: AudioCodec) -> usize {
+/// Samples per encode block per codec — Pulse's 512 = its 2×256-sample
+/// window, Aura's 1024, Vox's 20 ms frame (160/320 samples at 8/16 kHz,
+/// hence the rate).
+fn samples_per_block(codec: AudioCodec, rate: u32) -> usize {
     match codec {
         AudioCodec::Pulse => 2 * 256,
         AudioCodec::Aura => 1024,
-        AudioCodec::Vox => unreachable!("vox jobs are rejected before encoding"),
+        AudioCodec::Vox => rate as usize / 50,
+    }
+}
+
+/// `--quality 0..=100` mapped onto Vox's per-coefficient LSF bit depth.
+/// The floor is 4, not 2: the wire needs `2^lsf_bits > lpc_order` (10) for
+/// a valid strictly-increasing index set to exist at all.
+fn quality_to_lsf_bits(quality: Option<u8>) -> u8 {
+    match quality {
+        None => 5,
+        Some(q) => 4 + (u16::from(q) * 4 / 100) as u8,
     }
 }
 
 /// Encode a job into a finished `.tpt` container; returns the container
 /// bytes and the packet count.
 fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
-    let samples_per_block = samples_per_block(job.codec);
+    let samples_per_block = samples_per_block(job.codec, job.rate);
     let mut encoder = build_encoder(job.codec, job.rate, job.bits_per_coef)?;
     let track_timebase = Timebase::new(1, job.rate);
     let mut muxer = tpt_container::TptMuxer::new(track_timebase);
@@ -501,7 +513,12 @@ fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
     track.codec_config.data = match job.codec {
         AudioCodec::Pulse => vec![job.bits_per_coef],
         AudioCodec::Aura => (samples_per_block as u16).to_le_bytes().to_vec(),
-        AudioCodec::Vox => return Err("the vox codec is not implemented yet".into()),
+        AudioCodec::Vox => VoxConfig {
+            sample_rate: job.rate,
+            lsf_bits: job.bits_per_coef,
+            ..VoxConfig::default()
+        }
+        .to_codec_private(),
     };
     track.media = TrackMedia {
         sample_rate: Some(job.rate),
@@ -558,15 +575,26 @@ fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
     Ok((muxer.finish(), written))
 }
 
+/// Sample rates each codec accepts for `encode`/`benchmark` input
+/// (mirroring the codecs' `supported_formats` tables; there is no CLI
+/// resampler — feed the rate the codec speaks).
+fn supported_input_rates(codec: AudioCodec) -> &'static [u32] {
+    match codec {
+        AudioCodec::Pulse | AudioCodec::Aura => &[44_100, 48_000],
+        AudioCodec::Vox => &[8_000, 16_000],
+    }
+}
+
 /// `tpt encode`: WAV -> codec -> `.tpt`.
 ///
-/// Reads a 16-bit mono WAV (44.1 or 48 kHz, matching the Pulse/Aura
-/// supported-format table), chunks it into codec blocks, encodes each
-/// block, and muxes everything into a `.tpt` container with full track
-/// metadata (track timebase `1/sample_rate`, codec version, sample rate,
-/// channel layout, `--set-meta` tags). `--quality` maps onto the codec
-/// coefficient bit depth; `--bitrate` is validated but not yet applied
-/// (Pulse has no rate control).
+/// Reads a 16-bit mono WAV at one of the codec's supported rates (44.1/48
+/// kHz for Pulse/Aura, 8/16 kHz for Vox), chunks it into codec blocks,
+/// encodes each block, and muxes everything into a `.tpt` container with
+/// full track metadata (track timebase `1/sample_rate`, codec version,
+/// sample rate, channel layout, `--set-meta` tags). `--quality` maps onto
+/// Pulse/Aura coefficient bit depth and Vox's per-coefficient LSF bit
+/// depth; `--bitrate` is validated but not yet applied (Pulse has no
+/// rate control).
 pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     if spec.container != ContainerKind::Tpt {
         return Outcome::fail(
@@ -582,9 +610,6 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Some(c) => c,
         None => return Outcome::fail(1, "no encoder registered for this codec"),
     };
-    if codec == AudioCodec::Vox {
-        return Outcome::fail(3, "the vox codec is not implemented yet");
-    }
     let input = match read_source(&spec.input, ctx) {
         Ok(b) => b,
         Err(e) => return Outcome::fail(1, e),
@@ -595,13 +620,18 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     };
     if frame.format != SampleFormat::S16
         || frame.channel_layout.channels() != 1
-        || (frame.sample_rate != 44_100 && frame.sample_rate != 48_000)
+        || !supported_input_rates(codec).contains(&frame.sample_rate)
     {
         return Outcome::fail(
             1,
             format!(
-                "encode currently requires 16-bit mono wav at 44.1/48 kHz \
+                "encode requires 16-bit mono wav at {} Hz for this codec \
                  (got {:?}, {} ch, {} Hz)",
+                supported_input_rates(codec)
+                    .iter()
+                    .map(|r| r.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" or "),
                 frame.format,
                 frame.channel_layout.channels(),
                 frame.sample_rate
@@ -611,7 +641,7 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     let job = EncodeJob {
         codec,
         rate: frame.sample_rate,
-        bits_per_coef: quality_to_bits(spec.quality),
+        bits_per_coef: quality_param(codec, spec.quality),
         samples: frame.samples,
         sample_count: frame.sample_count as usize,
         extra_meta: spec
@@ -636,7 +666,7 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
 /// Demux and fully decode a `.tpt` byte buffer: returns the audio track
 /// (with its metadata intact) and every decoded frame with block-size
 /// padding already trimmed. Errors carry the CLI exit code they map to
-/// (1 = I/O or malformed, 3 = codec not implemented).
+/// (1 = I/O, malformed, or an unsupported codec/rate combination).
 fn demux_and_decode(
     input: &[u8],
     requested: Option<CodecId>,
@@ -665,9 +695,6 @@ fn demux_and_decode(
         Some(c) => c,
         None => return Err((1, "no decoder registered for this codec".into())),
     };
-    if codec == AudioCodec::Vox {
-        return Err((3, "the vox codec is not implemented yet".into()));
-    }
     let rate = track.media.sample_rate.unwrap_or(48_000);
     let mut decoder = build_decoder(codec, rate, &track).map_err(|e| (1, e))?;
 
@@ -768,6 +795,16 @@ fn trim_padding(frames: &mut [tpt_media_core::AudioFrame], track: &tpt_media_cor
     last.samples.truncate(last.sample_count as usize * 2);
 }
 
+/// Map `--quality 0..=100` onto the codec's per-coefficient bit count —
+/// Pulse/Aura coefficient bit depth, Vox LSF bit depth (default 8 and 5
+/// bits respectively when unspecified).
+fn quality_param(codec: AudioCodec, quality: Option<u8>) -> u8 {
+    match codec {
+        AudioCodec::Vox => quality_to_lsf_bits(quality),
+        _ => quality_to_bits(quality),
+    }
+}
+
 /// Map `--quality 0..=100` onto coefficient bit depth (Pulse/Aura support
 /// a per-coefficient bit count; default 8 bits when unspecified).
 fn quality_to_bits(quality: Option<u8>) -> u8 {
@@ -802,7 +839,17 @@ fn build_encoder(codec: AudioCodec, rate: u32, bits_per_coef: u8) -> Result<Enco
             )
             .map_err(|e| format!("aura encoder: {e}"))?,
         ) as EncoderBox),
-        AudioCodec::Vox => Err("the vox codec is not implemented yet".into()),
+        AudioCodec::Vox => Ok(Box::new(
+            VoxEncoder::new(
+                fw,
+                VoxConfig {
+                    sample_rate: rate,
+                    lsf_bits: bits_per_coef,
+                    ..VoxConfig::default()
+                },
+            )
+            .map_err(|e| format!("vox encoder: {e}"))?,
+        ) as EncoderBox),
     }
 }
 
@@ -872,7 +919,14 @@ fn make_decoder(
                 .map_err(|e| format!("aura decoder: {e}"))?,
             ) as DecoderBox)
         }
-        AudioCodec::Vox => Err("the vox codec is not implemented yet".into()),
+        AudioCodec::Vox => {
+            let cfg = VoxConfig::from_codec_private(rate, private)
+                .map_err(|e| format!("vox decoder: {e}"))?;
+            Ok(
+                Box::new(VoxDecoder::new(fw, cfg).map_err(|e| format!("vox decoder: {e}"))?)
+                    as DecoderBox,
+            )
+        }
     }
 }
 
@@ -913,9 +967,6 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Some(c) => c,
         None => return Outcome::fail(1, "no encoder registered for this codec"),
     };
-    if target == AudioCodec::Vox {
-        return Outcome::fail(3, "the vox codec is not implemented yet");
-    }
     let input = match read_source(&spec.input, ctx) {
         Ok(b) => b,
         Err(e) => return Outcome::fail(1, e),
@@ -938,10 +989,19 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         None => AudioCodec::Vox, // unknown source: name is display-only
     };
     let rate = track.media.sample_rate.unwrap_or(48_000);
-    if rate != 44_100 && rate != 48_000 {
+    if !supported_input_rates(target).contains(&rate) {
         return Outcome::fail(
             1,
-            format!("transcode requires a 44.1/48 kHz source track (got {rate} Hz)"),
+            format!(
+                "transcode to {} requires a {} Hz source track (got {rate} Hz); \
+                 there is no CLI resampler",
+                target.name(),
+                supported_input_rates(target)
+                    .iter()
+                    .map(|r| r.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" or ")
+            ),
         );
     }
     let samples: Vec<u8> = frames
@@ -965,7 +1025,7 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     let job = EncodeJob {
         codec: target,
         rate,
-        bits_per_coef: quality_to_bits(spec.quality),
+        bits_per_coef: quality_param(target, spec.quality),
         samples,
         sample_count,
         extra_meta,
@@ -1067,9 +1127,6 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Some(c) => c,
         None => return Outcome::fail(1, "no encoder registered for this codec"),
     };
-    if codec == AudioCodec::Vox {
-        return Outcome::fail(3, "the vox codec is not implemented yet");
-    }
     let input = match read_source(&spec.input, ctx) {
         Ok(b) => b,
         Err(e) => return Outcome::fail(1, e),
@@ -1080,13 +1137,18 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     };
     if frame.format != SampleFormat::S16
         || frame.channel_layout.channels() != 1
-        || (frame.sample_rate != 44_100 && frame.sample_rate != 48_000)
+        || !supported_input_rates(codec).contains(&frame.sample_rate)
     {
         return Outcome::fail(
             1,
             format!(
-                "benchmark currently requires 16-bit mono wav at 44.1/48 kHz \
+                "benchmark requires 16-bit mono wav at {} Hz for this codec \
                  (got {:?}, {} ch, {} Hz)",
+                supported_input_rates(codec)
+                    .iter()
+                    .map(|r| r.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" or "),
                 frame.format,
                 frame.channel_layout.channels(),
                 frame.sample_rate
@@ -1098,9 +1160,9 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     if total == 0 {
         return Outcome::fail(1, "input wav has no samples");
     }
-    let bits_per_coef = quality_to_bits(spec.quality);
+    let bits_per_coef = quality_param(codec, spec.quality);
     let runs = spec.runs.unwrap_or(5);
-    let block = samples_per_block(codec);
+    let block = samples_per_block(codec, rate);
     let mut encoder = match build_encoder(codec, rate, bits_per_coef) {
         Ok(e) => e,
         Err(e) => return Outcome::fail(1, e),
@@ -1108,7 +1170,12 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     let private = match codec {
         AudioCodec::Pulse => vec![bits_per_coef],
         AudioCodec::Aura => (block as u16).to_le_bytes().to_vec(),
-        AudioCodec::Vox => unreachable!("vox rejected above"),
+        AudioCodec::Vox => VoxConfig {
+            sample_rate: rate,
+            lsf_bits: bits_per_coef,
+            ..VoxConfig::default()
+        }
+        .to_codec_private(),
     };
     let mut decoder = match make_decoder(codec, rate, encoder.info().version, &private) {
         Ok(d) => d,

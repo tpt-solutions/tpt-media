@@ -9,6 +9,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Documentation baseline audit** (§50/§53 gate item, 2026-09-28):
+  every top-level document was checked against the code it describes and
+  the stale claims fixed in place:
+  - `README.md`: the crate table marked the unimplemented video codecs,
+    `tpt-web`, and `tpt-media-sys` as *(planned)*, and gained the
+    previously-omitted `tpt-media-representation`/`tpt-media-research`
+    rows.
+  - `ARCHITECTURE.md`: §6's codec-trait snippet rewritten to the real
+    API (`CodecResult<Vec<Self::Frame>>`, `CodecError`,
+    `DynEncoder`/`Registry` — the old snippet's `DecodeError` and
+    single-frame returns never existed); §2's topology now lists the
+    research crates and marks planned crates; §7 documents the actual
+    `IDX `/`CRC1`/streaming behavior instead of scan-only seeking; §8
+    describes the real backpressure model (`NodeEvent::NeedMore` +
+    stall bound, not ring buffers); §11 now says "bounded allocation"
+    (pinned by tests) instead of "zero allocation" and drops the
+    real-time livelink claim; §10 marked WASM/FFI as design intent.
+  - `docs/architecture.md`: removed the false "vox uses fixed-point
+    i16/i32" claim (it is `f64` + `libm`) and the nonexistent
+    `process_one()` pipeline API (it is `process()`/`Chain`/
+    `Pipeline::pull`); the 32-bit CI note now reflects the
+    `thumbv7em-none-eabi` build job.
+  - `docs/codec-design.md`: format tables gained honest status columns
+    (the code's `supported_formats` — S16 mono everywhere — is binding,
+    not the aspirational matrix); the Real-Time section now states the
+    actual per-codec claims (Pulse both sides, Vox decoder only, Aura
+    offline); Determinism documents that *encoding* is fully
+    deterministic today (§39 pins it); Bitstream Versioning describes
+    the implemented fail-fast policy instead of a compatibility mode
+    that deliberately doesn't exist; the codec internal-layout section
+    matches reality (no per-crate README/PROVENANCE files).
+  - `cargo doc --workspace --no-deps` is now **zero-warning**: 13
+    broken intra-doc links fixed across 7 crates (private items
+    un-linked, cross-crate types fully qualified).
+  - New example `crates/tpt-media-io/examples/io_tour.rs` — a runnable
+    tour of the byte-exact WAV and PPM round trips (closes §50's
+    "examples" item; the root-level `examples/` directory stays empty
+    by design, examples live in the crate they demonstrate).
+  - Stale "exit code 3 = codec not implemented" CLI documentation
+    removed: with Vox wired, every listed codec is implemented and no
+    code path produces exit code 3 any more.
+  - The per-area design docs written alongside their implementations
+    (`container-design`, `pipeline-design`, `media-io-design`,
+    `cli-design`, `security`, `provenance`, `performance`,
+    `representation-research`) were verified accurate as-is.
+
+- **Vox, the extremely low-bandwidth speech codec** (§31 prototype,
+  2026-09-28): `tpt-audio-vox` is now a real implementation — a
+  source-filter LPC vocoder at 8/16 kHz mono, 20 ms frames, in the
+  LPC-10 tradition:
+  - Order-2..=16 (default 10) autocorrelation LPC +
+    Levinson-Durbin from `tpt-dsp-core`, transmitted as uniformly
+    quantized LSP indices (`lpc_to_lsp`/`lsp_to_lpc`/`lsp_is_stable`);
+    the config enforces `2^lsf_bits > lpc_order` so a valid
+    strictly-increasing index set always exists, and the decoder
+    re-enforces ordering before the stability check, so no bit stream —
+    hostile or corrupted — can synthesize through an unstable filter.
+  - Voicing + 10-bit pitch period from `tpt-dsp-core`'s normalized
+    autocorrelation pitch estimator; unvoiced frames carry a 10-bit
+    index into a fixed 1024-entry stochastic codebook (shape-gain VQ,
+    the CELP fixed-codebook idea) that is never transmitted — both
+    sides derive identical unit-RMS entries from a SplitMix64 stream.
+  - Excitation gain (residual RMS) quantized in 1 dB steps over 62 dB,
+    with index 0 as exact mute so digital silence round-trips to
+    digital silence.
+  - Wire format: 16-bit version (§35 convention, rejected up front),
+    order/lsf-bit-depth/voicing header, gain + pitch/codebook fields,
+    LSF indices, CRC-32 trailer (the Aura/Pulse family convention).
+    Default parameter payload is a fixed 90 bits/20 ms = 4.5 kbps;
+    16-byte packets = 6.4 kbps at the container level.
+  - Packet-loss concealment: `VoxDecoder::conceal` repeats the last
+    good envelope/voicing/pitch with gain decayed 6 dB per concealed
+    frame, fading gaps to silence.
+  - Tests: vowel/pitch/envelope round trips on synthetic voiced frames,
+    silence-exactness, resource limits, jittered PTS, determinism,
+    seeded-random property round trips, and the §38 deterministic
+    corruption/truncation/bit-flip sweep; §42 bounded-allocation test
+    (`tests/realtime_alloc.rs`); §41 criterion bench
+    (`benches/codec_bench.rs`). Builds `no_std` for
+    `thumbv7em-none-eabi` (float math via `libm`, matching
+    `tpt-media-core`; it is *not* a fixed-point implementation).
+  - Wired into `tpt-cli`: `encode`/`decode`/`transcode`/`benchmark`
+    all accept `--codec vox` (8/16 kHz inputs; `--quality` maps to LSF
+    bit depth), and the codec-private track data round-trips the
+    config. Provenance records for every algorithm live in
+    `docs/provenance.md`; design notes in `docs/codec-design.md`;
+    measured numbers in `docs/performance.md`.
 - `tpt-cli` §43 completion + §36/§37 quality harness (2026-09-14):
   - `tpt transcode <in.tpt> <out.tpt> --codec <target>` is live: decodes
     the input container's first audio track, re-encodes with the target
@@ -77,6 +164,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- `tpt-media-probe`'s human-readable audio track line printed the
+  first→last PTS envelope **in raw ticks under a "{:.3} s" label** —
+  no timebase conversion — so a 1-second 16 kHz file reported
+  "15680.000 s" (found 2026-09-28 while smoke-testing the new vox CLI
+  path; a `.tpt` file with any track timebase other than 1/1 was
+  affected, e.g. every file `tpt encode` produces). The line now
+  converts through the track timebase; `probe --json` was already
+  correct (it emits ticks and timebase explicitly).
 - `tpt-media-bitstream::range::RangeDecoder::decode` **desynchronized
   from the encoder for any symbol with `freq > 1`** (found 2026-09-14
   by the new §38 property tests, not by review): the decoder narrowed

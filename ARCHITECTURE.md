@@ -38,24 +38,26 @@ crates/    ← generic, codec-independent primitives
   tpt-media-pipeline   — node-based media pipeline
   tpt-media-io         — PCM/WAV/raw I/O
   tpt-media-probe      — introspection
+  tpt-media-representation — swappable representation contracts (research, §56)
+  tpt-media-research   — representation research harness (§56)
 
 codecs/    ← native TPT codecs, each implementing tpt-media-codec
   pulse    ← real-time audio
   aura     ← high-fidelity / archival audio
   vox      ← edge / IoT speech (no_std)
-  livelink ← real-time video
-  vault    ← archival video
-  whisper  ← extreme-edge video
+  livelink ← real-time video            (planned, todo.md §32)
+  vault    ← archival video             (planned, todo.md §33)
+  whisper  ← extreme-edge video         (planned, todo.md §34)
 
 containers/
   tpt-container — the native .tpt format (implements tpt-media-container)
 
 apps/
-  tpt-cli — encode/decode/probe/inspect/benchmark CLI
-  tpt-web — WASM browser player
+  tpt-cli — encode/decode/transcode/probe/inspect/benchmark CLI
+  tpt-web — WASM browser player        (planned, todo.md §45)
 
 ffi/
-  tpt-media-sys — stable C ABI
+  tpt-media-sys — stable C ABI         (planned, todo.md §46)
 ```
 
 ## 3. Dependency Direction
@@ -81,7 +83,7 @@ The shared data model in `tpt-media-core` is deliberately tiny:
 - `Track` — codec configuration + timebase + metadata.
 - `CodecId` — a stable 4-byte identifier.
 - `CodecConfig` — codec-specific serialised configuration.
-- `MediaType` — `Audio` or `Video`.
+- `MediaType` — `Audio`, `Video`, `Subtitle`, or `Metadata`.
 - `Metadata` — key/value pairs of side data.
 
 All decoders allocate one `Frame` per decoded unit and return it via
@@ -104,21 +106,34 @@ bitstream, not a signal transform.
 
 ## 6. Codec Framework
 
-`tpt-media-codec` defines:
+`tpt-media-codec` defines (see the crate docs for the full surface):
 
 ```rust
+pub type CodecResult<T> = Result<T, CodecError>;
+
 pub trait Decoder {
     type Frame;
-    fn decode(&mut self, packet: &Packet) -> Result<Self::Frame, DecodeError>;
-    fn flush(&mut self) -> Result<(), DecodeError>;
+    fn info(&self) -> &CodecInfo;
+    fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<Self::Frame>>;
+    // `flush`/`drain` have defaults; most codecs are stateless enough
+    // not to override them.
 }
 
 pub trait Encoder {
     type Frame;
-    fn encode(&mut self, frame: &Self::Frame) -> Result<Packet, EncodeError>;
-    fn flush(&mut self) -> Result<Packet, EncodeError>;
+    fn info(&self) -> &CodecInfo;
+    fn encode(&mut self, frame: &Self::Frame) -> CodecResult<Vec<Packet>>;
 }
+
+pub enum CodecError { MalformedPacket, ResourceLimit(ResourceLimitKind),
+    Unsupported(&'static str), InvalidConfig(&'static str), /* ... */ }
 ```
+
+A `CodecInfo` carries the codec name/`CodecId`/bitstream version,
+`Capabilities` (lossless/lossy, real-time flags), and a
+`SupportedFormat` table validated up front. Type-erased use goes through
+`DynEncoder`/`DynDecoder` and the `Registry` (factories keyed by
+`CodecId`).
 
 All codecs must support bounded resources (see `todo.md` §19):
 
@@ -134,13 +149,19 @@ The native `.tpt` format is a TLV (Type-Length-Value) chunk-based format
 designed for forward compatibility and fuzz resistance:
 
 ```text
-FileHeader:    magic "TPTM", version, header_size, timebase
-TRAK chunks:   track metadata + codec private data
-CLUS chunks:   timestamped compressed data, with keyframe flag
+FileHeader:    magic "TPTM", version, header_size, timebase, reserved
+TRAK chunks:   track metadata + codec private data (+ TMTA metadata)
+CLUS chunks:   timestamped compressed data, with keyframe/end-of-frame/
+               discontinuity flags and an optional per-cluster CRC-32
+IDX  chunk:    optional versioned keyframe/offset index (per track)
+CRC1 chunk:    container checksum footer written on finalize()
 ```
 
-Unknown chunk types are skipped. Truncated clusters are recovered where
-possible. Seeking scans for `CLUS` chunks where the keyframe flag is set.
+Unknown chunk types are skipped. A missing or newer `IDX ` index is
+ignored (seeking falls back to a linear keyframe scan, and
+`rebuild_index()`/`reconstruct_trailer()` can regenerate it). Truncated
+input either errors strictly or, in streaming mode (`new_streaming` +
+`feed()`), pauses until more bytes arrive.
 
 A second, generic `Container`/`Demuxer`/`Muxer` trait hierarchy in
 `tpt-media-container` allows additional container formats to be plugged in
@@ -148,29 +169,40 @@ without modifying the codecs.
 
 ## 8. Pipeline
 
-`tpt-media-pipeline` models media processing as a directed graph of nodes:
+`tpt-media-pipeline` models media processing as a linear, typed chain of
+nodes:
 
 ```text
 Source → Demux → Decoder → Filter → Encoder → Mux → Sink
 ```
 
-Each node has a single, documented input/output type. Backpressure is
-implemented via bounded ring buffers. Cancellation is cooperative
-(`cancel()` on each node). Timestamps flow through the pipeline
-unchanged except for timebase conversions at boundary nodes.
+Each node consumes at most one input per `process()` call and emits a
+`NodeEvent`. Backpressure is a soft signal (`NodeEvent::NeedMore`) plus a
+stall bound in `Pipeline::pull` that reports
+`NodeError::Backpressure`; `Bounded` adds batching with a hard cap.
+Cancellation is cooperative (`Node::cancel()`, surfaced as
+`NodeError::Cancelled`). Timestamps ride along via `Timestamped` and
+container `Packet`s flow through unchanged. Execution is `Inline` by
+default (deterministic); a std-only `ThreadedExecutor` exists, and the
+real-time scheduling profile (`RealtimeProfile`, latency observation) is
+documented in `docs/pipeline-design.md`.
 
 ## 9. I/O
 
-`tpt-media-io` re-uses `tpt-dsp-io` for PCM and WAV I/O. Container- and
-codec-level I/O lives in `apps/tpt-cli` (for the command line) and
-`apps/tpt-web` (for the browser).
+`tpt-media-io` re-uses `tpt-dsp-io` for its std-gated f32 WAV bridge (the
+byte-exact codec-path WAV reader/writer is local). Container- and
+codec-level I/O lives in `apps/tpt-cli` today; `apps/tpt-web` (browser)
+is a planned consumer.
 
 ## 10. WASM and FFI
 
-- `tpt-web` exposes decoders and the `.tpt` parser to JavaScript via
+Neither exists yet — both are gated milestones (todo.md §45/§46), and
+the descriptions below are the design intent, not shipped surface:
+
+- `tpt-web` will expose decoders and the `.tpt` parser to JavaScript via
   `wasm-bindgen`.
-- `tpt-media-sys` wraps the safe Rust API in `extern "C"` functions and
-  uses `cbindgen` to generate `tpt_media.h`.
+- `tpt-media-sys` will wrap the safe Rust API in `extern "C"` functions
+  and use `cbindgen` to generate `tpt_media.h`.
 
 Both are documented as **stable** at the 1.0 release.
 
@@ -178,8 +210,12 @@ Both are documented as **stable** at the 1.0 release.
 
 Real-time paths are documented per-API. The default execution profile for
 all codecs is **offline**: allocation, parallelism, and RDO are permitted.
-The `pulse`, `livelink`, and `vox` codecs additionally support a
-**real-time** profile with zero allocation and bounded work.
+Pulse claims real-time encode *and* decode, Vox claims real-time decode
+only (its encoder runs a documented 1024-entry codebook search), and
+`livelink` will join them when it exists. "Real-time" here means bounded
+allocation and bounded work per frame — not literally zero allocation —
+and the bounded-allocation claims are pinned by counting-allocator tests
+(`codecs/{pulse,vox}/tests/realtime_alloc.rs`).
 
 Determinism is required for:
 

@@ -8,7 +8,7 @@
 //! This is the standard byte-oriented range coder design used by LZMA and
 //! many other codecs. Encode-side carry propagation is handled by
 //! buffering one "cache" byte plus a run-length of pending `0xFF` bytes
-//! (see [`RangeEncoder::shift_low`]): a later carry can only ever need to
+//! (see the private `RangeEncoder::shift_low`): a later carry can only ever need to
 //! turn a run of trailing `0xFF`s into `0x00`s and increment the byte
 //! before them, so nothing already fully-determined ever has to be
 //! rewritten.

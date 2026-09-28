@@ -6,7 +6,7 @@
 //! straightforward seeded Lloyd's algorithm:
 //!
 //! 1. **Initialisation**: `entries` distinct training vectors chosen by a
-//!    seeded [`crate::det_rng::SplitMix64`]. Fully reproducible.
+//!    seeded private `det_rng::SplitMix64` step. Fully reproducible.
 //! 2. **Assignment**: each vector → its nearest centroid under squared
 //!    Euclidean distance (ties toward the lowest centroid index, matching
 //!    `tpt-dsp-core::vq::nearest_vector`'s determinism).

@@ -62,9 +62,12 @@ offline code, allocations are bounded by `max_allocation_bytes`.
 
 ## Panic Safety
 
-Library code must never panic on malformed input. Panics from internal
-bugs are caught at the FFI boundary (via `catch_unwind`) and surfaced
-as `DecodeError::Internal`.
+Library code must never panic on malformed input — every parse of
+untrusted bytes returns a `Result` (`CodecError::MalformedPacket`,
+`TptError::Truncated`, …), and the §38 sweeps assert Result-or-no-panic
+over hostile inputs. There is no FFI boundary yet (§46); when
+`tpt-media-sys` exists, `catch_unwind` at that boundary will surface
+internal panics as a C-level error code rather than crossing ABI.
 
 ## Fuzzing
 

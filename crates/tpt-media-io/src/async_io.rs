@@ -2,7 +2,7 @@
 //!
 //! The async surface is deliberately tiny and dependency-free (no tokio,
 //! no `async_trait`, no `futures`; `async fn` in traits is stable since
-//! Rust 1.75). Two traits mirror the sync [`FrameSource`]/[`FrameSink`]
+//! Rust 1.75). Two traits mirror the sync [`crate::FrameSource`]/[`crate::FrameSink`]
 //! contracts one-to-one so a source/sink can be lifted into an async
 //! graph or threaded through an executor:
 //!

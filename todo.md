@@ -4,8 +4,8 @@
 **Organization:** TPT Solutions
 **Language:** Rust
 **Status:** Early Implementation
-**Document version:** 2.2
-**Last updated:** 2026-09-14
+**Document version:** 2.3
+**Last updated:** 2026-09-28
 
 ---
 
@@ -61,6 +61,18 @@
   an acceptable answer to nonsense. If real mixed-sign timestamps ever
   matter, switching `Acc` to `i64` with `saturating_sub` in the
   duration math is the fix.
+* **2026-09-28 — probe's audio track line printed raw ticks under a
+  `{:.3} s` label** (found by smoke-testing the new Vox CLI path, not
+  by review — the codec was innocent; the display bug affected every
+  `.tpt` file with a non-1/1 track timebase, i.e. everything `tpt
+  encode` produces): the human-readable `Audio #0: ...` line subtracted
+  first/last PTS ticks and printed them as if they were seconds (a
+  1-second 16 kHz file reported "15680.000 s"), while the container
+  `Duration:` line above it was correct and `probe --json` was already
+  correct (it emits ticks *and* timebase explicitly). Fixed by
+  converting the envelope through the track timebase in the `Display`
+  impl; the existing probe tests still pass (they never asserted the
+  seconds line, which is why this survived).
 
 * ~~**Range coder is broken.**~~ **Correction (2026-09-07, later same day):**
   re-ran `cargo test -p tpt-media-bitstream --lib range` 5× — all 4 range
@@ -1195,19 +1207,59 @@ Initial target:
 mono
 ```
 
-* [ ] LPC analysis
-* [ ] pitch estimation
-* [ ] voiced/unvoiced classification
-* [ ] excitation model
-* [ ] VQ
-* [ ] LSP/LSF if beneficial
-* [ ] fixed-point implementation
-* [ ] `no_std` support
-* [ ] encoder
-* [ ] decoder
-* [ ] packet-loss concealment
-* [ ] deterministic decoding
-* [ ] embedded benchmark
+* [x] LPC analysis — `tpt-dsp-core`'s autocorrelation + Levinson-Durbin
+      over a Hamming-windowed 20 ms frame (order 2..=16, default 10),
+      same §6 primitives Aura lossless uses
+* [x] pitch estimation — `tpt-dsp-core`'s normalized autocorrelation
+      estimator (§7) over the speech F0 range, 10-bit period on the
+      wire (50 Hz–1 kHz searchable at either rate)
+* [x] voiced/unvoiced classification — the same estimator's
+      confidence-thresholded `voiced` flag (1 bit on the wire)
+* [x] excitation model — voiced: impulse train at the transmitted
+      period (classic LPC-10-style, amplitude set so its RMS matches
+      the quantized residual RMS); unvoiced: one 1024-entry stochastic
+      codebook shape scaled by the same gain. Gain (residual RMS) is
+      quantized in 1 dB steps over 62 dB with index 0 as exact mute, so
+      digital silence round-trips to digital silence
+* [x] VQ — shape-gain VQ for the unvoiced excitation over the §31
+      1024-entry codebook target. The codebook is *never transmitted*:
+      both sides derive identical unit-RMS entries from a SplitMix64
+      stream seeded by the index (the CELP fixed-codebook idea, with
+      the training corpus problem sidestepped entirely — the entry
+      distribution is defined by construction, not fitted to data)
+* [x] LSP/LSF if beneficial — beneficial and load-bearing: the
+      spectral envelope is transmitted as uniformly quantized LSP
+      indices (`lpc_to_lsp` → round → `lsp_to_lpc`), with the config
+      enforcing `2^lsf_bits > lpc_order` (a strictly-increasing index
+      set must exist) and the decoder re-enforcing ordering before
+      `lsp_is_stable`, so no bit stream can synthesize through an
+      unstable filter
+* [ ] fixed-point implementation — deliberately not attempted: the
+      implementation is `f64` (analysis) / `f64` (synthesis), `no_std`
+      via `libm` on `thumbv7em-none-eabi`. A Q-format port is its own
+      change (the crate description previously said "fixed-point"
+      aspirationally; fixed to match the code)
+* [x] `no_std` support — `alloc`-only build for
+      `thumbv7em-none-eabi` is the existing CI job and now builds with
+      the real codec in it (float math via `libm`, matching
+      `tpt-media-core`)
+* [x] encoder — `VoxEncoder` (§41 bench: ~266 µs/frame median over a
+      half-voiced/half-noise input; dominated by the unvoiced codebook
+      search, and deliberately *not* claimed real-time-safe)
+* [x] decoder — `VoxDecoder` (~5.9 µs/frame; `real_time_decoder` is
+      claimed and pinned by `codecs/vox/tests/realtime_alloc.rs`)
+* [x] packet-loss concealment — `conceal()` repeats the last good
+      envelope/voicing/pitch with gain decayed 6 dB per concealed
+      frame, fading gaps to exact silence; first-ever concealment
+      (no prior state) is silence
+* [x] deterministic decoding — pinned byte-for-byte across independent
+      instances (`encoding_and_decoding_are_deterministic` and the §39
+      property test); the SplitMix64 codebook is pure integer math
+* [x] embedded benchmark — `codecs/vox/benches/codec_bench.rs`
+      (criterion, 64×320-sample frames @ 16 kHz); results in
+      `docs/performance.md`. Decode at ~3400× realtime is comfortably
+      inside an embedded budget; encode's search is the part a
+      fixed-point/embedded port would have to budget for
 
 Initial codebook target:
 
@@ -1623,7 +1675,10 @@ results + machine caveats recorded in `docs/performance.md`):
       end-to-end wall time on a real WAV — §29)
 * [x] Aura encode/decode — `codecs/aura/benches/codec_bench.rs`
       (lossless, 32×1024-sample blocks @ 48 kHz)
-* [ ] Vox encode/decode — no implementation yet (§31)
+* [x] Vox encode/decode — 2026-09-28:
+      `codecs/vox/benches/codec_bench.rs` (encode/decode of 64×
+      320-sample 20 ms frames @ 16 kHz, alternating voiced/noise
+      blocks); results in `docs/performance.md` (§31)
 * [ ] Livelink encode/decode — no implementation yet (§32)
 * [ ] Vault encode/decode — no implementation yet (§33)
 * [ ] Whisper encode/decode — no implementation yet (§34)
@@ -1915,20 +1970,44 @@ The purpose is provenance and independent implementation, not an absolute legal 
 
 # 50. Documentation
 
-Create:
+All twelve exist and were audited against the code 2026-09-28 (see §53's
+documentation-baseline note for what the audit found and fixed):
 
-* [ ] README
-* [ ] ARCHITECTURE
-* [ ] codec design guide
-* [ ] container specification
-* [ ] pipeline specification
-* [ ] DSP dependency guide
-* [ ] performance guide
-* [ ] security model
-* [ ] provenance/IP policy
-* [ ] contributor guide
-* [ ] API documentation
-* [ ] examples
+* [x] README — crate table now distinguishes implemented vs *(planned)*
+      (video codecs, `tpt-web`, `tpt-media-sys`) and lists the two
+      research crates that existed but were missing from it
+* [x] ARCHITECTURE — `ARCHITECTURE.md`; §6's codec-trait snippet now
+      matches the real API (`CodecError`/`Vec<Frame>`,
+      `DynEncoder`/`Registry`), §2's topology is complete, §7/§8/§11
+      describe the actual container/pipeline/real-time behavior
+* [x] codec design guide — `docs/codec-design.md`; format tables now
+      carry honest per-codec status columns (the design matrix is
+      aspirational, the `supported_formats` tables in code are binding),
+      and the Real-Time/Determinism/Versioning sections describe
+      implemented behavior instead of intent
+* [x] container specification — `docs/container-design.md` (verified
+      against `tpt-container`: header layout, TRAK/TMTA/CLUS/IDX /CRC1,
+      seek behavior, streaming)
+* [x] pipeline specification — `docs/pipeline-design.md` (written with
+      the implementation; verified)
+* [x] DSP dependency guide — the dependency boundary is documented in
+      `ARCHITECTURE.md` §3/§14 and `docs/architecture.md` §1 (rationale
+      for the bitstream split); no standalone guide on purpose — the
+      boundary is two sections, not a subsystem
+* [x] performance guide — `docs/performance.md` (measured tables,
+      determinism/SIMD notes, reproducible bench configuration)
+* [x] security model — `SECURITY.md` (threat model) +
+      `docs/security.md` (implementation mitigations, limit tables)
+* [x] provenance/IP policy — `docs/provenance.md` (per-algorithm
+      records for Pulse and Vox; GREEN-only policy)
+* [x] contributor guide — `CONTRIBUTING.md` (clean-room rules)
+* [x] API documentation — rustdoc on every public item;
+      `cargo doc --workspace --no-deps` is now **zero-warning** (the
+      audit fixed 13 broken intra-doc links across 7 crates)
+* [x] examples — `crates/tpt-media-io/examples/io_tour.rs`: a runnable
+      tour of the byte-exact WAV + PPM round trips (the `examples/`
+      directory at the repo root is intentionally empty; examples live
+      in the crate they demonstrate)
 
 ---
 
@@ -2034,7 +2113,27 @@ Before 0.1:
   `tpt-audio-aura`/`tpt-audio-pulse` (new, found a real bug), and
   `tpt-media-probe` (new). No external fuzz-harness dependency; see §38's
   strategy note for why
-* [ ] documentation baseline — substantial docs exist but describe the aspirational architecture, not current state; not yet audited for accuracy
+* [x] documentation baseline — audited 2026-09-28, every top-level doc
+      checked against the code it describes. Found and fixed: README's
+      crate table listed unimplemented crates as real and omitted the
+      two research crates; `ARCHITECTURE.md` §6 showed codec traits that
+      don't exist (`DecodeError`, single-frame returns), §7-§8 predated
+      the index/streaming container and the pipeline's actual
+      backpressure model, §11 claimed "zero allocation" real-time (it is
+      bounded allocation, pinned by tests) and a real-time livelink;
+      `docs/architecture.md` claimed vox used "fixed-point i16/i32" (it
+      is f64 + libm) and a `process_one()` pipeline API that never
+      existed (it is `process()`/`Chain`/`Pipeline::pull`);
+      `docs/codec-design.md`'s tables overstated implemented formats
+      (96 kHz/8-channel Aura, stereo Pulse) and described a
+      compatibility-mode version policy that the codecs deliberately
+      don't have (§35: fail fast). Also: 13 broken rustdoc links fixed
+      (`cargo doc --workspace` now zero-warning), a runnable `io_tour`
+      example added, and stale "exit code 3 = not wired" CLI docs
+      removed now that every listed codec is wired. The per-area design
+      docs (container/pipeline/media-io/cli/security/provenance/
+      performance/representation-research) were verified accurate —
+      they were written with their implementations
 
 Before 0.2:
 
@@ -2049,7 +2148,11 @@ Before 0.2:
 * [x] Pulse prototype — §29: encoder/decoder/PLC with round-trip,
       packet-loss, jitter tests; ≈3 dB structural ceiling recorded
       (Known Issues); real-time benchmarks recorded (§41)
-* [ ] Vox prototype — §31 not started
+* [x] Vox prototype — §31: LPC + LSP + pitch + stochastic-excitation VQ
+      vocoder with PLC, property/fuzz/alloc tests, criterion bench, CLI
+      wiring, provenance records (2026-09-28); honestly robotic by
+      design at ~4.5 kbps, with envelope/pitch preservation pinned by
+      tests
 * [x] container streaming — §25 all green (fragmented writing,
       incremental parsing, live append, missing trailer, reconstruction)
 * [x] basic pipeline — §26 all green (nodes, negotiation, backpressure,

@@ -24,8 +24,8 @@
 //! | bitrate configuration | `--bitrate <n>[k\|m]` (parsed, `k`=`1e3`,`m`=`1e6`) |
 //! | metadata manipulation | `--set-meta key=value` (repeatable) |
 //! | streaming stdin/stdout | `-` as `<input>` / `<output>` |
-//! | machine-readable output | `--json` on [`probe`] and `benchmark` |
-//! | error reporting | stable exit codes (0 ok, 1 I/O, 2 usage, 3 not wired) |
+//! | machine-readable output | `--json` on `probe` and `benchmark` |
+//! | error reporting | stable exit codes (0 ok, 1 I/O or unsupported, 2 usage) |
 //!
 //! `probe`/`inspect`/`list-codecs`/`encode`/`decode`/`transcode`/
 //! `benchmark` are fully implemented (vox is rejected with exit 3 until
@@ -290,17 +290,23 @@ mod tests {
             &stdin_ctx(wav),
         );
         assert_eq!(o.code, 1);
-        assert!(o.err.contains("16-bit mono wav at 44.1/48 kHz"));
+        assert!(
+            o.err.contains("44100 or 48000"),
+            "unexpected err: {}",
+            o.err
+        );
     }
 
     #[test]
-    fn encode_vox_is_not_wired() {
+    fn encode_rejects_vox_outside_its_rates() {
+        // Vox speaks 8/16 kHz; a 48 kHz input is rejected with the
+        // codec-specific rate list (no CLI resampler).
         let o = run(
             &argv(&["encode", "--codec", "vox", "-", "-"]),
             &stdin_ctx(io_wav(48_000, &[0; 1024])),
         );
-        assert_eq!(o.code, 3);
-        assert!(o.err.contains("vox codec is not implemented yet"));
+        assert_eq!(o.code, 1);
+        assert!(o.err.contains("8000 or 16000"), "unexpected err: {}", o.err);
     }
 
     #[test]
@@ -428,35 +434,30 @@ mod tests {
     }
 
     #[test]
-    fn decode_vox_is_not_wired() {
-        let o = run(
-            &argv(&["decode", "--container", "wav", "-", "-"]),
-            &stdin_ctx(make_tpt_with(b"VOX ")),
+    fn encode_vox_round_trips_through_stdout() {
+        // 640 samples at 16 kHz = two 320-sample (20 ms) vox frames.
+        let samples = sine_samples(640);
+        let enc = run(
+            &argv(&["encode", "--codec", "vox", "-", "-"]),
+            &stdin_ctx(io_wav(16_000, &samples)),
         );
-        assert_eq!(o.code, 3);
-        assert!(o.err.contains("vox codec is not implemented yet"));
-    }
+        assert_eq!(enc.code, 0, "encode stderr: {}", enc.err);
+        let tpt = enc.binary_stdout.expect("tpt on stdout");
+        assert_eq!(&tpt[..4], b"TPTM");
 
-    /// Like [`make_tpt`] but with an arbitrary codec tag on the track.
-    fn make_tpt_with(codec: &[u8; 4]) -> Vec<u8> {
-        let tb = tpt_media_core::Timebase {
-            num: 1,
-            den: 48_000,
-        };
-        let packets = (0..3)
-            .map(|i| {
-                let mut p = tpt_media_core::Packet::empty(
-                    1,
-                    tpt_media_core::Timestamp {
-                        ticks: (i as i64) * 480,
-                        timebase: tb,
-                    },
-                );
-                p.data.extend_from_slice(&[0; 8]);
-                p
-            })
-            .collect::<Vec<_>>();
-        tpt_container::build_tpt(tb, &[(1, codec, &[][..])], &packets)
+        let dec = run(
+            &argv(&["decode", "--container", "wav", "-", "-"]),
+            &stdin_ctx(tpt),
+        );
+        assert_eq!(dec.code, 0, "decode stderr: {}", dec.err);
+        let wav_out = dec.binary_stdout.expect("wav on stdout");
+        assert_eq!(&wav_out[..4], b"RIFF");
+        let frame = tpt_media_io::decode_wav(&wav_out).expect("decoded wav parses");
+        assert_eq!(
+            frame.sample_count as usize,
+            samples.len() / 2,
+            "padding must be trimmed back to the original length"
+        );
     }
 
     #[test]

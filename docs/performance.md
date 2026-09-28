@@ -58,6 +58,7 @@ this repo:
 | --- | --- | --- |
 | `tpt-audio-pulse` | `benches/codec_bench.rs` | encode/decode of 64×512-sample blocks @ 48 kHz |
 | `tpt-audio-aura` | `benches/codec_bench.rs` | lossless encode/decode of 32×1024-sample blocks @ 48 kHz |
+| `tpt-audio-vox` | `benches/codec_bench.rs` | encode/decode of 64×320-sample (20 ms) frames @ 16 kHz |
 | `tpt-container` | `benches/container_bench.rs` | mux + demux of a 200-packet stream |
 | `tpt-media-bitstream` | `benches/bitstream_bench.rs` | bit I/O, Rice, range, Huffman at codec batch sizes |
 | `tpt-media-pipeline` | `benches/pipeline_bench.rs` | `Source→map→Sink` drive over 1 000 packets |
@@ -68,7 +69,7 @@ log-spectral distance) on a real WAV, and reports a real-time factor.
 `cargo bench` (release profile) is the source for the tables below; the
 CLI's numbers from a debug build are ~40× slower and are not comparable.
 
-### Measured results (2026-09-14)
+### Measured results (2026-09-14; Vox added 2026-09-28)
 
 `cargo bench`, criterion (20 samples, 300 ms warm-up, 2 s measurement),
 Windows x64 dev machine, release profile. Numbers are machine-relative —
@@ -81,6 +82,8 @@ same machine when judging a change.
 | `pulse/decode` (64 packets) | 676 µs | 10.6 µs/packet | ≥1000× |
 | `aura_lossless/encode` (32×1024 samples = 0.68 s audio) | 1.80 ms | 56 µs/block | ~380× |
 | `aura_lossless/decode` (32 packets) | 2.37 ms | 74 µs/packet | ~290× |
+| `vox/encode` (64×320 samples = 1.28 s audio, alternating voiced/noise) | 17.0 ms | 266 µs/frame | ~75× |
+| `vox/decode` (64 packets) | 375 µs | 5.9 µs/packet | ~3400× |
 | `tpt_container/mux` (200 packets) | 84 µs | 0.42 µs/packet | — |
 | `tpt_container/demux` (200 packets) | 22 µs | 0.11 µs/packet | — |
 | `bitstream/bit_write` (1024 ops) | 2.6 µs | 2.5 ns/op | — |
@@ -101,6 +104,17 @@ Readings worth recording honestly:
 * **Aura lossless decode is ~4× more expensive than Pulse decode** —
   expected: LPC synthesis + Exp-Golomb per residual vs. band-quantized
   MDCT coefficients. Aura's §30 profile is archival, not real-time.
+* **Vox encode is dominated by the unvoiced shape-gain codebook search**
+  (1024 candidate excitations regenerated and correlated per noise
+  frame; the 266 µs/frame median is over a half-voiced/half-noise bench
+  input — pure voiced frames skip the search entirely). Decode is one
+  codebook-entry regeneration + LPC synthesis per frame: 5.9 µs against
+  a 20 ms frame budget. The encoder deliberately does *not* claim
+  real-time safety (`Capabilities.real_time_encoder` is false); the
+  decoder does, and `codecs/vox/tests/realtime_alloc.rs` pins its
+  bounded allocation. `--quality` (Vox's LSF bit depth) trades envelope
+  fidelity against packet size only — search cost is
+  voicing-dependent, not quality-dependent.
 * **Rice decode is ~5× slower than range decode here** — Rice's unary
   inner loop dominates for k=2-magnitude residuals; the range coder's
   peek+update is branch-free per symbol. If Rice ever becomes a hot path
@@ -114,7 +128,11 @@ Readings worth recording honestly:
 The per-frame allocation *counts* for Pulse's hot path are asserted
 bounded by `codecs/pulse/tests/realtime_alloc.rs` (a counting global
 allocator over 31 steady-state encode+decode passes, budget 512 KiB —
-~25× the measured working set). Peak-memory measurement for Aura and the
+~25× the measured working set), and Vox's by
+`codecs/vox/tests/realtime_alloc.rs` (same harness; 32 steady-state
+passes over alternating voiced/noise frames, same 512 KiB bound — the
+codebook search regenerates entries into one fixed scratch frame rather
+than allocating per candidate). Peak-memory measurement for Aura and the
 container remains `criterion`-profiler work, not yet scripted.
 
 ## SIMD Equivalence (todo.md §40)

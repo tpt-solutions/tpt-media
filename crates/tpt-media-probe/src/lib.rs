@@ -200,10 +200,14 @@ impl fmt::Display for ProbeReport {
                 a.channel_layout
                     .map_or(String::from("?"), |l| l.channels().to_string()),
                 a.frame_count.unwrap_or(0),
-                a.last_pts
-                    .zip(a.first_pts)
-                    .map_or(0.0, |(l, first)| (l.ticks.saturating_sub(first.ticks))
-                        as f64),
+                // first/last PTS are in the track's own timebase —
+                // convert to seconds for the "{:.3} s" label (both
+                // timestamps share the track timebase, so either carries
+                // it).
+                a.last_pts.zip(a.first_pts).map_or(0.0, |(l, first)| {
+                    let tb = l.timebase;
+                    (l.ticks.saturating_sub(first.ticks) as f64) * (tb.num as f64) / (tb.den as f64)
+                }),
             )?;
         }
         for v in &self.video {
