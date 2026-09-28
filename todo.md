@@ -364,7 +364,11 @@ convention as the rest of this document.
       target and was missing `alloc` imports — fixed), and a new CI
       `wasm` job keeps that verified; §45's `tpt-web` itself remains
       unbuilt, but the *components* claim is now tested fact
-* [ ] stable FFI boundary — `tpt-media-sys` (§46) does not exist yet
+* [ ] stable FFI boundary — the ABI now *exists* (§46 v0.1, 2026-09-29)
+      with a stated stability rule, but "stable" is the 1.0 gate (§53's
+      "FFI stability"): the version holds until a signature, error-code
+      meaning, or struct layout forces a bump, and the no-surprises
+      commitment is made at 1.0 alongside the stable codec specs
 * [x] reproducible benchmarks — §41's configuration is fixed in code
       so plain `cargo bench` reproduces it; ownership and the
       record-the-numbers rule live in CONTRIBUTING §11
