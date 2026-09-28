@@ -88,6 +88,23 @@
   one for this list: a `rust-version` nobody tests is a plausible
   falsehood, and plausible falsehoods survive every review.
 
+* **2026-09-29 — `tpt-media-probe` had never actually been built for
+  its own no_std target** (found by testing §1's "WASM-compatible core
+  components" instead of assuming them): the crate carries the
+  `cfg_attr` no_std switch and was assumed compatible, but the first
+  real `cargo check --target wasm32-unknown-unknown
+  --no-default-features` failed with six errors — `format!` and
+  `ToString` were reachable only through the std prelude, so every
+  std build masked the missing `alloc` imports. Two bytes of imports
+  fixed it, and a new CI `wasm` job now keeps all six foundation
+  crates compiling for wasm32 so the claim stays tested rather than
+  presumed. Same-day sibling finding: two latent clippy failures (a
+  hand-rolled no-op waker in `tpt-media-io`'s tests, a `map_or`
+  clippy 1.97 now wants as `is_none_or`) had been hiding behind
+  cached check results and surfaced only when the caches were
+  invalidated — a green `cargo clippy` is only as fresh as its cache,
+  which is exactly why CI re-runs it from scratch.
+
 * ~~**Range coder is broken.**~~ **Correction (2026-09-07, later same day):**
   re-ran `cargo test -p tpt-media-bitstream --lib range` 5× — all 4 range
   tests (`encode_decode_uniform`, `encode_decode_skewed`, and 2 others)
@@ -276,35 +293,115 @@ tpt-media
 
 # 1. Core Design Principles
 
-* [ ] Rust-first
-* [ ] Safe Rust wherever practical
-* [ ] `unsafe` isolated and documented
-* [ ] `no_std` capability for appropriate components
-* [ ] deterministic behavior where practical
-* [ ] zero allocation in real-time hot paths
-* [ ] caller-owned buffers where practical
-* [ ] bounded resource usage
-* [ ] explicit numerical contracts
-* [ ] fuzz-resistant parsing
-* [ ] corruption-tolerant decoding where practical
-* [ ] forward-compatible formats
-* [ ] clean architectural boundaries
-* [ ] reusable crates
-* [ ] WASM-compatible core components
-* [ ] stable FFI boundary
-* [ ] reproducible benchmarks
-* [ ] provenance tracking
-* [ ] patent-conscious design
+Audited 2026-09-29 against the code, with the same evidence-first
+convention as the rest of this document.
 
-Avoid:
+* [x] Rust-first — the entire ecosystem (thirteen workspace crates plus
+      the sibling `tpt-dsp`) is Rust; no C/C++ implementation code
+      exists anywhere
+* [x] Safe Rust wherever practical — every library crate now carries
+      `#![forbid(unsafe_code)]` (2026-09-29), so the claim is enforced
+      by the compiler rather than asserted; the only `unsafe` in the
+      workspace is `tpt-cli`'s `memprobe` `GlobalAlloc` (a measurement
+      harness, and apps are std-by-design) plus the per-codec tests'
+      counting allocators (test code, outside the forbidden libs)
+* [x] `unsafe` isolated and documented — with the forbid pass above,
+      isolation is compiler-checked: the single non-test site is the
+      documented `memprobe` module, whose docs state what is measured
+      and what the harness cannot see
+* [x] `no_std` capability for appropriate components — eight crates
+      carry the `cfg_attr` no_std switch (core, bitstream, codec,
+      pipeline, io, probe, Reed, Thrum); Reed is CI-verified on
+      `thumbv7em-none-eabi`; CONTRIBUTING §10 records the convention
+      and the honest exceptions (`tpt-container`, Cinder, Aura are
+      std-only today despite their feature scaffolding)
+* [x] deterministic behavior where practical — §39: decode, muxing,
+      and scalar DSP are pinned deterministic by tests; encoding is
+      fully deterministic; the SIMD caveat is build-time, not runtime
+* [ ] zero allocation in real-time hot paths — deliberately *not*
+      claimed: the tested reality is *bounded* allocation (§42's
+      `realtime_alloc` + `memory_budget` suites), and the strict
+      reading waits on caller-buffer APIs (the matching open item in
+      §54)
+* [x] caller-owned buffers where practical — `tpt-dsp` transforms and
+      filters take caller output slices; `BitWriter`/`BitReader`
+      operate on caller-provided byte buffers; decoders return frames
+      rather than filling caller state; resource limits are checked
+      *before* an allocation is attempted (§19)
+* [x] bounded resource usage — §19's frame/packet/metadata/allocation/
+      reference-frame limits are enforced in the decoders, hardened by
+      the §47 audits (three real overflow/OOB/bomb bugs found and
+      fixed), and quantified per codec by §42's measured budgets
+* [x] explicit numerical contracts — `tpt-dsp` §12: every algorithm
+      family documents convention, normalization, precision, valid
+      sizes, and failure behavior
+* [x] fuzz-resistant parsing — §38's deterministic
+      corruption/truncation/bit-flip sweeps cover bitstream, container,
+      codecs, and probe, and never panic; the container parses
+      incrementally and tolerates a partial trailing chunk (§25)
+* [x] corruption-tolerant decoding where practical — unknown/reserved
+      container chunks are skipped, missing trailers degrade to
+      scan-based reads, indexes rebuild, and both PLC-capable codecs
+      conceal (§29/§31/§32); the deliberate boundary: unknown
+      *bitstream* versions fail fast rather than guess (§35)
+* [x] forward-compatible formats — the container is
+      forward-compatible by mechanism (reserved chunk ranges,
+      unknown-chunk skipping, versioned index, reserved header bytes);
+      codec bitstreams are versioned but deliberately fail-fast, not
+      forward-compatible — recorded as §35's honest gap rather than
+      claimed here
+* [x] clean architectural boundaries — the §52 graph is acyclic and
+      cargo-enforced; the tpt-dsp dependency direction is verified
+      (§3.1); §54's boundary criteria all pass
+* [x] reusable crates — every crate is consumable standalone (no_std
+      foundations, no app concepts below `apps/`, no codec logic in
+      shared crates); the stronger "reused outside tpt-media by
+      external projects" is §54's open item — a matter of actual
+      external users, not structure
+* [x] WASM-compatible core components — verified 2026-09-29: all six
+      no_std foundation crates compile for `wasm32-unknown-unknown`
+      with std off (probe had never actually been built for the
+      target and was missing `alloc` imports — fixed), and a new CI
+      `wasm` job keeps that verified; §45's `tpt-web` itself remains
+      unbuilt, but the *components* claim is now tested fact
+* [ ] stable FFI boundary — `tpt-media-sys` (§46) does not exist yet
+* [x] reproducible benchmarks — §41's configuration is fixed in code
+      so plain `cargo bench` reproduces it; ownership and the
+      record-the-numbers rule live in CONTRIBUTING §11
+* [x] provenance tracking — §48/§49: complete per-codec records for
+      all four implemented codecs, maintained in the same change as
+      the algorithm
+* [x] patent-conscious design — GREEN-only classification with dated
+      reviews, CONTRIBUTING §3's avoided-technique list, and the
+      "royalty-free design objective" terminology rule followed
+      throughout (no absolute patent-free claims anywhere)
 
-* [ ] unnecessary dependencies
-* [ ] hidden heap allocation
-* [ ] global mutable state
-* [ ] codec-specific DSP duplicated across codecs
-* [ ] application-specific logic in core crates
-* [ ] undocumented numerical assumptions
-* [ ] claims of absolute patent-free status
+Avoid — all verified 2026-09-29:
+
+* [x] unnecessary dependencies — thiserror and bitflags in the
+      foundations, clap only in the CLI, criterion only in dev-deps,
+      libm only where no_std float math requires it; no serde, no
+      external fuzz harness, no allocator crates
+* [x] hidden heap allocation — allocation is visible and measured:
+      caller buffers where practical, Thrum's single reused scratch
+      buffer, and §42's byte-level working-set tests catching any
+      hidden growth by assertion rather than by review
+* [x] global mutable state — no library crate has mutable global
+      program state; the only interior-mutability statics are the
+      memprobe counters (process-scoped measurement instrumentation,
+      documented) and test allocators
+* [x] codec-specific DSP duplicated across codecs — §54's criterion:
+      transforms, masking, LPC, and noise shaping are consumed from
+      `tpt-dsp`; the codecs contain codec logic only
+* [x] application-specific logic in core crates — `tpt-media-core`
+      has no CLI, app, or I/O concepts; those live in `apps/` and
+      `tpt-media-io`
+* [x] undocumented numerical assumptions — §12's contracts, plus the
+      wire formats now specified field-by-field (§54)
+* [x] claims of absolute patent-free status — every provenance record
+      and document carries the jurisdictional disclaimer; the
+      "patent-conscious / royalty-free design objective" wording is
+      used consistently
 
 Preferred terminology:
 

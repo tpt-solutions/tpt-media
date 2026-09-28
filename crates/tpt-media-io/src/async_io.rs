@@ -73,17 +73,11 @@ mod tests {
     use alloc::vec::Vec;
     use core::future::Future;
     use core::task::{Context, Poll};
-    use std::sync::Arc;
     use tpt_media_core::SampleFormat;
 
-    struct Noop;
-    impl std::task::Wake for Noop {
-        fn wake(self: Arc<Self>) {}
-    }
-
     fn block_on<F: Future>(fut: F) -> F::Output {
-        let waker = std::task::Waker::from(Arc::new(Noop));
-        let mut cx = Context::from_waker(&waker);
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
         let mut fut = std::boxed::Box::pin(fut);
         loop {
             if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {

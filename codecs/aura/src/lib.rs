@@ -43,6 +43,8 @@
 //!
 //! See `docs/provenance.md` for algorithm sources.
 
+#![forbid(unsafe_code)]
+
 extern crate alloc;
 
 use alloc::vec;

@@ -22,6 +22,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **§1 Core Design Principles audited and enforced** (2026-09-29): the
+  one remaining un-audited block of todo.md now carries the same
+  evidence-first annotations as everything else. Two of its claims
+  became enforced facts rather than intentions in this change:
+  - every library crate (the six no_std foundation crates, all four
+    codecs, `tpt-container`, and the two research crates — thirteen in
+    total) now carries `#![forbid(unsafe_code)]`, so "safe Rust
+    wherever practical" and "unsafe isolated" are compiler-checked;
+    the workspace's only remaining `unsafe` is the CLI's documented
+    `memprobe` allocator harness plus the per-codec test allocators;
+  - "WASM-compatible core components" is now a tested fact: all six
+    no_std foundation crates compile for `wasm32-unknown-unknown` with
+    std off, and a new CI `wasm` job enforces it.
 - **§48/§49 provenance completion and §51 engineering policies**
   (2026-09-29):
   - `docs/provenance.md` — the two missing per-codec records added
@@ -332,6 +345,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- `tpt-media-probe` did not compile for `wasm32-unknown-unknown` with
+  std off despite carrying the no_std switch — `format!`/`ToString`
+  came from the std prelude and the `alloc` imports were missing
+  (found 2026-09-29 by building the foundation crates for wasm32 for
+  the first time; every std build masked it). Fixed with the two
+  missing imports, plus two latent clippy failures surfaced when
+  check caches invalidated: a hand-rolled no-op waker in
+  `tpt-media-io`'s tests replaced with `Waker::noop()` (stable since
+  the declared MSRV) and a `map_or` → `is_none_or` in probe's
+  timestamps test.
 - **The declared MSRV was never true** (2026-09-29, found by testing it
   for the first time): `rust-version = "1.75"` was falsified by the
   committed lockfile — Cargo 1.75 cannot parse `clap_builder` 4.6's

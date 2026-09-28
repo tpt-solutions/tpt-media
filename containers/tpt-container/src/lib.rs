@@ -33,6 +33,8 @@
 //!
 //! See `docs/container-design.md` for the full specification.
 
+#![forbid(unsafe_code)]
+
 extern crate alloc;
 
 mod crc32;

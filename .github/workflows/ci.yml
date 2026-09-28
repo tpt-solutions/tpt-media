@@ -63,3 +63,19 @@ jobs:
           targets: thumbv7em-none-eabi
       - name: cargo build no_std reed
         run: cargo build -p tpt-audio-reed --target thumbv7em-none-eabi --no-default-features
+
+  wasm:
+    name: wasm32 build (foundation crates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      # §1's "WASM-compatible core components", enforced: the six
+      # no_std foundation crates must keep compiling for wasm32 with
+      # std off (todo.md §45's decoder sits on exactly these).
+      - name: cargo check foundation crates for wasm32
+        run: cargo check -p tpt-media-core -p tpt-media-bitstream -p tpt-media-codec -p tpt-media-pipeline -p tpt-media-io -p tpt-media-probe --target wasm32-unknown-unknown --no-default-features --locked

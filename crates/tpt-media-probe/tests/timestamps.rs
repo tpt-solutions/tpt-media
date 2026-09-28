@@ -85,7 +85,7 @@ fn probe_survives_extreme_and_degenerate_timestamp_sets() {
         match report.duration_seconds {
             Some(d) if d > 0.0 && d < 1_000_000_000.0 => {
                 assert!(
-                    report.bitrate_bits_per_second.map_or(true, |b| b > 0),
+                    report.bitrate_bits_per_second.is_none_or(|b| b > 0),
                     "{name}: positive bitrate required for a sane duration"
                 );
             }
