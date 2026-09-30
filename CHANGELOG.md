@@ -26,8 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Measured (release, 176×144 4:2:0 synthetic clips): about 45–55 ms/frame to
   encode, 1.9 ms to decode; forbidding partitions above 8×8 costs 63% more
   bytes at equal quality; the loop filter helped a textured clip and hurt a
-  smooth one. Registered in the CLI's probe registry only — **not** wired
-  into `encode`/`decode` (see `todo.md` §33 for what is left open). Design
+   smooth one. Registered in the CLI's probe registry only � **not** wired
+   into `encode`/`decode` (see `todo.md` �33 for what is left open). Design
   notes in `docs/codec-design.md`, measurements in `docs/performance.md`,
   sources in `docs/provenance.md` (every row `under-review`: no maintainer
   patent review yet).
@@ -136,6 +136,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **§38 unit-test sweep over `tpt-media-representation`'s public API**
+  (2026-10-01): the crate had 37 public items, 10 tests, all inline, and **no
+  `tests/` directory at all**; `representation`, `quantizer` and `rate` — three
+  of its six modules — had no tests whatsoever. 26 new inline tests (10 → 36)
+  plus `tests/contracts.rs`, the crate's first integration test (8 tests),
+  across the §38 categories that had no coverage: empty input, maximum values,
+  overflow, edge cases, malformed input, and the documented panics. The three
+  trait-only modules still have no *inline* tests by design —
+  `Representation`, `Quantizer`, `RateEstimator` and `CoeffMagnitudes` have no
+  implementor inside the crate, so their contracts are only observable from
+  outside it, and `tests/contracts.rs` implements all four for real and drives
+  the full analyse → quantise → charge → dequantise → synthesise → measure
+  loop. That pins the `Quantized`-carries-everything contract (the quantiser
+  reads `step` out of `Quantized`, not out of itself), the `RateEstimator`
+  "no free decoder-side information" rule, a monotone rate/distortion frontier
+  over a six-point sweep, and §39 determinism. Three new tests fail against
+  the pre-change code, verified by restoring each old body and re-running.
+- **`tpt-media-representation`'s `SignalDims::frame_len`/`samples` answered
+  differently depending on the build profile** (2026-10-01, found while
+  auditing that crate's public API against §38's unit-test gate). Both computed
+  `width * height [* frames]` with a plain `*`, which is a **panic in debug and
+  a silent wrap in release**: one `SignalDims` described two different volumes
+  depending on the profile, and the wrapped value is what every caller derives
+  from — the `Vec` allocations, the `frame()` slices, the sample indices.
+  `SignalDims { width: usize::MAX, height: 2, frames: 1 }` wrapped to
+  18 446 744 073 709 551 614 samples. Both products are now `checked_mul` with
+  a stated message, so the profiles agree. The same class of defect as
+  `tpt-media-pipeline`'s `Source::from_range` above.
+- **`SignalBuffer::sample_bilinear_toroidal` divided by zero on a
+  zero-extent volume** (2026-10-01, same audit). With `width == 0`,
+  `x.rem_euclid(0.0)` is `NaN`, `NaN as usize` is `0`, and the following
+  `% width` panics with `attempt to calculate the remainder with a divisor of
+  zero` — true, but it names the arithmetic rather than the cause. A
+  zero-extent volume is legally constructible from outside the crate
+  (`SignalBuffer::zeroed` accepts it), so the panic was reachable through the
+  public API. The precondition is now stated, documented and checked.
 - **`tpt-media-pipeline`'s `Source::from_range` answered differently
   depending on the build profile** (2026-09-30, found while auditing the
   crate's public API against §38's unit-test gate). Converting an exclusive
