@@ -16,8 +16,41 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `.tpt` with a zero timebase component aborted the process.**
+  `FileHeader::from_bytes` handed the file's own numerator and denominator
+  straight to `Timebase::new`, whose documented contract is "a zero component
+  panics in debug; in release it is treated as `1/1`". So the same crafted
+  file killed a debug build with
+  `panicked at tpt-media-core/src/timebase.rs: timebase denominator must be
+  non-zero`, and was silently re-interpreted as a *different* timebase in a
+  release one. Found by patching four header bytes of a real `.tpt` and
+  running `tpt probe` on it; the header is now rejected with `BadHeader` at
+  every entry point (`TptDemuxer::new`/`new_streaming`, `parse_tpt`,
+  `for_each_chunk`). `decode_trak` already validated its own timebase and
+  fell back to the header's — the header had to become trustworthy for that
+  fallback to mean anything. `tpt probe` on the same file now reports
+  `WARNING: TPT parse error: bad header` and exits 0.
+- **`read_chunk_header` overflowed on a hostile offset.** The bounds check was
+  `pos + 8 > bytes.len()`, which is a debug panic at `pos = usize::MAX` and
+  wraps in release into a slice index panic — either way a panic, from a
+  `pub` primitive whose contract is to return `None`. Rewritten as a
+  `checked_sub` on the length.
+
 ### Added
 
+- **§38 unit-test sweep over the crate's public API** (2026-09-30): 13 new
+  tests for the items that had no coverage — the zero-timebase rejection and
+  its reach through every entry point, `decode_trak`'s timebase fallback,
+  `read_chunk_header` at and past its 8-byte boundary and against hostile
+  offsets, `encode_chunk` round-tripping through it (empty body included),
+  `chunk_id_is_reserved` across the whole `0x00..=0xFF` range with the
+  `0x1F` boundary pinned in both directions, `parse_tpt`'s round trip and
+  its rejection of non-containers, `seek_to_offset` (including past the end),
+  `verify_cluster_checksums` on a file written without checksums, and
+  `with_limits`. Three of them fail against the previous code — verified by
+  restoring the old bodies and re-running.
 - **Per-crate README, changelog, keywords and categories** (2026-09-30):
   crate-specific `README.md` and manifest `keywords`/`categories`.
 - Seeded-random property tests (`tests/property.rs`, 2026-09-11): random

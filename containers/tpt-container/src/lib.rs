@@ -728,10 +728,7 @@ mod tests {
             // `TptError` deliberately derives only `Debug`, so the variant
             // is matched rather than compared.
             assert!(
-                matches!(
-                    FileHeader::from_bytes(&b).err(),
-                    Some(TptError::BadHeader)
-                ),
+                matches!(FileHeader::from_bytes(&b).err(), Some(TptError::BadHeader)),
                 "num={num} den={den} must be rejected"
             );
         }
@@ -760,7 +757,12 @@ mod tests {
     fn a_track_timebase_falls_back_to_the_header_rather_than_panicking() {
         // `decode_trak` validates its own timebase and falls back; pinned so
         // the two levels of validation cannot drift apart.
-        let mut t = Track::new(0, MediaType::Audio, CodecId::new(*b"CIND"), Timebase::MILLISECONDS);
+        let mut t = Track::new(
+            0,
+            MediaType::Audio,
+            CodecId::new(*b"CIND"),
+            Timebase::MILLISECONDS,
+        );
         t.timebase = Timebase { num: 0, den: 0 };
         let decoded = decode_trak(&encode_trak(&t), Timebase::MILLISECONDS).expect("trak decodes");
         assert_eq!(decoded.timebase, Timebase::MILLISECONDS);
@@ -837,13 +839,7 @@ mod tests {
             );
         }
         // The five defined chunk IDs are all outside the reserved range.
-        for id in [
-            CHUNK_TRAK,
-            CHUNK_TMTA,
-            CHUNK_CLUS,
-            CHUNK_IDX,
-            CHUNK_CRC1,
-        ] {
+        for id in [CHUNK_TRAK, CHUNK_TMTA, CHUNK_CLUS, CHUNK_IDX, CHUNK_CRC1] {
             assert!(!chunk_id_is_reserved(&id), "{id:?} must not be reserved");
         }
     }
