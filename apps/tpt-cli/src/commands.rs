@@ -129,6 +129,26 @@ fn probe_registry() -> tpt_media_codec::Registry {
         r.register_decoder(dec);
         r.register_encoder(enc);
     }
+    // Vault: same placeholder-geometry rule as Thrum. Registered so a
+    // `.tpt` carrying a VAUL track probes as decodable; `encode`/`decode`
+    // do not drive it yet (no y4m bridge for Vault - see its README).
+    if let (Ok(dec), Ok(enc)) = (
+        tpt_video_vault::VaultDecoderFactory::new(tpt_video_vault::VaultConfig::default()),
+        tpt_video_vault::VaultEncoderFactory::new(tpt_video_vault::VaultConfig::default()),
+    ) {
+        r.register_decoder(dec);
+        r.register_encoder(enc);
+    }
+    // Mote: same placeholder-geometry rule as Thrum. Registered so a
+    // `.tpt` carrying a MOTE track probes as decodable; `encode`/`decode`
+    // do not drive it yet (no y4m bridge for Mote - see its README).
+    if let (Ok(dec), Ok(enc)) = (
+        tpt_video_mote::MoteDecoderFactory::new(tpt_video_mote::MoteConfig::default()),
+        tpt_video_mote::MoteEncoderFactory::new(tpt_video_mote::MoteConfig::default()),
+    ) {
+        r.register_decoder(dec);
+        r.register_encoder(enc);
+    }
     r
 }
 

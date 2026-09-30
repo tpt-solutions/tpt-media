@@ -39,6 +39,53 @@ When a limit is exceeded, the decoder returns
 (`max_metadata_bytes` against a raw `TMTA` body, for example).
 `TptDemuxer` accepts limits via `with_limits`/`new_streaming_with_limits`.
 
+## Browser Player Memory Limits (§45, `tpt-web`)
+
+`apps/tpt-web` runs the decoders inside WebAssembly, where the memory
+model changes the threat: linear memory only grows, and a failed growth
+aborts the whole module, so a hostile file must be refused *before* it
+can ask for memory rather than after. `tpt_web::WebLimits` wraps
+`ResourceLimits` with the player-level bounds; the design and full table
+are in [`web-design.md`](web-design.md) section 7. In summary:
+
+- **Every bound is checked before allocating**, from the 8-byte chunk
+  header alone: a `CLUS` claiming more than `max_packet_bytes`, a `TMTA`
+  above `max_metadata_bytes`, or a `TRAK` above 256 KiB fails the stream
+  with `WebError::Limit` without buffering a body byte. Unknown chunks are
+  skipped without buffering at all, whatever size they claim.
+- **The unparsed backlog is capped** (`max_input_buffer_bytes`, default
+  16 MiB): `push` returns the retryable `InputFull` and consumes nothing,
+  so a fast or malicious network source cannot grow memory without bound.
+  Buffer growth uses `try_reserve`, so an allocation failure is an error,
+  not an abort.
+- **Decoded output is capped**: audio queue (default 2 s), picture queue
+  (default 4) and per-frame size (default 8 MiB, checked against the
+  *RGBA* size at track declaration and again per frame) each have a soft
+  limit that stalls decoding and a hard stop at 2x that drops output.
+  A track that claims a 60 000 x 60 000 picture is refused before any
+  decoder is built.
+- **Caller-supplied limits are clamped** to `WebLimits::ceiling()`, including
+  through the C ABI, so page script cannot ask for an unbounded budget;
+  at most 4 players and one 4 MiB staging slice exist per module.
+- **Undecodable packets are tolerated but bounded** (`max_decode_errors`,
+  default 256): a corrupt packet is skipped and counted, and enough of them
+  fail the stream, so hostile input always terminates.
+- **The worst case is a computed number**, not a hope:
+  `WebLimits::memory_ceiling_bytes()` is 223 MiB for the defaults, pinned by
+  a test, and the linker `--max-memory` cap (`web/build.mjs`, default 512
+  MiB) bounds the instance regardless.
+- **`unsafe` is confined to the export module** (`abi.rs`); no pointer ever
+  flows from JavaScript into Rust (input is staged in module-owned memory),
+  so the parser and player are safe code. The same deterministic
+  mutation/truncation/noise sweeps as §38 run against the parser and player
+  natively and against the built wasm under Node (`web/check.mjs`: 300 files,
+  zero traps).
+
+Not yet bounded: `max_decode_micros` and cancellation (no codec checks them;
+§19), and the browser main thread itself (decoding is not in a Worker), so a
+pathological-but-legal stream can still make a page unresponsive for the
+duration of one packet's decode.
+
 ## Bounds Checks
 
 All reads from `&[u8]` use `checked indexing` (returning a `Result`)
@@ -121,7 +168,11 @@ A malicious file cannot expand into unbounded memory because:
   buffer is allocated.
 - The bitstream reader refuses to read past the declared packet size.
 - Recursive algorithms (e.g., superblock partitioning in Vault) have a
-  bounded recursion depth.
+  bounded recursion depth. Vault's is structurally three levels (64 → 8)
+  and is additionally checked against `limits.max_recursion_depth` on every
+  packet; its corruption sweep repairs the CRC after corrupting the body so
+  that the parser, not just the checksum, is exercised
+  (`codecs/vault/tests/property.rs`).
 
 ## FFI Safety
 

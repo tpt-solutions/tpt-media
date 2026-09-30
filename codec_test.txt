@@ -1,0 +1,10 @@
+   Compiling tpt-media-codec v0.1.0 (C:\Programming\2 WIP\tpt-media\crates\tpt-media-codec)
+error: expected expression, found keyword `fn`
+   --> crates\tpt-media-codec\src\lib.rs:766:5
+    |
+766 |     fn audio(rate: u32) -> SupportedFormat {
+    |     ^^ expected expression
+
+error: could not compile `tpt-media-codec` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `tpt-media-codec` (lib test) due to 1 previous error

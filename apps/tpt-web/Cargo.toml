@@ -1,0 +1,50 @@
+[package]
+name = "tpt-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["wasm", "webassembly", "player", "tpt", "browser"]
+categories = ["wasm", "multimedia", "web-programming"]
+readme = "README.md"
+description = "Browser player core for .tpt media: WASM-compatible streaming decoder with hard memory limits and a plain C-ABI export surface."
+
+[lib]
+# `cdylib` is the artifact a browser loads
+# (`cargo build -p tpt-web --target wasm32-unknown-unknown --release`);
+# `rlib` keeps the crate linkable by the host-side tests, the example and
+# the benchmark, and keeps `cargo build --workspace` working natively.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# `version` on every path dependency: required for `cargo package`.
+tpt-media-core = { workspace = true, features = ["std"] }
+tpt-media-codec = { workspace = true, features = ["std"] }
+tpt-container = { workspace = true, features = ["std"] }
+tpt-audio-cinder = { workspace = true, features = ["std"] }
+tpt-audio-aura = { workspace = true, features = ["std"] }
+tpt-audio-reed = { workspace = true, features = ["std"] }
+tpt-video-thrum = { workspace = true, features = ["std"] }
+
+[features]
+default = []
+# Deterministic synthetic-media generators (`tpt_web::synth`): they run the
+# encoders, which the player itself never needs. Enabled for this crate's own
+# tests, example and benchmark via the self dev-dependency below; a consumer
+# of the player does not pay for it.
+synth = []
+
+[dev-dependencies]
+tpt-web = { path = ".", features = ["synth"] }
+
+[[example]]
+name = "make_demo"
+required-features = ["synth"]
+
+[[bench]]
+name = "decode_throughput"
+harness = false
+required-features = ["synth"]

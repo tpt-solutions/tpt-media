@@ -3,9 +3,10 @@ resolver = "2"
 # Note: as we work our way down todo.md, members are added to this list
 # one at a time. Currently enabled: the nine `crates/tpt-media-*`
 # foundation/research crates, all four implemented codecs
-# (cinder/aura/reed/thrum), `tpt-container`, the CLI, and the C ABI
-# (`ffi/tpt-media-sys`). Still unimplemented — Vault and Mote (todo.md
-# §33/§34) and the WASM player `tpt-web` (§45) — are listed in
+# (cinder/aura/reed/thrum/vault), `tpt-container`, the CLI, and the C ABI
+# (`ffi/tpt-media-sys`). Vault (todo.md §33) joined with its
+# implementation. Still unimplemented — Mote (todo.md §34) and the WASM
+# player `tpt-web` (§45) — are listed in
 # todo.md §2 and get a member entry when their implementation lands.
 # Their `[workspace.dependencies]` entries below exist already so the
 # `version` a future publish needs is declared up front; Cargo does not
@@ -26,10 +27,13 @@ members = [
     "codecs/aura",
     "codecs/reed",
     "codecs/thrum",
+    "codecs/vault",
+    "codecs/mote",
 
     "containers/tpt-container",
 
     "apps/tpt-cli",
+    "apps/tpt-web",
 
     "ffi/tpt-media-sys",
 ]

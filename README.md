@@ -10,8 +10,8 @@ The native TPT media framework and codec ecosystem.
 timestamps, packet/frame abstractions, codec interfaces, the `.tpt` container,
 bitstream and entropy primitives, media pipelines, native TPT codecs, a probing
 library, the `tpt` command-line tool, and a stable C ABI (`tpt-media-sys`,
-§46). A WASM browser player (`tpt-web`) is the remaining milestone (see
-[`todo.md`](todo.md) §45).
+§46). A WASM browser player (`tpt-web`, §45) decodes `.tpt` audio and video in
+the browser.
 
 `tpt-media` is **not** a general-purpose DSP library. All transforms,
 filters, signal analysis and SIMD live in the companion [`tpt-dsp`](https://github.com/TPT-Solutions/tpt-dsp)
@@ -34,9 +34,8 @@ crate. The intended stack is:
 
 ## Ecosystem
 
-Only the crates implemented so far are workspace members; Vault, Mote and
-the WASM player `tpt-web` land in their `todo.md` order and are marked
-*(planned)* below.
+Only the crates implemented so far are workspace members; Vault
+lands in its `todo.md` order and is marked *(planned)* below.
 
 | Crate                  | Purpose                                                 |
 | ---------------------- | ------------------------------------------------------- |
@@ -56,8 +55,8 @@ the WASM player `tpt-web` land in their `todo.md` order and are marked
 | [`tpt-video-thrum`](codecs/thrum)   | Real-time video communication (I/P, intra refresh, 8x8 DCT)  |
 | [`tpt-cli`](apps/tpt-cli)              | Command-line encoder/decoder/probe                      |
 | `tpt-video-vault`      | *(planned)* High-compression archival video             |
-| `tpt-video-mote`       | *(planned)* Extreme-edge dictionary-coded video         |
-| `tpt-web`              | *(planned)* WASM browser player                         |
+| [`tpt-video-mote`](codecs/mote)       | Extreme-edge video (8x8 patch dictionary VQ, 12-bit index, temporal skip) |
+| [`tpt-web`](apps/tpt-web)              | WASM browser player (streaming decode, WebAudio + canvas demo) |
 | [`tpt-media-sys`](ffi/tpt-media-sys)       | Stable C ABI (§46: opaque handles, error codes, C header)  |
 
 Each crate link goes to its own `README.md`, which carries the usage examples,

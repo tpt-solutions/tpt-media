@@ -168,6 +168,90 @@ and per-macroblock quantiser adaptation. All appear in the H.26x / MPEG
 literature and are beyond v0.1 scope; revisiting any of them extends
 this table before landing.
 
+## Mote — v0.1
+
+Implemented from textbook/academic descriptions only
+(`codecs/mote/src/`); no code was derived from any external reference
+implementation, and no external VQ or video codec source was read. The one
+in-repo precedent is `tpt-media-research`'s `kmeans.rs` (same project and
+licence): Mote's trainer follows the same textbook Lloyd shape but is a
+separate implementation (integer centroids, different init and re-seating
+details), and the codec does not depend on the research crate. As everywhere in `tpt-media`, no absolute patent-free claim is
+made — patent status is jurisdictional (todo.md §1). The source classification is
+GREEN for every row, but **no patent review has been recorded yet**: every row
+is `pending` / `under-review` until a maintainer signs it off, unlike the
+Thrum table above. Dictionary
+(vector-quantisation) image coding and conditional replenishment are decades
+old; the specific combination below is this project's own.
+
+| Algorithm | Reference | Source | License | Patent review | Status |
+| --------- | --------- | ------ | ------- | ------------- | ------ |
+| Vector quantisation (nearest-codeword encode, table-lookup decode) | Gray, "Vector quantization", IEEE ASSP Magazine (1984); Linde, Buzo & Gray, "An algorithm for vector quantizer design", IEEE Trans. Commun. (1980) | GREEN | - | pending | under-review |
+| Nearest-vector search with partial-distance early exit | partial distance search (Bei & Gray, "An improvement of the minimum distortion encoding algorithm for vector quantization", 1985); implementation is `tpt_dsp_core::nearest_vector_accelerated`, reused rather than reimplemented | GREEN | - | pending | under-review |
+| Codebook training: Lloyd iteration with integer-rounded centroids | Lloyd, "Least squares quantization in PCM" (1957/1982); LBG (1980). Integer rounding of centroids each iteration is this project's own choice, made for exact cross-platform determinism | GREEN | - | pending | under-review |
+| Empty-cluster re-seating on the farthest training vector | standard k-means/LBG practice (cluster splitting); deterministic ordering is this project's own | GREEN | - | pending | under-review |
+| Seeded distinct-sample initialisation (partial Fisher-Yates) | Fisher & Yates (1938), Durstenfeld (1964) | GREEN | - | pending | under-review |
+| SplitMix64 generator (training initialisation only) | Steele, Lea & Flood, "Fast splittable pseudorandom number generators", OOPSLA (2014) | GREEN | - | pending | under-review |
+| Image partitioned into fixed 8x8 patches, per-patch VQ | block-based image VQ, Nasrabadi & King, "Image coding using vector quantization: a review", IEEE Trans. Commun. (1988) | GREEN | - | pending | under-review |
+| Conditional replenishment (code only changed blocks, copy the rest from the previous frame) | Mounts, "A video encoding system with conditional picture-element replenishment", Bell Syst. Tech. J. (1969), a long-expired technique | GREEN | - | pending | under-review |
+| Skip decision "previous copy no worse than best codeword" | this project's own rate-distortion shortcut (coding a patch no better than the copy spends bits for nothing) | GREEN | - | pending | under-review |
+| Golomb-Rice coding of skip runs, per-frame `k` | Golomb, "Run-length encodings" (1966); Rice (1979) | GREEN | - | pending | under-review |
+| PSNR / mean absolute error quality metric | textbook definitions | GREEN | - | pending | under-review |
+| CRC-32 packet trailer | IEEE 802.3 reflected polynomial (public standard), matching the family convention | GREEN | - | pending | under-review |
+
+Deliberately *not* used, so the record above stays complete: any
+transform (DCT/wavelet), motion estimation or compensation, entropy coding
+of the index stream, product/tree/lattice quantisation, learned or neural
+codebooks, and any post-filter. All appear in the literature and are beyond
+v0.1 scope; revisiting any of them extends this table before landing.
+
+## Vault — v0.1
+
+Implemented from the literature and public recommendations listed below
+(`codecs/vault/src/`). No source code of any reference codec was read or
+referred to while writing it, and no code or structure was copied from
+one. As everywhere in `tpt-media`, no absolute patent-free claim is made —
+patent status is jurisdictional (todo.md §1).
+
+The **patent review** column is deliberately *not* filled in for this
+crate: the implementer recorded the sources, but a maintainer patent
+review has not happened, so every row is `under-review` rather than
+`reviewed`. Block-partitioned video coding is a heavily patented area; the
+choices that reduce exposure (CONTRIBUTING §3) are a 2-tap/4-tap bilinear
+sub-pel filter, static Rice coding with no context adaptation, and the
+absence of CABAC, long interpolation filters and angular intra modes.
+
+| Algorithm | Reference | Source | License | Patent review | Status |
+| --------- | --------- | ------ | ------- | ------------- | ------ |
+| Quadtree partitioning of a block into four equal children | Samet (1984), "The quadtree and related hierarchical data structures"; Sullivan & Baker (1994), "Efficient quadtree coding of images and video", IEEE Trans. Image Processing | GREEN | - | not reviewed | under-review |
+| Bottom-up leaf-versus-split comparison by a Lagrangian cost | Chou, Lookabaugh & Gray (1989), "Optimal pruning with applications to tree-structured source coding and modeling", IEEE Trans. Information Theory (the encoder compares node-by-node with early termination instead of pruning a fully grown tree) | GREEN | - | not reviewed | under-review |
+| `J = D + lambda * R` Lagrangian objective | Everett (1963), "Generalized Lagrange multiplier method"; Sullivan & Wiegand (1998), "Rate-distortion optimization for video compression", IEEE Signal Processing Magazine. The constant `LAMBDA_SCALE` is empirical and untuned | GREEN | - | not reviewed | under-review |
+| Multiple reference frames, per-block reference index | Wiegand, Zhang & Girod (1999), "Long-term memory motion-compensated prediction", IEEE Trans. Circuits Syst. Video Technol. The reference list here is only the last N pictures | GREEN | - | not reviewed | under-review |
+| Full-pel shrinking-step 8-neighbour pattern search | logarithmic / three-step search: Jain & Jain (1981), "Displacement measurement and its application in interframe image coding"; Koga et al. (1981), "Motion-compensated interframe coding for video conferencing". Seeding from the zero and predicted vectors is this project's own | GREEN | - | not reviewed | under-review |
+| Half-pel bilinear motion compensation (2-tap; 4-sample diagonal) | H.263 (ITU-T, 1996) half-pel prediction, public recommendation | GREEN | - | not reviewed | under-review |
+| Motion-vector difference coding against a left/top neighbour predictor | the idea of predictive vector coding is in H.261/H.263 (public recommendations); the left-else-top rule is this project's own simplification of H.263's median predictor | GREEN | - | not reviewed | under-review |
+| Intra DC / vertical / horizontal prediction | H.261 / H.263 intra prediction, public recommendations | GREEN | - | not reviewed | under-review |
+| Intra "plane" prediction (`left + top - top_left`, clamped) | linear extrapolation of the plane through three neighbours — elementary mathematics; also the classic gradient predictor of lossless image coders | GREEN | - | not reviewed | under-review |
+| 2D DCT-II / DCT-III at 4..32 (separable row+column), via `tpt-dsp-core` | Ahmed, Natarajan & Rao (1984), "Discrete cosine transform" | GREEN | - | not reviewed | under-review |
+| Orthonormal scaling of DCT coefficients before quantisation | Rao & Yip (1990), *Discrete Cosine Transform: Algorithms, Advantages, Applications* (Parseval / orthonormal basis) | GREEN | - | not reviewed | under-review |
+| Uniform dead-zone scalar quantiser, rounding offset below 0.5 | Widrow & Kollár, "Digital Coding of Waveforms" (1984), ch. 4; dead-zone / rounding-offset practice in transform codecs | GREEN | - | not reviewed | under-review |
+| Geometric `qp` step table | the H.26x convention of a `2^(qp/n)` step, tabulated (shared with Thrum) | GREEN | - | not reviewed | under-review |
+| Diagonal zig-zag scan generalised to `n x n` | JPEG T.81 (public standard) zig-zag, extended to other sizes | GREEN | - | not reviewed | under-review |
+| Rice coding, unsigned run form and signed level form, per-block parameter | Rice (1979), "Some Practical Universal Noiseless Coding Techniques"; signed form is `tpt-media-bitstream::rice`, the unsigned form is a few lines local to `codecs/vault/src/bits.rs` | GREEN | - | not reviewed | under-review |
+| Run / last-position coefficient coding | run-length coding of zig-zag scans as in JPEG T.81 and H.263 (public); the `last` field as terminator is this project's own | GREEN | - | not reviewed | under-review |
+| Macroblock skip (predicted vector, no residual) | H.263 COD/skip, public recommendation | GREEN | - | not reviewed | under-review |
+| Deblocking filter | H.263 Annex J "Deblocking Filter Mode" (ITU-T, 1998), public recommendation; the boundary-strength selection between units is this project's own | GREEN | - | not reviewed | under-review |
+| 4:2:0 chroma, chroma vector = luma vector / 2 | the 4:2:0 sampling relationship itself | GREEN | - | not reviewed | under-review |
+| CRC-32 packet trailer | IEEE 802.3 reflected polynomial (public standard), matching the family convention | GREEN | - | not reviewed | under-review |
+
+Deliberately *not* used, so the record above stays complete: CABAC or any
+context-adaptive entropy coding, 6/8-tap sub-pel filters, quarter-pel
+motion, angular (directional) intra modes, B-frames
+and bi-prediction, weighted prediction, long-term reference management,
+rate control, coefficient-level RDO / trellis quantisation, and
+per-block quantiser adaptation. Revisiting any of them extends this table
+before landing.
+
 ## Contribution Rules
 
 Development is issues only — external code contributions are not

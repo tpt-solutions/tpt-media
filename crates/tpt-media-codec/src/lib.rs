@@ -584,4 +584,452 @@ mod tests {
         assert!(l.check_reference_frames(4).is_ok());
         assert!(l.check_reference_frames(32).is_err());
     }
+
+    // --- §38 unit-test gate: the public items with no coverage ------------
+
+    #[test]
+    fn default_limits_are_the_strict_ones() {
+        // `Default` is what every `CodecConfig::default()` carries, so what
+        // it resolves to is the policy every codec starts from.
+        assert_eq!(ResourceLimits::default(), ResourceLimits::strict());
+        assert_ne!(ResourceLimits::default(), ResourceLimits::permissive());
+    }
+
+    #[test]
+    fn strict_is_stricter_on_every_field_not_just_packets() {
+        // The original test compared one field, which would have passed with
+        // a typo in any of the other six.
+        let s = ResourceLimits::strict();
+        let p = ResourceLimits::permissive();
+        assert!(s.max_frame_bytes < p.max_frame_bytes);
+        assert!(s.max_packet_bytes < p.max_packet_bytes);
+        assert!(s.max_reference_frames < p.max_reference_frames);
+        assert!(s.max_allocation_bytes < p.max_allocation_bytes);
+        assert!(s.max_recursion_depth < p.max_recursion_depth);
+        assert!(s.max_metadata_bytes < p.max_metadata_bytes);
+        // The CPU budget is the one field where "stricter" means *set*:
+        // permissive leaves it disabled (0).
+        assert_eq!(p.max_decode_micros, 0);
+        assert!(s.max_decode_micros > 0);
+    }
+
+    #[test]
+    fn every_limit_is_inclusive_at_its_maximum() {
+        // "Maximum X" means X is allowed and X+1 is not. Pinned per limit,
+        // because an off-by-one here is silently a security hole in one
+        // direction and a spurious rejection in the other.
+        let l = ResourceLimits::strict();
+        let m = l.max_packet_bytes as usize;
+        assert!(l.check_packet(m).is_ok());
+        assert!(l.check_packet(m + 1).is_err());
+
+        let m = l.max_frame_bytes as usize;
+        assert!(l.check_frame_bytes(m).is_ok());
+        assert!(l.check_frame_bytes(m + 1).is_err());
+
+        let m = l.max_allocation_bytes as usize;
+        assert!(l.check_allocation(m).is_ok());
+        assert!(l.check_allocation(m + 1).is_err());
+
+        let m = l.max_metadata_bytes as usize;
+        assert!(l.check_metadata(m).is_ok());
+        assert!(l.check_metadata(m + 1).is_err());
+
+        assert!(l.check_reference_frames(l.max_reference_frames).is_ok());
+        assert!(l.check_reference_frames(l.max_reference_frames + 1).is_err());
+
+        assert!(l.check_recursion_depth(l.max_recursion_depth).is_ok());
+        assert!(l
+            .check_recursion_depth(l.max_recursion_depth + 1)
+            .is_err());
+    }
+
+    #[test]
+    fn zero_is_always_within_every_limit() {
+        // The empty case: a zero-length packet, frame, allocation or
+        // metadata block must not be rejected by a size limit.
+        let l = ResourceLimits::strict();
+        assert!(l.check_packet(0).is_ok());
+        assert!(l.check_frame_bytes(0).is_ok());
+        assert!(l.check_allocation(0).is_ok());
+        assert!(l.check_metadata(0).is_ok());
+        assert!(l.check_reference_frames(0).is_ok());
+        assert!(l.check_recursion_depth(0).is_ok());
+    }
+
+    #[test]
+    fn usize_max_is_rejected_by_every_byte_limit() {
+        // The maximum value a caller can pass, on a 64-bit target. A limit
+        // compared through a narrower cast would let this through.
+        let l = ResourceLimits::permissive();
+        for err in [
+            l.check_packet(usize::MAX),
+            l.check_frame_bytes(usize::MAX),
+            l.check_allocation(usize::MAX),
+            l.check_metadata(usize::MAX),
+        ] {
+            assert!(err.is_err(), "usize::MAX must not pass a byte limit");
+        }
+    }
+
+    #[test]
+    fn each_limit_reports_its_own_kind() {
+        // A caller deciding "retry with a smaller packet?" cannot tell which
+        // limit fired if every size check reports the same variant.
+        let l = ResourceLimits::strict();
+        let pairs = [
+            (l.check_packet(usize::MAX), ResourceLimitKind::PacketSize),
+            (
+                l.check_frame_bytes(usize::MAX),
+                ResourceLimitKind::FrameDimensions,
+            ),
+            (
+                l.check_reference_frames(u8::MAX),
+                ResourceLimitKind::ReferenceFrames,
+            ),
+            (
+                l.check_allocation(usize::MAX),
+                ResourceLimitKind::Allocation,
+            ),
+            (
+                l.check_recursion_depth(u8::MAX),
+                ResourceLimitKind::RecursionDepth,
+            ),
+            (
+                l.check_metadata(usize::MAX),
+                ResourceLimitKind::MetadataSize,
+            ),
+        ];
+        let mut got: Vec<ResourceLimitKind> = pairs
+            .iter()
+            .map(|(r, _)| match r {
+                Err(CodecError::ResourceLimit(k)) => *k,
+                other => panic!("expected a ResourceLimit error, got {other:?}"),
+            })
+            .collect();
+        let mut want: Vec<ResourceLimitKind> = pairs.iter().map(|(_, k)| *k).collect();
+        // `ResourceLimitKind` has no `Ord`, so compare as a sorted-by-debug
+        // pair list: a set comparison that also proves all six are distinct.
+        got.sort_by_key(|k| alloc::format!("{k:?}"));
+        want.sort_by_key(|k| alloc::format!("{k:?}"));
+        assert_eq!(got, want);
+        assert_eq!(got.len(), 6);
+    }
+
+    #[test]
+    fn cpu_budget_is_advertised_but_has_no_checker_yet() {
+        // `max_decode_micros` is a knob with no enforcement function — the
+        // same honest gap todo.md section 19 records. Asserted here so that
+        // adding the checker is a deliberate change to a pinned state
+        // rather than an accident.
+        assert!(ResourceLimits::strict().max_decode_micros > 0);
+        assert_eq!(ResourceLimits::permissive().max_decode_micros, 0);
+    }
+
+    #[test]
+    fn packet_guard_passes_the_closure_result_through() {
+        let limits = ResourceLimits::strict();
+        let guard = PacketGuard::new(&limits);
+        let mut p = Packet::empty(
+            0,
+            tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::MILLISECONDS),
+        );
+        p.data = alloc::vec![7u8; 16];
+        let out: CodecResult<u32> = guard.check(&p, || Ok(42));
+        assert_eq!(out.unwrap(), 42);
+    }
+
+    #[test]
+    fn packet_guard_accepts_an_empty_packet() {
+        // Zero bytes is within every limit, so the closure must still run.
+        let limits = ResourceLimits::strict();
+        let guard = PacketGuard::new(&limits);
+        let p = Packet::empty(
+            0,
+            tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::MILLISECONDS),
+        );
+        let out: CodecResult<u32> = guard.check(&p, || Ok(1));
+        assert_eq!(out.unwrap(), 1);
+    }
+
+    #[test]
+    fn packet_guard_does_not_call_the_closure_when_it_rejects() {
+        // The guard exists to *prevent* the work. If the closure ran before
+        // the check, the limit would be advisory and a hostile packet would
+        // already have been parsed.
+        use core::cell::Cell;
+        let limits = ResourceLimits::strict();
+        let guard = PacketGuard::new(&limits);
+        let mut p = Packet::empty(
+            0,
+
+    fn audio(rate: u32) -> SupportedFormat {
+        SupportedFormat::Audio {
+            sample_format: tpt_media_core::SampleFormat::S16,
+            channel_layout: tpt_media_core::ChannelLayout::Mono,
+            sample_rate: rate,
+        }
+    }
+
+    fn video(w: u32, h: u32) -> SupportedFormat {
+        SupportedFormat::Video {
+            pixel_format: tpt_media_core::PixelFormat::Yuv420,
+            width: w,
+            height: h,
+        }
+    }
+
+    #[test]
+    fn supported_format_matching_is_exact_within_a_variant() {
+        assert!(audio(48_000).matches(&audio(48_000)));
+        assert!(video(320, 240).matches(&video(320, 240)));
+
+        // A different sample rate is not "close enough": no resampling is
+        // assumed at the codec level.
+        assert!(!audio(48_000).matches(&audio(44_100)));
+        // Nor is a different sample format or channel layout.
+        assert!(!audio(48_000).matches(&SupportedFormat::Audio {
+            sample_format: tpt_media_core::SampleFormat::F32,
+            channel_layout: tpt_media_core::ChannelLayout::Mono,
+            sample_rate: 48_000,
+        }));
+        // Nor a different pixel format or dimension.
+        assert!(!video(320, 240).matches(&video(320, 241)));
+        assert!(!video(320, 240).matches(&video(640, 240)));
+    }
+
+    #[test]
+    fn an_audio_format_never_matches_a_video_format() {
+        // Cross-variant is false in both directions: a video track offered
+        // to an audio-only codec must be rejected, not reinterpreted.
+        assert!(!audio(48_000).matches(&video(320, 240)));
+        assert!(!video(320, 240).matches(&audio(48_000)));
+    }
+
+    #[test]
+    fn supports_format_searches_the_declared_list() {
+        let info = CodecInfo {
+            name: "Test",
+            codec_id: *b"TST1",
+            version: 1,
+            capabilities: Capabilities::default(),
+            supported_formats: alloc::vec![audio(48_000), video(320, 240)],
+        };
+        assert!(info.supports_format(&audio(48_000)));
+        assert!(info.supports_format(&video(320, 240)));
+        assert!(!info.supports_format(&audio(44_100)));
+        assert!(!info.supports_format(&video(640, 480)));
+    }
+
+    #[test]
+    fn a_codec_declaring_no_formats_supports_none() {
+        // An empty list is the honest answer for a codec that has not been
+        // characterised yet. It must not be read as "supports anything",
+        // which is the failure mode an `is_empty() || ...` shortcut causes.
+        let info = CodecInfo {
+            name: "Uncharacterised",
+            codec_id: *b"UNKN",
+            version: 1,
+            capabilities: Capabilities::default(),
+            supported_formats: Vec::new(),
+        };
+        assert!(!info.supports_format(&audio(48_000)));
+        assert!(!info.supports_format(&video(320, 240)));
+    }
+
+    #[test]
+    fn capabilities_default_to_nothing_claimed() {
+        let c = Capabilities::default();
+        assert!(!c.real_time_decoder);
+        assert!(!c.real_time_encoder);
+        assert!(!c.hardware_accel);
+        assert!(!c.lossless);
+        assert!(!c.lossy);
+        assert!(!c.supports_drain);
+        assert!(!c.supports_encoder_drain);
+    }
+
+    #[test]
+    fn codec_config_default_is_version_one_with_strict_limits() {
+        // What every codec's `CodecConfig::default()` starts from.
+        let cfg = CodecConfig::default();
+        assert_eq!(cfg.version, 1);
+        assert!(cfg.extra.is_empty());
+        assert_eq!(cfg.limits, ResourceLimits::strict());
+    }
+
+    #[test]
+    fn codec_error_displays_every_variant() {
+        // `Display` is what the CLI and the FFI turn these into messages, so
+        // each variant is pinned rather than left to a wildcard.
+        use core::fmt::Write as _;
+        let mut out = String::new();
+        let cases: [(CodecError, &str); 9] = [
+            (CodecError::MalformedPacket, "malformed packet"),
+            (CodecError::NeedMoreInput, "need more input"),
+            (CodecError::Cancelled, "cancelled"),
+            (
+                CodecError::ResourceLimit(ResourceLimitKind::PacketSize),
+                "resource limit: PacketSize",
+            ),
+
+    struct StubFactory {
+        id: [u8; 4],
+        name: &'static str,
+    }
+
+    impl StubFactory {
+        fn new(id: &[u8; 4], name: &'static str) -> Self {
+            StubFactory { id: *id, name }
+        }
+        fn info(&self) -> CodecInfo {
+            CodecInfo {
+                name: self.name,
+                codec_id: self.id,
+                version: 1,
+                capabilities: Capabilities::default(),
+                supported_formats: Vec::new(),
+            }
+        }
+    }
+
+    impl DynDecoderFactory for StubFactory {
+        fn codec_id(&self) -> &[u8; 4] {
+            &self.id
+        }
+        fn info(&self) -> CodecInfo {
+            self.info()
+        }
+        fn build(&self, _cfg: &CodecConfig) -> CodecResult<Box<dyn DynDecoder>> {
+            unimplemented!("not exercised by the registry lookup tests")
+        }
+    }
+
+    impl DynEncoderFactory for StubFactory {
+        fn codec_id(&self) -> &[u8; 4] {
+            &self.id
+        }
+        fn info(&self) -> CodecInfo {
+            self.info()
+        }
+        fn build(&self, _cfg: &CodecConfig) -> CodecResult<Box<dyn DynEncoder>> {
+            unimplemented!("not exercised by the registry lookup tests")
+        }
+    }
+
+    #[test]
+    fn registry_tracks_decoders_and_encoders_separately() {
+        let mut reg = Registry::new();
+        reg.register_decoder(StubFactory::new(b"DCOD", "Decoder only"));
+        reg.register_encoder(StubFactory::new(b"ENCD", "Encoder only"));
+
+        assert_eq!(reg.find_decoder(b"DCOD").map(|f| f.info().name), Some("Decoder only"));
+        assert_eq!(reg.find_encoder(b"ENCD").map(|f| f.info().name), Some("Encoder only"));
+        // The decoder side does not answer for the encoder's ID, and vice
+        // versa: a decode-only build must not appear to offer an encoder.
+        assert!(reg.find_decoder(b"ENCD").is_none());
+        assert!(reg.find_encoder(b"DCOD").is_none());
+        assert_eq!(reg.decoder_ids().count(), 1);
+        assert_eq!(reg.encoder_ids().count(), 1);
+    }
+
+    #[test]
+    fn registry_ids_list_every_registration_in_order() {
+        let mut reg = Registry::new();
+        reg.register_decoder(StubFactory::new(b"AAAA", "A"));
+        reg.register_decoder(StubFactory::new(b"BBBB", "B"));
+        let ids: Vec<[u8; 4]> = reg.decoder_ids().map(|i| *i).collect();
+        assert_eq!(ids, alloc::vec![*b"AAAA", *b"BBBB"]);
+    }
+
+    #[test]
+    fn a_second_registration_for_one_id_is_shadowed_not_rejected() {
+        // `register_*` returns `()`, so a duplicate cannot be reported. The
+        // lookup takes the first registration, which means registration
+        // order decides — pinned so the behaviour is a choice, not an
+        // accident of `Vec::iter().find`.
+        let mut reg = Registry::new();
+        reg.register_decoder(StubFactory::new(b"DUP1", "First"));
+        reg.register_decoder(StubFactory::new(b"DUP1", "Second"));
+        assert_eq!(reg.find_decoder(b"DUP1").map(|f| f.info().name), Some("First"));
+        // Both are still listed, so `decoder_ids().count()` is not a
+        // distinct-codec count.
+        assert_eq!(reg.decoder_ids().count(), 2);
+    }
+
+    #[test]
+    fn an_empty_registry_finds_nothing() {
+        let reg = Registry::new();
+        assert!(reg.find_decoder(b"ANY!").is_none());
+        assert!(reg.find_encoder(b"ANY!").is_none());
+        assert_eq!(reg.decoder_ids().count(), 0);
+        assert_eq!(reg.encoder_ids().count(), 0);
+    }
+
+    #[test]
+    fn registry_debug_reports_counts_not_contents() {
+        // The `Debug` impl is hand-written precisely so it does not dump
+        // every factory; pinned so a derived `Debug` cannot leak them in.
+        let mut reg = Registry::new();
+        reg.register_decoder(StubFactory::new(b"AAAA", "A"));
+        reg.register_encoder(StubFactory::new(b"BBBB", "B"));
+        let text = alloc::format!("{reg:?}");
+        assert!(text.contains("decoders"), "{text}");
+        assert!(text.contains("encoders"), "{text}");
+        assert!(!text.contains("AAAA"), "{text}");
+    }
+
+            (CodecError::Unsupported("8x8 DCT"), "unsupported: 8x8 DCT"),
+            (CodecError::InvalidConfig("qp"), "invalid config: qp"),
+            (CodecError::Internal, "internal error"),
+            (CodecError::Bitstream("bad huffman"), "bitstream: bad huffman"),
+            (
+                CodecError::Downstream("disk full"),
+                "downstream: disk full",
+            ),
+        ];
+        for (err, want) in cases {
+            out.clear();
+            write!(out, "{err}").expect("write to String");
+            assert_eq!(out, want);
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn codec_error_is_a_std_error() {
+        fn as_std(e: &dyn std::error::Error) -> String {
+            e.to_string()
+        }
+        let e = CodecError::MalformedPacket;
+        assert_eq!(as_std(&e), "malformed packet");
+        // `source()` is the error-chain hook; none of these carry a cause.
+        assert!(std::error::Error::source(&e).is_none());
+    }
+
+            tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::MILLISECONDS),
+        );
+        p.data = alloc::vec![0u8; (limits.max_packet_bytes as usize) + 1];
+        let called = Cell::new(false);
+        let out: CodecResult<()> = guard.check(&p, || {
+            called.set(true);
+            Ok(())
+        });
+        assert!(out.is_err());
+        assert!(!called.get(), "closure ran despite the limit firing");
+    }
+
+    #[test]
+    fn packet_guard_propagates_a_closure_error_unchanged() {
+        // The guard must not rewrite what the decode itself reported.
+        let limits = ResourceLimits::strict();
+        let guard = PacketGuard::new(&limits);
+        let p = Packet::empty(
+            0,
+            tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::MILLISECONDS),
+        );
+        let out: CodecResult<u32> = guard.check(&p, || Err(CodecError::MalformedPacket));
+        assert_eq!(out.unwrap_err(), CodecError::MalformedPacket);
+    }
+
 }

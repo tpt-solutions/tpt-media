@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tpt-web demo</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 46rem; margin: 1.5rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; margin-bottom: .2rem; }
+  p.note { margin-top: 0; opacity: .75; font-size: .9rem; }
+  .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .6rem 0; }
+  input[type=text] { flex: 1 1 16rem; padding: .35rem; }
+  button { padding: .4rem .8rem; cursor: pointer; }
+  canvas { width: 100%; background: #000; image-rendering: pixelated; aspect-ratio: 16 / 9; object-fit: contain; }
+  pre { background: rgba(127,127,127,.15); padding: .6rem; overflow-x: auto; font-size: .85rem; }
+  #error { color: #c00; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>tpt-web demo</h1>
+<p class="note">Plays <code>.tpt</code> audio (Cinder, Aura, Reed) and video (Thrum) by decoding in
+WebAssembly. Serve this folder over HTTP (<code>python -m http.server</code>); <code>file://</code>
+cannot load the wasm.</p>
+
+<div class="row">
+  <button id="demo">Play demo.tpt</button>
+  <input id="file" type="file" accept=".tpt">
+</div>
+<div class="row">
+  <input id="url" type="text" placeholder="URL of a .tpt file (must allow CORS if cross-origin)">
+  <button id="go">Play URL</button>
+</div>
+<div class="row">
+  <button id="pause">Pause</button>
+  <button id="stop">Stop</button>
+</div>
+
+<canvas id="screen" width="16" height="9"></canvas>
+<p id="error" role="alert"></p>
+<pre id="stats">idle</pre>
+
+<script type="module">
+import { TptPlayer } from "./tpt-web.js";
+
+const $ = (id) => document.getElementById(id);
+const errorBox = $("error");
+const statsBox = $("stats");
+let paused = false;
+
+const player = new TptPlayer({
+  canvas: $("screen"),
+  onInfo: (info) => { errorBox.textContent = ""; statsBox.textContent = "stream: " + JSON.stringify(info); },
+  onStats: (s) => {
+    const mib = (n) => (n / 1048576).toFixed(2) + " MiB";
+    statsBox.textContent = [
+      `media time      ${s.mediaTime.toFixed(2)} s`,
+      `audio queued    ${s.audioQueuedMs.toFixed(0)} ms     underruns ${s.underruns}`,
+      `video           shown ${s.shownFrames}  dropped ${s.droppedFrames}  queued ${s.videoQueued}`,
+      `input           ${mib(s.bytesIn)}  packets ${s.packets}  decode errors ${s.decodeErrors}`,
+      `player memory   ${mib(s.memoryInUse)} (worst case under limits ${mib(s.memoryCeiling)})`,
+      `wasm memory     ${mib(s.wasmMemoryBytes)}`,
+    ].join("\n");
+  },
+  onEnded: () => { statsBox.textContent += "\n\nended"; },
+  onError: (e) => { errorBox.textContent = String(e?.message ?? e); },
+});
+
+function start(source) {
+  errorBox.textContent = "";
+  paused = false; $("pause").textContent = "Pause";
+  player.play(source); // inside the click handler: lets the AudioContext start
+}
+
+$("demo").onclick = () => start("./demo.tpt");
+$("go").onclick = () => $("url").value && start($("url").value);
+$("file").onchange = (e) => e.target.files[0] && start(e.target.files[0]);
+$("stop").onclick = () => { player.stop(); statsBox.textContent = "stopped"; };
+$("pause").onclick = () => {
+  paused = !paused;
+  (paused ? player.pause() : player.resume());
+  $("pause").textContent = paused ? "Resume" : "Pause";
+};
+
+const q = new URLSearchParams(location.search).get("src");
+if (q) $("url").value = q; // autoplay is blocked by browsers; press "Play URL"
+</script>
+</body>
+</html>

@@ -90,16 +90,16 @@ the encoder's allocation exactly.
 
 ## Video
 
-One video codec is implemented (todo.md §32); the other two are still
-design targets (§33–34) for the representation research (§56,
-[`representation-research.md`](representation-research.md)) to be
+Three video codecs are implemented (Thrum, todo.md §32; Vault, §33; Mote,
+§34); they are what the representation research (§56,
+[`representation-research.md`](representation-research.md)) is to be
 measured against.
 
 | Codec     | Niche                    | Key technique             | Resolution | Bitrate target | Status |
 | --------- | ------------------------ | ------------------------- | ---------- | -------------- | ------ |
 | Thrum  | Real-time communication  | I/P + intra-refresh       | up to 1080p | adaptive      | implemented (v0.1, 2026-09-28) |
-| Vault     | High-compression archival | Superblocks + RDO         | up to 4K    | offline       | not started (§33) |
-| Mote   | Edge / IoT               | Dictionary VQ             | ≤480p       | <50 kbps      | not started (§34) |
+| Vault     | High-compression archival | Superblocks + RDO         | multiples of 8 (measured at QCIF/CIF) | offline       | implemented (v0.1, 2026-09-30) |
+| Mote   | Edge / IoT               | Dictionary VQ + temporal skip | ≤480p   | benchmark-defined (see below) | implemented (v0.1, 2026-09-30) |
 
 ### Thrum v0.1 — implemented design (2026-09-28)
 
@@ -174,6 +174,268 @@ Known sharp edges, stated plainly:
   `apps/tpt-cli/src/y4m.rs`. A video codec on a non-video path still
   fails with an explicit message rather than a generic unknown-codec.
 
+### Mote v0.1 — implemented design (2026-09-30)
+
+`codecs/mote/src/`. The design goal is *a decoder a microcontroller-class
+device can afford, on a feed that barely changes*, so the codec is a
+dictionary lookup plus a change mask.
+
+- **Supported dimensions** (todo.md §34): `Gray8` or planar `Yuv420`;
+  width and height non-zero multiples of 16; long edge ≤ 848, short edge
+  ≤ 480 (480p is 848×480 rounded down to a multiple of 16; portrait is
+  allowed). Multiples of 16 make every plane, including 4:2:0 chroma,
+  tile exactly into 8×8 patches, so there is no padding path.
+- **Patch representation.** An 8×8 block of 8-bit samples from one plane
+  (VQ dimension 64), numbered plane by plane (Y, U, V), raster order.
+  Chroma patches are ordinary patches: all planes share one dictionary.
+- **Dictionary.** 1–4096 entries of 64 bytes, stored raw. The index width
+  is `ceil(log2(entries))` bits, 12 at the 4096-entry target, so a key
+  frame is exactly `patches × 12` bits plus a 34-bit header. The
+  dictionary is *stream state*: trained offline on the deployment scene
+  and provisioned out of band, or sent once as a dictionary packet
+  (`type 0`, `entries × 64` bytes, byte-aligned). Every frame packet
+  carries the dictionary's 16-bit id (low 16 bits of the CRC-32 of the
+  entry count and entries), so a decoder holding a different dictionary
+  refuses the stream (`Unsupported`) instead of rendering garbage. A
+  decoder without a dictionary answers `NeedMoreInput`.
+- **VQ.** Nearest entry under squared error via
+  `tpt_dsp_core::nearest_vector_accelerated` (todo.md §8). Samples are
+  integers, so every distance is an exact integer below 2²⁴ in `f32`:
+  the search is bit-identical on every target.
+- **Training** (`Dictionary::train_patches`): seeded partial
+  Fisher–Yates initialisation from distinct training patches
+  (SplitMix64), assignment with lowest-index tie-break, centroid update to
+  the *rounded integer mean* in pure integer arithmetic, empty clusters
+  re-seated on the farthest patch (ascending centroid order, first patch
+  wins ties), stop on a stable assignment or the iteration cap. Optional
+  strided subsample above `max_vectors`. No `HashMap`, no clock. Rounding
+  centroids each iteration costs a little against real-valued Lloyd and
+  buys exactness.
+- **Reconstruction model.** The decoded picture is the concatenation of
+  dictionary entries; there is no post-filter (a deblocking pass would be
+  a deliberate later addition, and would extend the provenance table). A
+  skipped patch keeps the previous decoded patch bit for bit. The encoder
+  builds its reference with the same copies, so it cannot drift from the
+  decoder; the test suite asserts decoder output equals the encoder's own
+  reconstruction on every frame it checks.
+- **Frame packets.** *Key* (`type 1`): `dict_id`, then one index per patch.
+  *Delta* (`type 2`): `dict_id`, a 3-bit Rice parameter `k`, a 16-bit
+  count of coded patches, then per coded patch a Rice-coded skip run and
+  an index; trailing skips are implicit. The encoder picks the `k` in
+  `0..=7` minimising the frame's run cost. An unchanged frame is a
+  53-bit header: 11 bytes with the CRC.
+- **Provable bound.** `MoteConfig::max_packet_bits`: key is exactly
+  `34 + T·b` bits; delta is `53 + T·(run + b)` where a run is at most
+  `T−1` and the chosen `k` never costs more than `k = 7`. The encoder's
+  reusable buffer is sized by it and a test drives noise against
+  2/3/100/4096-entry dictionaries to confirm no packet exceeds it.
+- **Hostile input.** CRC first; then version (`Unsupported`), type
+  (`3` is `Malformed`), and every count against what the packet can
+  hold *before* anything is allocated (a dictionary packet claiming 4096
+  entries with 100 bytes is rejected without allocating 256 KiB). Loops
+  are bounded by the patch count; the unary run prefix is capped by the
+  frame's patch count; every index is checked against the dictionary
+  length (which matters when the entry count is not a power of two);
+  state is committed only after a packet decodes fully, so a rejected
+  packet never corrupts the reference. `ResourceLimits` packet size,
+  frame bytes, allocation and reference frames are all honoured.
+- **Quality metric.** Luma PSNR primary, all-plane PSNR and mean absolute
+  error secondary (`src/quality.rs`). A fidelity yardstick only.
+
+**Temporal prediction — investigation.** The question was whether a
+dictionary codec should predict across frames, and in what form. Built
+and measured: *conditional replenishment* (a delta frame re-codes a patch
+only if the previous reconstruction's error exceeds `skip_mse` **and**
+exceeds the best dictionary entry's error; coding a patch that is no
+better than the copy would spend bits for nothing). Measured by
+`codecs/mote/tests/temporal.rs` (320×240 mono, 192-entry dictionary,
+fixed camera with ±1 sensor noise and a 24×24 object; mean over 11
+frames after the first key frame; sizes are deterministic):
+
+| object | mode | bytes/frame | luma PSNR |
+| ------ | ---- | ----------: | --------: |
+| still  | independent (temporal off) | 1 209 | 40.1 dB |
+| still  | replenishment, `skip_mse` 0 / 2 / 4 | 37 | 40.1 dB |
+| still  | `skip_mse` 16 | 13 | 40.1 dB |
+| still  | `skip_mse` 64 | 11 | 40.1 dB |
+| moving | independent | 1 209 | 38.6 dB |
+| moving | `skip_mse` 0 / 2 / 4 | 52 / 52 / 51 | 38.6 dB |
+| moving | `skip_mse` 16 | 29 | 38.6 dB |
+| moving | `skip_mse` 64 | 27 | 38.6 dB |
+
+Findings, stated plainly: replenishment is worth roughly 25–100× on
+these scenes, and a looser threshold monotonically lowers the rate. The
+PSNR column not moving is a limit of the test scene, not a result: the
+noise is ±1 grey level, so dictionary error dominates skip error; a
+noisier sensor would separate the rows. **Not investigated:**
+motion-compensated candidates (a shifted previous-frame patch), and
+context/delta coding of the index stream. A moving object currently costs
+its patches twice (arrival and departure), which is why the moving rows
+are larger than the still rows. Neither is built; both remain open.
+
+Known sharp edges, stated plainly:
+
+- **The dictionary is not free.** 4096 entries × 64 B = 256 KiB, sent once
+  or provisioned. The bandwidth figures exclude it; at 0.37 kbps it is
+  ~1.6 hours of steady-state stream. Entries are stored raw.
+- **A 4096-entry dictionary trained on the frames it is tested on
+  flatters the codec**: a 320×240 frame only has 1 200 patches. The
+  benchmark also prints a held-out-site key-frame PSNR
+  (35.3–37.8 dB versus 38–43 dB in-scene).
+- **No rate control.** Rate is set by scene change, `skip_mse` and
+  dictionary size, not by a target.
+- **The encoder is not real-time** (`real_time_encoder` is false): a key
+  frame is one accelerated 4096-entry search per patch.
+- **Not wired into `tpt encode`/`decode`.** Mote is registered in the
+  CLI's probe registry only; a y4m bridge would touch five command
+  paths in `tpt-cli`.
+- Tree/product quantisation for larger dictionaries (todo.md §8) is not
+  implemented; the search is the accelerated linear scan.
+
+### Vault v0.1 — implemented design (2026-09-30)
+
+`codecs/vault/src/`. The design goal is *bits per unit of quality*, so the
+encoder spends work freely and the decoder stays simple and bounded. Sources
+are in [`provenance.md`](provenance.md); measured numbers in
+[`performance.md`](performance.md).
+
+**Partitioning.** The picture is tiled with 64×64 superblocks in raster
+order. Each is a quadtree: a node is one *leaf* (one prediction, one
+residual) or four children in z-order, down to a minimum of 8×8, so the
+recursion is 64→32→16→8 — structurally three levels below the root
+(`MAX_PARTITION_DEPTH`). A 1-bit `split` flag is sent for a node that lies
+entirely inside the picture and is larger than 8×8; a node that overhangs
+the edge splits implicitly with no flag. Since width and height are
+multiples of 8, an 8×8 node is always inside and no padding exists. The
+encoder may cap the leaf size (`max_block_size`, encoder-only: forced splits
+are still signalled with flags, so a stream stays decodable whatever the
+cap was).
+
+**Prediction.** A leaf is *skip*, *inter* or *intra* (skip and intra flags
+appear in P-frames only; an I-frame is all intra).
+
+- *Skip*: reference 0, the predicted motion vector, no residual.
+- *Inter*: reference index (`ceil(log2(num_refs))` bits, none for a single
+  reference), a motion-vector difference against the predictor (left
+  neighbour's vector if inter, else the top neighbour's, else zero; both are
+  always earlier in z-order), coded as signed Rice at `k = 1`. Vectors are in
+  **half-pel** units, `|v| ≤ 65`. Prediction is a 2-tap average at a half-pel
+  offset and a 4-sample average at the diagonal position, edge-clamped so any
+  vector is safe. Chroma vectors are the luma vector halved (floor), in
+  half-chroma-pel units, never signalled.
+- *Intra*: 2-bit mode — DC, vertical, horizontal, and *plane* (`left[y] +
+  top[x] − top_left`, clamped) — with the decoder degrading any mode the
+  geometry cannot support to DC. Prediction reads only the row above and the
+  column to the left, which are always reconstructed earlier in z-order.
+  Chroma reuses the luma mode.
+
+**References.** Up to 16 (`MAX_REFERENCE_FRAMES`, 5 bits on the wire): the
+last `max_refs` loop-filtered reconstructions, most recent first. An I-frame
+clears the store. The decoder rejects a frame that claims more references
+than it holds with `NeedMoreInput` (a stream joined mid-way or after loss),
+and more than `limits.max_reference_frames` with a resource-limit error.
+Default `max_refs` is 4 so a decoder under the strict default limits (8)
+works out of the box; 16 needs a raised limit.
+
+**Transform and quantisation.** `dct_2d`/`idct_2d` from `tpt-dsp-core` at
+4×4 (chroma of an 8×8 leaf) up to 32×32; a 64×64 luma leaf is four 32×32
+tiles (chroma of a 64×64 leaf is one 32×32). Coefficients are converted to
+**orthonormal units** before quantisation, where Parseval holds, so one step
+means the same per-coefficient distortion at every transform size and `D` is
+comparable across partition choices. One flat dead-zone quantiser, step from
+the same 6-bit `qp` table as Thrum, rounding offset 0.4, level clamped to
+±8192. That clamp is derivable (a residual sample is in [−255, 255], so an
+orthonormal coefficient is at most 255·32 = 8160, and 8160 / 1.122 < 7273)
+and it is what makes the packet bound a proof.
+
+**Entropy coding.** Per transform tile: 1 `coded` bit; if coded, 3 bits of
+Rice parameter `k` (0–7, chosen to minimise that tile), `log2(t²)` bits of
+`last` (highest scan position with a non-zero level; it is its own
+terminator), then per non-zero level in diagonal-scan order an *unsigned*
+Rice run and a *signed* Rice level. Static codes only, no context modelling.
+Runs use an unsigned form of the same Rice code because the signed form in
+`tpt-media-bitstream` would waste a bit per run.
+
+**Loop filter.** The H.263 Annex J deblocking filter (`d = (A − 4B + 4C −
+D)/8`, an up-down ramp limiting `d` by strength `S`, and a secondary
+correction of the outer samples). `S` grows with the quantiser step
+(1–12); an intra edge uses the full `S`, an inter edge two thirds. Edges are
+only real coding-structure edges: leaf-block boundaries plus the 32×32 tile
+seams inside a 64×64 luma leaf. An edge between two skip/no-residual units
+with the same reference and motion within a pel is not filtered. The whole
+picture is filtered after reconstruction, and the filtered picture is the
+next reference. It is enabled by a per-frame header bit.
+
+**Rate–distortion optimisation.** For each node the encoder compares
+`J = D + λR` between coding it as a leaf and splitting it, with
+`λ = LAMBDA_SCALE · step²` (`LAMBDA_SCALE = 0.15`, empirical and untuned):
+
+- `D` is the SSE (luma + chroma) between source and the reconstruction the
+  decoder will produce — the real quantiser is inside the objective.
+- `R` is the *exact* bit count: the same generic writer that emits the
+  packet is run against a bit counter, so the price cannot drift from the
+  syntax.
+- The leaf is the cheapest of three candidates: intra (best mode by SAD),
+  inter (best reference and vector by SAD plus a vector-cost term — a
+  full-pel shrinking-step 8-neighbour pattern search around the zero and
+  predicted vectors, then half-pel refinement), and skip. Ties resolve skip
+  over inter over intra.
+- A node whose best leaf codes no coefficient and whose distortion is within
+  0.10·step² per sample is not split (early termination).
+
+This is **not** a global optimum and is not claimed to be. Candidate
+generation is heuristic and pruned; the motion search is a pattern search
+that can settle in a local minimum; there is no coefficient-level RDO
+(RDOQ) or trellis quantisation; decisions ignore their effect on later
+blocks' vector predictors and intra neighbours; and `λ` is not tuned. What
+holds, and is tested, is narrower: each decision is the cheapest among the
+alternatives that were priced, and freeing the partition never does worse
+on `J` than forcing 8×8 on the test frames.
+
+**Wire format (version 1).**
+
+| field | bits | meaning |
+| ----- | ---- | ------- |
+| `version` | 16 | rejected up front if not 1 |
+| `intra` | 1 | I-frame (clears the reference store) |
+| `qp` | 6 | `1..=51` |
+| `num_refs` | 5 | 0 iff intra; else `1..=16`, at most the decoder's `max_refs` and the references it holds |
+| `loop_filter` | 1 | run the loop filter |
+| superblocks | — | raster order; per node `split` flag, per leaf: skip/intra flags (P only), ref index, mvd or intra mode, coefficient tiles (Y, then U, V) |
+| `crc32` | 32 | IEEE 802.3, little-endian, over all preceding bytes, verified before parsing |
+
+`VaultConfig::max_packet_bits` derives the worst case: 2 bits of split flags,
+2 of skip/intra, 4 of reference, two mvds of at most `2·MV_LIMIT`, 2 of mode
+and the tile headers per 8×8 unit (larger blocks have strictly fewer headers
+per area), plus one run and one level token per sample, each at most
+`MAX_RICE_BITS = 136` (the encoder's cheapest `k` never exceeds the cost at
+`k = 7`). The encoder checks each finished packet against it.
+
+Known sharp edges, stated plainly:
+
+- **Slow encoder, neither side real-time.** Every partition level prices an
+  intra, an inter and a skip candidate with a real transform, and the
+  `tpt-dsp-core` DCT is a direct `O(n³)` separable one. About 45-55 ms/frame at
+  QCIF and 170-180 ms at CIF in release on the development machine (twice that under load).
+- **No B-frames, weighted prediction, long-term references, reference
+  reordering, rate control, scene-cut detection or per-block `qp`.** The
+  reference list is simply the last N pictures.
+- **The loop filter is not RD-decided.** It is a per-frame flag the encoder
+  sets from configuration. Measured on synthetic clips it helped textured
+  content and was neutral-to-harmful on smooth gradients (numbers in
+  `performance.md`); it is on by default.
+- **Vector predictor is left-else-top**, not a median, and ignores whether
+  the neighbour used a different reference.
+- **Intra is minimal**: four modes, no top-right samples, no angular modes,
+  whole-block prediction even at 64×64.
+- **Closed-loop exactness assumes the same build and target on both sides**;
+  the transform is `f32` and the workspace makes no cross-target bit-exactness
+  claim (todo.md §39).
+- **Not wired into `tpt encode`/`decode`.** Vault is registered in the CLI's
+  probe registry only (like Mote); a y4m bridge would need the video command
+  paths generalised beyond Thrum. Its quality has not been measured over the
+  §36 video corpus.
+
 ## Common Patterns
 
 All codecs share:
@@ -200,8 +462,9 @@ Current claims: Cinder is real-time on both the encoder and decoder
 the decoder only — its encoder runs a documented 1024-entry codebook
 search per unvoiced frame and deliberately does *not* claim real-time
 safety (pinned by `codecs/reed/tests/realtime_alloc.rs`); Aura is
-offline on both sides (archival profile). Thrum/Vault/Mote do not
-exist yet.
+offline on both sides (archival profile). Vault claims neither side
+real-time (an offline codec that allocates per RDO candidate); Thrum and
+Mote are covered in their own sections.
 
 ## Determinism
 
@@ -236,6 +499,7 @@ The current versions, and where each layout is specified:
 | Aura | `tpt-audio-aura` | 1 | above, "Aura v1 — wire format" | CRC-32 trailer |
 | Reed | `tpt-audio-reed` | 1 | above, "Reed v0.1 — implemented design" | CRC-32 trailer |
 | Thrum | `tpt-video-thrum` | 1 | above, "Thrum v0.1 — implemented design" | CRC-32 trailer |
+| Vault | `tpt-video-vault` | 1 | above, "Vault v0.1 — implemented design" | CRC-32 trailer |
 
 A wire-format change bumps `VERSION`, fails fast against every older
 decoder, and must land with its layout table extended here and its
@@ -247,11 +511,12 @@ The following choices are made specifically to reduce patent exposure
 (see `CONTRIBUTING.md` §3):
 
 - **No CABAC.** Cinder and Aura use static Huffman or a static range
-  coder; Thrum uses simple VLC tables; Vault uses Huffman with
-  context but no adaptive probability tracking.
+  coder; Thrum uses simple VLC tables; Vault uses static Rice codes with
+  a per-block parameter and no context modelling or adaptive probability
+  tracking.
 - **No fractional-pixel motion estimation beyond half-pixel bilinear.**
   Thrum uses full-pixel only. Vault uses full-pixel + 2-tap bilinear
-  half-pixel.
+  half-pixel (a 4-sample average on the diagonal position).
 - **No parametric stereo.** Each channel is encoded independently; the
   caller may downmix before encoding if desired.
 - **No SBR / high-frequency synthesis.** Lossy modes of Aura encode the

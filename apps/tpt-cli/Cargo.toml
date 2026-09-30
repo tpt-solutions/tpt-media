@@ -27,4 +27,6 @@ tpt-audio-cinder = { workspace = true, features = ["std"] }
 tpt-audio-aura = { workspace = true, features = ["std"] }
 tpt-audio-reed = { workspace = true, features = ["std"] }
 tpt-video-thrum = { workspace = true, features = ["std"] }
+tpt-video-vault = { workspace = true, features = ["std"] }
+tpt-video-mote = { workspace = true, features = ["std"] }
 tpt-dsp-core = { workspace = true, features = ["std"] }

@@ -54,7 +54,7 @@ containers/
 
 apps/
   tpt-cli — encode/decode/transcode/probe/inspect/benchmark CLI
-  tpt-web — WASM browser player        (planned, todo.md §45)
+  tpt-web — WASM browser player        (todo.md §45; docs/web-design.md)
 
 ffi/
   tpt-media-sys — stable C ABI         (todo.md §46)
@@ -191,19 +191,24 @@ documented in `docs/pipeline-design.md`.
 
 `tpt-media-io` re-uses `tpt-dsp-io` for its std-gated f32 WAV bridge (the
 byte-exact codec-path WAV reader/writer is local). Container- and
-codec-level I/O lives in `apps/tpt-cli` today; `apps/tpt-web` (browser)
-is a planned consumer.
+codec-level I/O lives in `apps/tpt-cli` and `apps/tpt-web` (browser, fed by
+`fetch` chunks through a bounded push parser).
 
 ## 10. WASM and FFI
 
-`tpt-web` does not exist yet (todo.md §45). `tpt-media-sys` shipped its
+`tpt-web` shipped 2026-09-30 (todo.md §45; design in `docs/web-design.md`).
+`tpt-media-sys` shipped its
 first slice 2026-09-29 (todo.md §46): the codec abstraction — packet,
 frame, encoder, decoder — as opaque, panic-guarded C handles with error
 codes, an ABI version, a hand-written kept-in-sync header, and a C
 integration test; container/demuxer/muxer handles are the v0.2 surface.
 
-- `tpt-web` will expose decoders and the `.tpt` parser to JavaScript via
-  `wasm-bindgen`.
+- `tpt-web` exposes a streaming player (incremental `.tpt` parser, the
+  Cinder/Aura/Reed/Thrum decoders, planar-`f32` audio and RGBA video out) to
+  JavaScript through a plain `extern "C"` surface over integer handles, with
+  hand-written JS glue. It does **not** use `wasm-bindgen`: the surface is
+  integers and pointers into linear memory, so the dependency, its generated
+  glue and its build tool buy nothing (rationale in `docs/web-design.md`).
 - `tpt-media-sys` wraps the codec abstraction in `extern "C"` functions;
   the header is hand-written and kept in sync with the ABI by a test
   (deliberately no `cbindgen` dependency).

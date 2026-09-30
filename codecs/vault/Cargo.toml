@@ -1,0 +1,30 @@
+[package]
+name = "tpt-video-vault"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["video-codec", "superblock", "rate-distortion", "motion-compensation", "high-compression"]
+categories = ["multimedia::video", "encoding", "compression", "no-std"]
+readme = "README.md"
+description = "Vault: TPT high-compression video codec (64x64 superblocks, recursive partitioning, half-pel motion, multi-reference, RDO)."
+
+[dependencies]
+tpt-media-core = { workspace = true, features = ["std"] }
+tpt-media-bitstream = { workspace = true, features = ["std"] }
+tpt-media-codec = { workspace = true, features = ["std"] }
+tpt-dsp-core = { workspace = true, features = ["std"] }
+
+[features]
+default = ["std"]
+std = ["tpt-media-core/std", "tpt-media-bitstream/std", "tpt-media-codec/std", "tpt-dsp-core/std"]
+
+[[bench]]
+name = "codec_bench"
+harness = false
+
+[dev-dependencies]
+criterion = "0.8"

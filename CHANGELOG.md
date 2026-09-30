@@ -9,6 +9,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`tpt-web`: the WASM browser player (todo.md §45)** (2026-09-30): new
+  workspace member `apps/tpt-web`. A bounded incremental `.tpt` parser
+  (`StreamParser`, reusing `tpt-container`'s chunk decoders), a `DecoderTable`
+  over Cinder/Aura/Reed/Thrum as the extension point for Vault and Mote (not
+  dependencies), a push/pull `Player` that yields planar `f32` audio and RGBA8
+  pictures with end-to-end back-pressure, and hard memory limits
+  (`WebLimits`: input backlog, packet/metadata/track-descriptor sizes checked
+  from the chunk header before buffering, RGBA frame size, output queues at a
+  soft limit and a 2x hard stop, decode-error budget; worst case 223 MiB for
+  the defaults, pinned by a test, plus a `--max-memory` link cap). Exposed
+  through 18 `extern "C"` functions over integer handles with no pointer ever
+  flowing JS to Rust; **deliberately not `wasm-bindgen`** (the surface is
+  integers and pointers; rationale in `docs/web-design.md`, which supersedes
+  `ARCHITECTURE.md`'s earlier plan, updated here). Builds for
+  `wasm32-unknown-unknown` (328 KiB). `web/` is a no-bundler demo
+  (`index.html`, `tpt-web.js`, `tpt-decoder.js`, `demo.tpt`).
+  Verified: 49 native tests; `web/check.mjs` runs the built wasm under Node
+  (exact 192 000-sample / 60-frame decode, 300 hostile files with zero traps);
+  `web/mock-browser.mjs` runs the playback JS against *fake* WebAudio/canvas.
+  **Not verified: real browser audio/video output** (no browser was
+  available). Benchmarks (`cargo bench -p tpt-web`, `web/bench.mjs`) and their
+  measured, noise-caveated numbers are in `docs/performance.md`; memory limits
+  are in `docs/security.md`. CI's `wasm` job now builds the module and runs
+  the Node scripts. Also fixed stale "planned" statements in `README.md` and
+  `ARCHITECTURE.md`. Per-crate README, CHANGELOG, keywords and categories per
+  CONTRIBUTING §9.4.
+
+- **Mote implemented — `tpt-video-mote` (`codecs/mote`, todo.md §34)**
+  (2026-09-30): the extreme edge/IoT video codec, now a workspace member.
+  8×8 patch dictionary VQ (up to 4096 entries, 12-bit index) over `Gray8` /
+  `Yuv420` up to 480p (multiples of 16, long edge ≤ 848, short edge ≤ 480);
+  key frames plus delta frames that code only changed patches
+  (conditional replenishment, Rice-coded skip runs; an unchanged frame is
+  an 11-byte heartbeat); dictionary trained offline (deterministic seeded
+  integer Lloyd) and provisioned out of band, or sent once in-band and
+  identified by a 16-bit id in every frame packet. Versioned bitstream
+  (`VERSION = 1`) with a CRC-32 trailer, `CODEC_ID = MOTE`,
+  `DynEncoder`/`DynDecoder` factories, `ResourceLimits` honoured, a provable
+  packet-size bound, and a decoder that cannot panic or read out of bounds on
+  corrupt packets (bit-flip sweeps with repaired CRCs, random bodies behind
+  valid headers, dictionary packets that over-claim). VQ search reuses
+  `tpt_dsp_core::nearest_vector_accelerated` (§8) rather than a private copy.
+  55 tests, a criterion bench, and a counting-allocator memory test.
+  **The bandwidth target is benchmark-defined, not a guarantee**:
+  on the bench's fixed-camera scene a 320×240 mono stream with the
+  4096-entry dictionary measures 46 B per delta frame (0.37 kbps at 1 fps)
+  and a 1 809 B key frame, while a key-frame-only 640×480 stream at 1 fps
+  is 57.7 kbps — over the old 50 kbps design figure — so sub-50 kbps at 480p
+  rests entirely on temporal skip and a static scene. Also: the old
+  memory-budget row for Mote (16 KiB scratch / 64 KiB total, written before
+  any code existed) could not survive contact with a 256 KiB dictionary and
+  was replaced by measured figures. Every todo.md §34 item is checked; the
+  temporal-prediction item records that conditional replenishment was built
+  and measured while motion-compensated candidates and index-stream context
+  coding were not investigated. Design and the temporal-prediction investigation: `docs/codec-design.md`;
+  measurements: `docs/performance.md`; sources: `docs/provenance.md` (rows
+  are `pending` patent review, not signed off). Per-crate
+  [README](codecs/mote/README.md) and [CHANGELOG](codecs/mote/CHANGELOG.md).
+- Mote is registered in `tpt-cli`'s `probe` registry (so a `.tpt` with a
+  `MOTE` track reports decoder/encoder support) but is **not** driven by
+  `tpt encode`/`decode`/`benchmark`: that needs `VideoCodec` threaded through
+  five command paths, left out to avoid colliding with concurrent CLI work.
 - **The y4m bridge could not parse any YUV4MPEG2 file** (2026-09-30): the
   header parser consumes `C` as the *tag* and stores only what follows
   (`"420jpeg"`), but the colorspace match compared the *full tag*

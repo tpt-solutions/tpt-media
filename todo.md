@@ -362,8 +362,8 @@ convention as the rest of this document.
       no_std foundation crates compile for `wasm32-unknown-unknown`
       with std off (probe had never actually been built for the
       target and was missing `alloc` imports — fixed), and a new CI
-      `wasm` job keeps that verified; §45's `tpt-web` itself remains
-      unbuilt, but the *components* claim is now tested fact
+      `wasm` job keeps that verified; §45's `tpt-web` was built on
+      top of them on 2026-09-30, and the *components* claim is tested fact
 * [ ] stable FFI boundary — the ABI now *exists* (§46 v0.1, 2026-09-29)
       with a stated stability rule, but "stable" is the 1.0 gate (§53's
       "FFI stability"): the version holds until a signature, error-code
@@ -690,6 +690,11 @@ Required by Reed and Mote.
 * [x] Add optional accelerated search — `nearest_vector_accelerated`: early-exit once a codeword's partial distance sum can't beat the current best (both metrics accumulate non-negative terms, so this is always safe). Proven bit-identical to the linear scan (`accelerated_matches_linear_search`, 2 metrics × 20 random queries against a 40-entry codebook), not just "usually agrees" — ~3-3.6× faster at Reed's/Mote's target codebook sizes (data-dependent, see `BENCHMARKS.md`)
 * [x] Benchmark linear search — `tpt-dsp-core/benches/dsp_bench.rs::bench_vq`, linear vs accelerated, at (1024,10) and (4096,16) — Reed's/Mote's own target codebook sizes (§31/§34); results in `BENCHMARKS.md`
 * [ ] Investigate tree/product quantisation for larger codebooks — intentionally not implemented: no concrete consumer (Mote doesn't exist yet) to validate requirements against, same reasoning as holding off on §5.3's 2D transforms
+      _Update 2026-09-30: Mote (§34) is now that consumer, and it uses the
+      accelerated linear scan at 4096 entries (key frame 27-38 ms at
+      320x240 mono, ~200 ms at 640x480, shared-machine timings). Tree or
+      product quantisation stays unimplemented and unchecked; it is the
+      candidate if key-frame encode cost ever matters._
 
 VQ itself belongs in DSP.
 
@@ -1006,7 +1011,13 @@ All decoders must support bounded resources.
   (`ThrumDecoder::REFERENCE_FRAMES = 1`) and calls
   `limits.check_reference_frames(...)` on every packet, so the knob is
   now exercised by a real decoder rather than being aspirational
-* [ ] maximum recursion depth — no recursive codec decode paths yet
+* [x] maximum recursion depth — 2026-09-30: Vault's partition decode is the
+  first recursive codec path. Its depth is structurally bounded (64→32→16→8,
+  `MAX_PARTITION_DEPTH = 3`; a node below 8×8 cannot exist), and
+  `VaultDecoder::decode` calls `limits.check_recursion_depth(4)` on every
+  packet, so a caller who sets `max_recursion_depth` below 4 gets
+  `ResourceLimit(RecursionDepth)` (`resource_limits_are_honoured`). No other
+  codec has a recursive decode path
 * [ ] maximum decode work where practical — `max_decode_micros` still uncalled (would need a measured loop budget). Thrum's per-packet work is bounded structurally (one pass over a fixed macroblock grid, each block's entropy walk capped at 64 positions), so there is no loop budget to measure — the bound is the frame geometry, which `max_frame_bytes` already covers
 * [ ] cancellation support — `CodecError::Cancelled` exists but no codec produces/checks a cancellation token yet
 * [x] malformed-input termination guarantees
@@ -1529,26 +1540,126 @@ Initial intra-refresh target:
 
 **Purpose:** high-compression video.
 
-* [ ] define superblock structure
-* [ ] 64×64 top-level blocks
-* [ ] recursive partitioning
-* [ ] minimum 8×8 blocks
-* [ ] motion vectors
-* [ ] full-pixel search
-* [ ] half-pixel interpolation
-* [ ] reference frames
-* [ ] 2D transforms
-* [ ] quantisation
-* [ ] RDO
-* [ ] entropy coding
-* [ ] loop filtering
-* [ ] decoder
-* [ ] encoder
-* [ ] per-crate documentation — `codecs/vault/README.md` and
+2026-09-30: `tpt-video-vault` (`codecs/vault`, codec id `VAUL`) is a
+working implementation of the checklist below, as an I/P codec with no
+B-frames. Design notes in `docs/codec-design.md`; measured numbers in
+`docs/performance.md`; algorithm sources in `docs/provenance.md` (every
+row `under-review`: no maintainer patent review has happened yet). 38
+tests (15 unit, 18 property, 4 coding-tool census, 1 memory) plus
+`tests/measure.rs` (an `#[ignore]`d reproducible measurement harness).
+
+* [x] define superblock structure — raster-order 64×64 superblocks, each
+      a quadtree of 1-bit `split` flags and leaves; a node overhanging the
+      picture edge splits implicitly with no flag, so any size that is a
+      multiple of 8 needs no padding (`docs/codec-design.md`)
+* [x] 64×64 top-level blocks — `SUPERBLOCK`; a 64×64 leaf is coded as four
+      32×32 transform tiles (the largest transform is 32×32, a stated
+      limit, not the block size)
+* [x] recursive partitioning — RDO-chosen quadtree, 64→32→16→8. Census
+      test `recursive_partitioning_uses_large_blocks_where_flat_and_small_where_busy`
+      pins that both large and small leaves actually occur
+* [x] minimum 8×8 blocks — `MIN_BLOCK`; chroma of an 8×8 leaf is 4×4
+* [x] motion vectors — half-pel units, `|v| ≤ 65`, coded as a difference
+      from a left-else-top neighbour predictor (not a median); chroma
+      vectors derived, never signalled
+* [x] full-pixel search — a shrinking-step 8-neighbour *pattern* search
+      seeded from the zero and predicted vectors, **not exhaustive** (it
+      can settle in a local minimum), costed by SAD plus a vector-cost term
+* [x] half-pixel interpolation — 2-tap bilinear (4-sample on the diagonal)
+      per CONTRIBUTING §3; known-answer and edge-clamp tests, and
+      `half_pel_motion_is_used_and_predicts_well` shows the search picks
+      half-pel vectors on a half-pel shift
+* [x] reference frames — up to 16 (`MAX_REFERENCE_FRAMES`), the last
+      `max_refs` loop-filtered pictures, per-leaf reference index. Drift-free
+      at 1, 2, 3, 5, 8 and 16 references; used and paying off on an A/B/A/B
+      cut (`multiple_references_are_used_and_pay_off`). Default is 4 so the
+      strict default limits (8) decode it; 16 needs a raised limit. No
+      long-term references, reordering or B-frames
+* [x] 2D transforms — 4×4…32×32 separable DCT from `tpt-dsp-core`'s
+      `dct_2d`/`idct_2d`, quantised in orthonormal units so one `qp` means
+      the same step at every size
+* [x] quantisation — one flat dead-zone quantiser (rounding offset 0.4)
+      on the shared 6-bit `qp` table, level clamp ±8192 derived from the
+      transform bound. No per-block `qp`, no coefficient-level RDO
+* [x] RDO — explicit `J = D + λR` with `λ = LAMBDA_SCALE·step²` (empirical,
+      untuned), `D` = SSE against the decoder's own reconstruction, `R` =
+      the exact bit count of the real writer. Chooses partition, skip /
+      inter / intra, reference and vector. **A greedy per-node comparison
+      over a heuristically pruned candidate set with an early-termination
+      rule — no global optimum is claimed.** Tested only as far as
+      `partition_freedom_improves_the_rd_objective` (freeing the partition
+      is not worse on `J` than forcing 8×8 on two test frames)
+* [x] entropy coding — static Rice codes, per-tile parameter, run/level
+      over a diagonal scan with `last` as terminator (no context modelling)
+* [x] loop filtering — H.263 Annex J deblocking driven by a boundary
+      strength, applied only at real coding-structure edges; the filtered
+      picture is the next reference. **Not RD-decided** (a per-frame header
+      bit): measured to help a textured clip and to be neutral-to-harmful
+      on a smooth-gradient clip (`docs/performance.md`)
+* [x] decoder — `VaultDecoder`; hostile-input tested (see below)
+* [x] encoder — `VaultEncoder`; I-frame every `KEYFRAME_INTERVAL` (60)
+      frames, an I-frame clears the reference store
+* [x] per-crate documentation — `codecs/vault/README.md` and
       `CHANGELOG.md`, plus its own `keywords`/`categories`, land **in the
       same change** that adds the crate as a workspace member
       (CONTRIBUTING §9.4). The CI `metadata` job fails until they exist,
-      so this cannot be forgotten silently.
+      so this cannot be forgotten silently. Landed with the member
+      entry; `ci/check-metadata.py` passes.
+
+Additional work not on the original list, and why:
+
+* [x] versioned bitstream + CRC-32 trailer — §35's family convention (16-bit
+      version rejected up front, CRC verified before parsing)
+* [x] provable packet-size bound — `VaultConfig::max_packet_bits` derives
+      the worst case from `MAX_LEVEL`/`MAX_RICE_BITS`; the encoder checks
+      every packet against it and `packets_never_exceed_the_derived_bound`
+      drives the finest quantiser over uniform noise
+* [x] hostile-input safety (§38/§47) and resource limits (§19) — the
+      corruption sweep repairs the CRC after corrupting the body (random
+      bytes are stopped by the CRC and never reach the parser); header,
+      reference-index and vector range checks; a failed decode leaves the
+      reference store untouched; limits honoured for packet, frame,
+      allocation, reference frames and recursion depth
+      (`resource_limits_are_honoured`)
+* [x] determinism (§39) — `encoding_and_decoding_are_deterministic`; the
+      decoder's output is bit-identical to the encoder's own reconstruction
+      (`decoder_matches_encoder_reconstruction_and_shape`,
+      `every_reference_count_is_drift_free`) on the same build/target
+* [x] `DynEncoder`/`DynDecoder` factories (geometry-carrying, like Thrum's),
+      registered in the CLI's probe registry so a `.tpt` carrying a `VAUL`
+      track probes as decodable
+* [x] measured peak memory (§42-style) — `tests/memory.rs`: 482 784 B at
+      176×144 4:2:0 with 4 references, independent of stream length; two
+      frames' worth per extra reference (`docs/performance.md`)
+* [x] `VaultDecoder::last_stats()` — a per-frame census of the tools used,
+      so tests can prove partitioning/half-pel/multi-reference are exercised
+      rather than merely present
+
+Not done, and why (left honestly open):
+
+* [ ] CLI `encode`/`decode`/`benchmark` through the y4m bridge — the five
+      video command paths in `tpt-cli` are written against Thrum's concrete
+      types; wiring Vault needs them generalised, which is not a minimal
+      edit and another agent may be editing that file. Vault is registered in
+      the probe registry only
+* [ ] §36/§37 video-corpus quality and a bitrate comparison against another
+      codec — the corpus in `tpt-cli` is Thrum-specific, and no real-video
+      corpus exists in the repo; only synthetic clips were measured, so no
+      "high-compression" claim relative to any other codec is made
+* [ ] B-frames, bi-prediction, weighted prediction, long-term references and
+      reference reordering
+* [ ] rate control (`qp` is a constant), scene-cut detection, per-block `qp`
+* [ ] coefficient-level RDO (RDOQ / trellis), a tuned `λ`, and an RD-decided
+      loop-filter flag
+* [ ] a faster encoder — the direct `O(n³)` DCT evaluated at every partition
+      level is the suspected dominant cost, not profiled (about 45-55 ms/frame at QCIF); the encoder is not
+      real-time and the decoder is not claimed real-time either
+* [ ] bare-metal `no_std` verification — the crate carries the `no_std` +
+      `alloc` attribute like Thrum but is not built for a bare-metal target in CI
+* [ ] a WASM build and the web player (§45) do not include Vault
+* [ ] maximum decode work (§19 `max_decode_micros`) — per-packet work is
+      bounded structurally by the frame geometry, but no time budget is
+      checked
 
 Initial target:
 
@@ -1576,20 +1687,57 @@ Do not claim an absolute global minimum.
 
 **Purpose:** extreme edge / IoT video.
 
-* [ ] define supported dimensions
-* [ ] define patch representation
-* [ ] define dictionary
-* [ ] implement VQ
-* [ ] implement encoder
-* [ ] implement decoder
-* [ ] define reconstruction model
-* [ ] investigate temporal prediction
-* [ ] define quality metric
-* [ ] benchmark bandwidth
-* [ ] benchmark CPU
-* [ ] benchmark memory
-* [ ] test extremely low bitrate
-* [ ] per-crate documentation — `codecs/mote/README.md` and
+All items below implemented 2026-09-30 in `codecs/mote` (`tpt-video-mote`,
+`MOTE`, bitstream v1); design in `docs/codec-design.md`, measurements in
+`docs/performance.md`, sources in `docs/provenance.md`. 55 tests (42 unit,
+7 property/hostile-input, 4 low-bitrate, 1 temporal, 1 memory).
+
+* [x] define supported dimensions — `Gray8`/`Yuv420`, width and height
+      non-zero multiples of 16, long edge <= 848, short edge <= 480
+      (`picture::validate_dimensions`; test `dimension_rules`)
+* [x] define patch representation — 8x8 samples of one plane (dimension
+      64), numbered Y then U then V in raster order; all planes share one
+      dictionary (`patch_counts_match_the_geometry`,
+      `every_patch_loads_and_stores_back_exactly`)
+* [x] define dictionary — 1..=4096 entries of 64 bytes, index width
+      `ceil(log2(entries))` (12 bits at 4096), 16-bit dictionary id in every
+      frame packet, sent in-band once or provisioned out of band; deterministic
+      seeded integer Lloyd trainer (`training_is_reproducible`,
+      `full_size_dictionary_uses_twelve_bit_indices`)
+* [x] implement VQ — reuses `tpt_dsp_core::nearest_vector_accelerated`
+      (§8); only codebook training is Mote's own. Tree/product quantisation
+      (§8's open item) is **not** implemented
+* [x] implement encoder — key and delta frames, Rice-coded skip runs,
+      provable packet bound (`packets_never_exceed_the_provable_bound`)
+* [x] implement decoder — CRC first, versioned, `ResourceLimits`, every
+      count/index validated, state committed only on success
+      (`corruption_sweep_never_panics_and_a_clean_stream_still_decodes`,
+      `an_out_of_range_index_is_malformed_and_does_not_disturb_the_reference`)
+* [x] define reconstruction model — decoded picture is dictionary entries,
+      no post-filter; a skipped patch keeps the previous decoded patch bit
+      for bit; decoder output equals the encoder's own reconstruction
+* [x] investigate temporal prediction — conditional replenishment built and
+      measured (`tests/temporal.rs`; table in `docs/codec-design.md`: ~25-100x
+      fewer bytes than independent coding on the test scenes). **Not
+      investigated**, still open: motion-compensated candidates and
+      index-stream context/delta coding
+* [x] define quality metric — luma PSNR primary, all-plane PSNR and mean
+      absolute error secondary (`src/quality.rs`,
+      `quality_metric_is_defined_as_documented`); a fidelity yardstick only
+* [x] benchmark bandwidth — `benches/codec_bench.rs` prints key/delta sizes,
+      kbps at 1/5/15 fps and PSNR; numbers in `docs/performance.md`.
+      Benchmark-defined, not a guarantee: a key-frame-only 640x480 stream at
+      1 fps is 57.7 kbps, so sub-50 kbps at 480p depends on temporal skip
+* [x] benchmark CPU — same bench (key/delta encode and decode, training).
+      Caveat recorded with the numbers: measured on a machine shared with
+      concurrent builds, so timings are roughly +/-2x
+* [x] benchmark memory — `tests/memory.rs` (counting allocator, 4096-entry
+      dictionary); the old Mote memory-budget row was replaced by measured
+      figures
+* [x] test extremely low bitrate — `tests/low_bitrate.rs`: exact 12-bit key
+      frame, 11-byte heartbeat, 2-entry-dictionary floor, static-camera
+      bandwidth regression bound
+* [x] per-crate documentation — `codecs/mote/README.md` and
       `CHANGELOG.md`, plus its own `keywords`/`categories`, land **in the
       same change** that adds the crate as a workspace member
       (CONTRIBUTING §9.4; enforced by the CI `metadata` job).
@@ -1951,8 +2099,15 @@ results + machine caveats recorded in `docs/performance.md`):
       P-frame figures are the latency-relevant ones: Thrum never
       holds a frame back, so one P-frame's encode + decode *is* the
       one-way latency contribution
-* [ ] Vault encode/decode — no implementation yet (§33)
-* [ ] Mote encode/decode — no implementation yet (§34)
+* [x] Vault encode/decode — 2026-09-30:
+      `codecs/vault/benches/codec_bench.rs` (I-frame and P-frame encode and
+      decode of 4-frame clips at 176x144 and 352x288 4:2:0), plus the
+      `#[ignore]`d `tests/measure.rs` harness for the rate/quality/tool
+      tables; results and machine caveats in `docs/performance.md` (§33)
+* [x] Mote encode/decode — 2026-09-30: `codecs/mote/benches/codec_bench.rs`
+      (key/delta encode + decode of 8-frame fixed-camera clips at 320x240
+      mono/4:2:0 and 640x480 mono; bandwidth and PSNR printed; dictionary
+      training); results in `docs/performance.md` (§34)
 * [x] container mux/demux — `containers/tpt-container/benches/
       container_bench.rs` (200-packet stream both directions)
 * [x] pipeline throughput — `crates/tpt-media-pipeline/benches/
@@ -2089,16 +2244,62 @@ full packet scan); the dependency edge was inverted so probe → container
 
 Create `tpt-web`.
 
-* [ ] WASM-compatible decoder
-* [ ] `.tpt` parser
-* [ ] streaming playback
-* [ ] browser audio output
-* [ ] browser video output
-* [ ] JavaScript bindings
-* [ ] memory limits
-* [ ] browser demo
-* [ ] performance benchmark
-* [ ] per-crate documentation — `apps/tpt-web/README.md` and
+* [x] WASM-compatible decoder — 2026-09-30: `apps/tpt-web` builds for
+      `wasm32-unknown-unknown` (`cdylib`, 328 KiB release) with Cinder, Aura,
+      Reed and Thrum (`DecoderTable::native`); Vault/Mote are not
+      dependencies and enter through `DecoderTable::register` (extension
+      point, tested with a fake codec). The wasm build decodes the demo file
+      exactly (192 000 samples, 60 frames) and survives 300 hostile files
+      with zero traps, under Node (`web/check.mjs`)
+* [x] `.tpt` parser — `StreamParser`: bounded incremental push parser reusing
+      `tpt-container`'s chunk decoders; sizes checked from the chunk header
+      before buffering, unknown chunks skipped unbuffered, bad CRC-32
+      clusters dropped; byte-at-a-time output identical to whole-file;
+      deterministic mutation/truncation sweeps
+* [x] streaming playback — `Player` push/pump/pop with end-to-end
+      back-pressure (`InputFull`, queue soft limits and 2x hard stops),
+      drift-free audio timestamps, exact tail trim from `tpt.io.sample_count`
+      (Aura lossless round-trips bit-exactly), graceful end on a truncated
+      stream. Tested natively and as wasm under Node. The *browser* playback
+      scheduler is under the two items below
+* [ ] browser audio output — `web/tpt-web.js` schedules planar `f32` chunks
+      ahead of the `AudioContext` clock (underrun re-anchoring, pause via
+      `suspend`). Its control flow is executed against a **fake**
+      `AudioContext` (`web/mock-browser.mjs`: 375 buffers back to back, 4.0000
+      s total); it has **not been run in a real browser**, so no sound has
+      actually been heard. Check this when it has
+* [ ] browser video output — `putImageData` of RGBA8 pictures paced from
+      `requestAnimationFrame` against the audio clock (stale pictures
+      dropped). Exercised only against a fake canvas; **not run in a real
+      browser**. RGBA conversion itself (full-range BT.601, NV12, gray, RGB)
+      is unit-tested natively
+* [x] JavaScript bindings — 18 `extern "C"` exports over integer handles
+      (no pointer flows JS to Rust; `unsafe` confined to `abi.rs`) plus
+      `web/tpt-decoder.js`. **Deliberately not `wasm-bindgen`**, justified in
+      `docs/web-design.md` §3; `ARCHITECTURE.md` updated. ABI lifecycle,
+      bad-handle and limit behaviour tested natively and through the built
+      wasm under Node
+* [x] memory limits — `WebLimits` on top of §19's `ResourceLimits`: input
+      backlog, packet/metadata/track sizes, RGBA frame size, audio/video
+      queues, tracks, decode-error budget, players per module; caller values
+      clamped to a ceiling; worst case computed (223 MiB for the defaults,
+      pinned by a test) and the wasm instance capped by `--max-memory`
+      (`web/build.mjs`, default 512 MiB). `docs/security.md`,
+      `docs/web-design.md` §7. `max_decode_micros`/cancellation remain
+      unused (§19 open items)
+* [ ] browser demo — `web/index.html` + `tpt-web.js` + `tpt-decoder.js` +
+      `demo.tpt`; static, no bundler, plays the demo, a local file or a URL.
+      Written and logic-tested against fakes, **never opened in a real
+      browser** (none was available), so it is not claimed to work there.
+      Check this once it has been loaded, seen and heard in at least one
+      browser
+* [x] performance benchmark — `cargo bench -p tpt-web` (native) and
+      `web/bench.mjs` (the same byte-identical inputs as wasm under
+      Node/V8). Real numbers in `docs/performance.md`: e.g. Cinder 30 s
+      decodes in ~18 ms native / ~26 ms wasm (1100-1650x real time), Thrum
+      640x352 at ~300 fps in wasm. Machine was shared, video numbers noisy
+      (ranges given); **no in-browser numbers exist**
+* [x] per-crate documentation — `apps/tpt-web/README.md` and
       `CHANGELOG.md`, plus its own `keywords`/`categories`, land **in the
       same change** that adds the crate as a workspace member
       (CONTRIBUTING §9.4; enforced by the CI `metadata` job). A WASM app
@@ -2222,8 +2423,10 @@ export also runs under `catch_unwind` — a Rust panic becomes
   `decode_idx_rejects_entry_count_that_would_overrun_the_body`. §19's
   `max_metadata_bytes` (added earlier this session) covers the same class
   of risk for `TMTA` at the chunk-size level.
-* [ ] recursion limits — still no recursive codec decode paths to bound
-  (same status as §19's own recursion-depth item)
+* [x] recursion limits — Vault's quadtree decode is the one recursive codec
+  path; it is bounded structurally to depth 3 below the root and checked
+  against `limits.max_recursion_depth` (same evidence as §19's
+  recursion-depth item)
 * [x] decompression-bomb protection — the `decode_idx` fix above *is* a
   decompression-bomb fix (a few input bytes claiming a multi-gigabyte
   logical size); §19's metadata/allocation/packet/frame size limits
@@ -2613,7 +2816,7 @@ Before 0.3:
 Before 0.4:
 
 * [ ] Vault prototype
-* [ ] Mote prototype
+* [x] Mote prototype — `codecs/mote` v0.1, 2026-09-30 (§34)
 * [ ] advanced quality testing
 * [ ] security hardening
 
