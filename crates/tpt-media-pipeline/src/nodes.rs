@@ -45,26 +45,85 @@ where
         + PartialOrd,
 {
     /// A source over an inclusive/range of countable values.
+    ///
+    /// The bound arithmetic never forms `hi - 1` or `lo + 1` before the
+    /// emptiness test. Converting an exclusive bound that way underflows at
+    /// the ends of the type, and an underflow is a panic in debug and a
+    /// silent wrap to the opposite end in release — the same call answering
+    /// two different things depending on the build profile.
+    ///
+    /// # Panics
+    /// Panics if the range's end bound is unbounded (`from_range(..)` or
+    /// `from_range(3..)`). A [`Source`] is a finite, pre-materialised item
+    /// list, so an unbounded end has no finite length to enumerate; the
+    /// alternatives are an infinite loop and a silently short stream, and
+    /// neither is an answer a caller can debug. An unbounded *start* is
+    /// not an error — it means "from zero".
     pub fn from_range<R>(range: R) -> Self
     where
         R: RangeBounds<T>,
     {
-        let lo = match range.start_bound() {
-            core::ops::Bound::Included(x) => x.clone(),
-            core::ops::Bound::Excluded(x) => x.clone() + T::from(1u8),
-            core::ops::Bound::Unbounded => T::from(0u8),
+        let one = T::from(1u8);
+        let (start, start_excluded) = match range.start_bound() {
+            core::ops::Bound::Included(x) => (x.clone(), false),
+            core::ops::Bound::Excluded(x) => (x.clone(), true),
+            core::ops::Bound::Unbounded => (T::from(0u8), false),
         };
-        let hi = match range.end_bound() {
-            core::ops::Bound::Included(x) => x.clone(),
-            core::ops::Bound::Excluded(x) => x.clone() - T::from(1u8),
-            core::ops::Bound::Unbounded => T::from(0u8),
+        let end = match range.end_bound() {
+            core::ops::Bound::Included(x) => core::ops::Bound::Included(x.clone()),
+            core::ops::Bound::Excluded(x) => core::ops::Bound::Excluded(x.clone()),
+            core::ops::Bound::Unbounded => {
+                panic!("Source::from_range: end bound must be bounded")
+            }
         };
+
+        // Advance past an exclusive start, refusing a range that would have
+        // to step past the end of the type to produce a first value.
+        let mut first = start;
+        if start_excluded {
+            let next = first.clone() + one.clone();
+            if next <= first {
+                // `first + 1` wrapped or stalled: there is no representable
+                // value above it, so the range is empty by construction.
+                return Source::new(Vec::new());
+            }
+            first = next;
+        }
+
+        // An empty range yields no items. It used to yield exactly one (the
+        // first value was pushed unconditionally), so `from_range(1..1)`
+        // produced `[1]`.
+        let empty = match &end {
+            core::ops::Bound::Included(hi) => first > *hi,
+            core::ops::Bound::Excluded(hi) => first >= *hi,
+            core::ops::Bound::Unbounded => unreachable!("rejected above"),
+        };
+        if empty {
+            return Source::new(Vec::new());
+        }
+
         let mut items = Vec::new();
-        let mut x = lo.clone();
-        items.push(lo);
-        while x < hi {
-            x += T::from(1u8);
-            items.push(x.clone());
+        let mut x = first;
+        items.push(x.clone());
+        match &end {
+            core::ops::Bound::Included(hi) => {
+                // Stops *before* incrementing past `hi`, so a range ending at
+                // the largest representable value cannot overflow here.
+                while x < *hi {
+                    x += one.clone();
+                    items.push(x.clone());
+                }
+            }
+            core::ops::Bound::Excluded(hi) => {
+                while x < *hi {
+                    x += one.clone();
+                    if x >= *hi {
+                        break;
+                    }
+                    items.push(x.clone());
+                }
+            }
+            core::ops::Bound::Unbounded => unreachable!("rejected above"),
         }
         Source::new(items)
     }
@@ -116,6 +175,13 @@ impl<T, O, F: FnMut(T) -> O> Node for Map<T, O, F> {
 /// [`NodeEvent::NeedMore`], which is the chain's soft backpressure signal
 /// to the driver. A `cap` (>= `window`) is the hard upper bound beyond
 /// which [`NodeError::BufferOverflow`] is reported.
+///
+/// In practice that hard bound is unreachable through a [`Chain`], and the
+/// invariant is pinned by `bounded_cap_is_unreachable_in_a_linear_chain`:
+/// the node takes one input and emits at most one output per call, so the
+/// queue can never hold more than `window` items and `cap >= window` (asserted
+/// in [`Bounded::new`]) can never be reached. The cap guards the struct
+/// against a future node that pushes without draining, not a chain that pulls.
 #[derive(Debug)]
 pub struct Bounded<T> {
     queue: VecDeque<T>,

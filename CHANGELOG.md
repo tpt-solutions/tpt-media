@@ -52,6 +52,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`tpt-media-pipeline`'s `Source::from_range` answered differently
+  depending on the build profile** (2026-09-30, found while auditing the
+  crate's public API against §38's unit-test gate). Converting an exclusive
+  end bound to an inclusive one formed `hi - 1`, which underflows at the ends
+  of the type: `from_range(..0u8)` was a **panic in debug and a silent wrap to
+  255 in release** — 256 items where the range contains none. Separately,
+  every empty range yielded exactly one item (the first value was pushed
+  before the bounds were compared), so `from_range(1..1)` produced `[1]`, and
+  an unbounded end meant "the high value is zero", so `from_range(0..)`
+  produced `[0]`. Bound arithmetic no longer forms `hi - 1` or `lo + 1`
+  before the emptiness test, empty ranges yield nothing, and an unbounded end
+  panics with a stated reason — the crate's uniform "panic rather than answer
+  wrongly" rule. `Bounded`'s doc also claimed a `BufferOverflow` past `cap`
+  that a linear `Chain` cannot reach; the invariant is now documented and
+  pinned.
+- **§38 unit-test sweep over `tpt-media-pipeline`'s public API**
+  (2026-09-30): 20 new tests (21 → 41) for the categories that had no
+  coverage — empty input, maximum values, overflow, edge cases, every
+  `MediaFormat` variant, multi-candidate format negotiation, and the
+  `ThreadedExecutor`'s worker-panic mapping. Five fail against the old
+  `from_range`, verified by restoring the old body and re-running.
 - `tpt probe` claimed no codec was available — `encoder=false, decoder=false` —
   for the codecs the same binary encodes and decodes one subcommand later,
   because it used `tpt_media_probe::probe`, which answers from an empty

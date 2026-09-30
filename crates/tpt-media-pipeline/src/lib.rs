@@ -74,7 +74,9 @@ mod tests {
     use super::*;
     use alloc::vec;
     use core::cell::Cell;
-    use tpt_media_core::{ChannelLayout, Duration, PixelFormat, SampleFormat, Timebase, Timestamp};
+    use tpt_media_core::{
+        ChannelLayout, CodecId, Duration, MediaType, PixelFormat, SampleFormat, Timebase, Timestamp,
+    };
 
     fn timebase() -> Timebase {
         Timebase { num: 1, den: 1000 }
@@ -413,5 +415,321 @@ mod tests {
         let p = Source::new(vec![1i32, 2, 3]).map(|x| x * x).into_pipeline();
         let q = p;
         assert_eq!(q.execute(&ThreadedExecutor, 16).unwrap(), vec![1, 4, 9]);
+    }
+
+    // --- §38 unit-test gate: the categories that had no coverage ----------
+
+    #[test]
+    // `5..3` is deliberately reversed: an inverted range is the case under
+    // test, and clippy is right that it is empty — which is the point.
+    #[allow(clippy::reversed_empty_ranges)]
+    fn empty_range_yields_no_items() {
+        // Every empty range used to yield exactly one item, because the
+        // first value was pushed before the bounds were compared.
+        assert_eq!(Source::from_range(1..1i32).consumed(), 0);
+        let mut p = Source::from_range(1..1i32).into_pipeline();
+        assert_eq!(p.drive(16).unwrap(), Vec::<i32>::new());
+
+        // Inverted range: start above end.
+        let mut q = Source::from_range(5..3i32).into_pipeline();
+        assert_eq!(q.drive(16).unwrap(), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn exclusive_end_does_not_underflow_at_the_smallest_value() {
+        // `..0u8` is `RangeTo`, i.e. an *excluded* end of 0. Forming the
+        // inclusive bound as `0 - 1` underflowed: a debug panic, and a
+        // silent wrap to 255 in release — 256 items where there are none.
+        let mut p = Source::from_range(..0u8).into_pipeline();
+        assert_eq!(p.drive(16).unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn ranges_ending_at_the_largest_value_do_not_overflow() {
+        // The inclusive loop must stop *before* stepping past the maximum,
+        // or `255 + 1` panics in debug and wraps in release.
+        let mut p = Source::from_range(0u8..=255u8).into_pipeline();
+        let out = p.drive(STALL_BOUND).unwrap();
+        assert_eq!(out.len(), 256);
+        assert_eq!(out[0], 0);
+        assert_eq!(out[255], 255);
+
+        // And the exclusive form stops one short of it.
+        let mut q = Source::from_range(0u8..255u8).into_pipeline();
+        assert_eq!(q.drive(STALL_BOUND).unwrap().len(), 255);
+    }
+
+    #[test]
+    fn exclusive_start_bound_is_honoured() {
+        // `(Excluded(0), Included(2))` is `0..=2` minus the zero: [1, 2].
+        let mut p = Source::from_range((
+            core::ops::Bound::Excluded(0u8),
+            core::ops::Bound::Included(2u8),
+        ))
+        .into_pipeline();
+        assert_eq!(p.drive(16).unwrap(), vec![1, 2]);
+
+        // An excluded start that excludes everything the end allows.
+        let mut q = Source::from_range((
+            core::ops::Bound::Excluded(2u8),
+            core::ops::Bound::Included(2u8),
+        ))
+        .into_pipeline();
+        assert_eq!(q.drive(16).unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "end bound must be bounded")]
+    fn unbounded_end_is_rejected_rather_than_silently_short() {
+        // A `Source` is finite by construction. An unbounded end used to
+        // mean "hi = 0", so `from_range(0..)` produced the single item
+        // `[0]` and `from_range(5..)` produced `[5]` — an arbitrary answer
+        // that looks like a working pipeline until it under-delivers.
+        let _ = Source::<i32>::from_range(..);
+    }
+
+    #[test]
+    #[should_panic(expected = "end bound must be bounded")]
+    fn unbounded_end_with_a_start_is_rejected_too() {
+        let _ = Source::from_range(3i32..);
+    }
+    #[cfg(feature = "std")]
+    #[test]
+    fn threaded_executor_reports_a_worker_panic_as_an_error() {
+        // A panicking node on the worker thread must come back as a
+        // `NodeError`, not unwind into the caller. This is the only
+        // mapping of its kind in the crate, so it is pinned here.
+        let p = Source::new(vec![1i32, 2])
+            .map(|_| -> i32 {
+                panic!("node exploded");
+            })
+            .into_pipeline();
+        assert_eq!(
+            p.execute(&ThreadedExecutor, 16).unwrap_err(),
+            NodeError::Internal("pipeline worker panicked")
+        );
+    }
+
+    #[test]
+    fn source_reports_what_it_has_consumed() {
+        let mut p = Source::new(vec![7, 8, 9]).into_pipeline();
+        assert_eq!(p.core().consumed(), 0);
+        p.pull(16).unwrap();
+        p.pull(16).unwrap();
+        assert_eq!(p.core().consumed(), 2);
+        // The cursor does not advance past exhaustion.
+        assert_eq!(p.pull(16).unwrap(), Some(9));
+        assert_eq!(p.pull(16).unwrap(), None);
+        assert_eq!(p.core().consumed(), 3);
+    }
+
+    #[test]
+    fn empty_source_is_immediately_end_of_stream() {
+        let mut p = Source::new(Vec::<i32>::new()).into_pipeline();
+        assert_eq!(p.pull(16).unwrap(), None);
+        assert_eq!(p.core().consumed(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "window must be at least 1")]
+    fn bounded_rejects_a_zero_window() {
+        let _ = Bounded::<i32>::new(0, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "cap must be >= window")]
+    fn bounded_rejects_a_cap_below_its_window() {
+        // Otherwise the node can never reach its window and every item
+        // after the cap would overflow — a permanently broken stage that
+        // still looks configured.
+        let _ = Bounded::<i32>::new(4, 2);
+    }
+
+    #[test]
+    fn bounded_cap_is_unreachable_in_a_linear_chain() {
+        // The cap is a structural guard, not a live limit: one input in,
+        // at most one output out, so the queue never exceeds `window`.
+        let mut p = Source::new(vec![1, 2, 3, 4, 5, 6])
+            .then(Bounded::new(2, 2))
+            .map(|x| x * 10)
+            .into_pipeline();
+        assert_eq!(p.drive(16).unwrap(), vec![10, 20, 30, 40, 50, 60]);
+
+        // Same window with a generous cap: identical output, no overflow.
+        let mut q = Source::new(vec![1, 2, 3])
+            .then(Bounded::new(1, 64))
+            .into_pipeline();
+        assert_eq!(q.drive(16).unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn bounded_reports_its_fill_level() {
+        let mut b = Bounded::<i32>::new(2, 2);
+        assert!(b.is_empty());
+        assert_eq!(b.len(), 0);
+        // One item: still filling the window, so it is retained.
+        assert!(matches!(b.process(1), Ok(NodeEvent::NeedMore)));
+        assert!(!b.is_empty());
+        assert_eq!(b.len(), 1);
+        // The second reaches the window and is emitted.
+        assert!(matches!(b.process(2), Ok(NodeEvent::Item(1))));
+        assert_eq!(b.len(), 1);
+    }
+
+    #[test]
+    fn flush_drains_a_partially_filled_buffer_then_reports_eos() {
+        let mut b = Bounded::<i32>::with_window(4);
+        b.process(1).unwrap();
+        b.process(2).unwrap();
+        assert_eq!(b.len(), 2);
+        assert_eq!(b.flush().unwrap(), NodeEvent::Item(1));
+        assert_eq!(b.flush().unwrap(), NodeEvent::Item(2));
+        assert!(b.is_empty());
+        assert_eq!(b.flush().unwrap(), NodeEvent::Eos);
+    }
+
+    #[test]
+    fn cancelled_node_rejects_flush_as_well_as_process() {
+        // Cancellation must survive the end-of-stream flush path, or a
+        // cancelled pipeline keeps draining buffered items after EOS.
+        let mut b = Bounded::<i32>::with_window(4);
+        b.process(1).unwrap();
+        b.cancel();
+        assert_eq!(b.process(2).unwrap_err(), NodeError::Cancelled);
+        assert_eq!(b.flush().unwrap_err(), NodeError::Cancelled);
+    }
+
+    #[test]
+    fn media_format_compatibility_covers_every_variant() {
+        let audio = MediaFormat::Audio {
+            sample_format: SampleFormat::S16,
+            channel_layout: ChannelLayout::MONO,
+            sample_rate: 48_000,
+        };
+        let video = MediaFormat::Video {
+            pixel_format: PixelFormat::Yuv420,
+            width: 320,
+            height: 240,
+        };
+        let packets = MediaFormat::Compressed {
+            media_type: MediaType::Audio,
+            codec_id: CodecId::new(*b"CIND"),
+        };
+        let opaque = MediaFormat::Opaque("app-defined");
+
+        for (i, f) in [&audio, &video, &packets, &opaque].into_iter().enumerate() {
+            assert!(f.compatible(f), "{f:?} must be compatible with itself");
+            for (j, other) in [&audio, &video, &packets, &opaque].into_iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                assert!(!f.compatible(other), "{f:?} vs {other:?}");
+            }
+        }
+
+        // A one-field difference is enough to make two video formats
+        // incompatible — the comparison is structural, not "both video".
+        let smaller = MediaFormat::Video {
+            pixel_format: PixelFormat::Yuv420,
+            width: 160,
+            height: 240,
+        };
+        assert!(!video.compatible(&smaller));
+    }
+
+    struct TwoFormatProducer;
+    struct WideConsumer;
+    const WIDE: &[MediaFormat] = &[
+        MediaFormat::Compressed {
+            media_type: MediaType::Audio,
+            codec_id: CodecId::new(*b"REED"),
+        },
+        MediaFormat::Compressed {
+            media_type: MediaType::Audio,
+            codec_id: CodecId::new(*b"CIND"),
+        },
+    ];
+    impl FormatAware for TwoFormatProducer {
+        fn output_formats(&self) -> Option<&[MediaFormat]> {
+            Some(WIDE)
+        }
+    }
+    impl FormatAware for WideConsumer {
+        fn input_formats(&self) -> Option<&[MediaFormat]> {
+            Some(&WIDE[1..])
+        }
+    }
+
+    #[test]
+    fn negotiation_picks_the_first_format_the_right_side_accepts() {
+        // The producer offers REED then CIND; the consumer accepts only
+        // CIND. Negotiation must search, not just take the head.
+        assert_eq!(
+            negotiate_formats(&TwoFormatProducer, &WideConsumer).unwrap(),
+            WIDE[1]
+        );
+
+        // A consumer that accepts anything still gets the producer's
+        // first choice, not the last.
+        struct AcceptAll;
+        impl FormatAware for AcceptAll {}
+        assert_eq!(
+            negotiate_formats(&TwoFormatProducer, &AcceptAll).unwrap(),
+            WIDE[0]
+        );
+    }
+
+    #[test]
+    fn stream_spec_merges_when_only_one_side_declares_a_timebase() {
+        let declared = StreamSpec {
+            timebase: Some(timebase()),
+            has_audio: true,
+            has_video: false,
+        };
+        let undeclared = StreamSpec {
+            timebase: None,
+            has_audio: false,
+            has_video: true,
+        };
+        let merged = negotiate_stream(&declared, &undeclared).expect("merge");
+        assert_eq!(merged.timebase, Some(timebase()));
+        // Media flags are a union: the merged edge carries both.
+        assert!(merged.has_audio);
+        assert!(merged.has_video);
+
+        // Order does not matter, and no timebase anywhere stays `None`.
+        assert_eq!(negotiate_stream(&undeclared, &declared).unwrap(), merged);
+        let empty = StreamSpec {
+            timebase: None,
+            has_audio: false,
+            has_video: false,
+        };
+        assert_eq!(negotiate_stream(&empty, &empty).unwrap(), empty);
+    }
+
+    #[test]
+    fn a_zero_stall_bound_rejects_the_first_need_more() {
+        // `stall_bound` is "how many non-output steps are tolerated", so
+        // zero means none. Worth pinning: it is the boundary between a
+        // working pipeline and an instant backpressure error.
+        let mut p = Source::new(vec![1, 2, 3])
+            .then(Bounded::with_window(2))
+            .into_pipeline();
+        assert_eq!(p.pull(0).unwrap_err(), NodeError::Backpressure);
+    }
+
+    #[test]
+    fn pull_survives_a_stall_bound_below_the_batch_size() {
+        // window 4 needs four NeedMore steps; a bound of 2 must abort
+        // rather than loop forever or emit a partial batch.
+        let mut p = Source::new(vec![1, 2, 3, 4])
+            .then(Bounded::with_window(4))
+            .into_pipeline();
+        assert_eq!(p.pull(2).unwrap_err(), NodeError::Backpressure);
+        // The default bound is comfortably above that.
+        let mut q = Source::new(vec![1, 2, 3, 4])
+            .then(Bounded::with_window(4))
+            .into_pipeline();
+        assert_eq!(q.pull(STALL_BOUND).unwrap(), Some(1));
     }
 }
