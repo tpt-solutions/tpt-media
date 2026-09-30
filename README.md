@@ -34,9 +34,9 @@ crate. The intended stack is:
 
 ## Ecosystem
 
-Only the crates implemented so far are workspace members; the video codecs,
-the WASM player, and the FFI bridge land in their `todo.md` order and are
-marked *(planned)* below.
+Only the crates implemented so far are workspace members; Vault, Mote and
+the WASM player `tpt-web` land in their `todo.md` order and are marked
+*(planned)* below.
 
 | Crate                  | Purpose                                                 |
 | ---------------------- | ------------------------------------------------------- |
@@ -55,9 +55,9 @@ marked *(planned)* below.
 | [`tpt-audio-reed`](codecs/reed)        | Extremely low-bandwidth speech codec (`no_std` LPC vocoder) |
 | [`tpt-video-thrum`](codecs/thrum)   | Real-time video communication (I/P, intra refresh, 8x8 DCT)  |
 | [`tpt-cli`](apps/tpt-cli)              | Command-line encoder/decoder/probe                      |
-| [`tpt-video-vault`](../tpt-media/codecs/vault)      | *(planned)* High-compression archival video             |
-| [`tpt-video-mote`](../tpt-media/codecs/mote)    | *(planned)* Extreme-edge dictionary-coded video         |
-| [`tpt-web`](../tpt-media/apps/tpt-web)              | *(planned)* WASM browser player                         |
+| `tpt-video-vault`      | *(planned)* High-compression archival video             |
+| `tpt-video-mote`       | *(planned)* Extreme-edge dictionary-coded video         |
+| `tpt-web`              | *(planned)* WASM browser player                         |
 | [`tpt-media-sys`](ffi/tpt-media-sys)       | Stable C ABI (§46: opaque handles, error codes, C header)  |
 
 Each crate link goes to its own `README.md`, which carries the usage examples,

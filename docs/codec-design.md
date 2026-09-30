@@ -167,10 +167,12 @@ Known sharp edges, stated plainly:
 - **Chroma is DC-only intra** and uses halved motion vectors, so chroma
   detail at sub-macroblock scale is not preserved. Fine for a
   communication codec, not for archival use.
-- **Not wired into the CLI's encode/decode** — those are WAV-in/WAV-out
-  and audio-only. The codec resolves by name and appears in
-  `tpt list-codecs`, but reaching an audio command with it fails with an
-  explicit message.
+- **Wired into the CLI through the y4m bridge**, not through
+  `tpt-media-io`: `tpt encode/benchmark` take a `.y4m` input and
+  `tpt decode` writes one back, with `--codec thrum`. The bridge is
+  progressive-only and `C420*`/`Cmono`-only, and lives in
+  `apps/tpt-cli/src/y4m.rs`. A video codec on a non-video path still
+  fails with an explicit message rather than a generic unknown-codec.
 
 ## Common Patterns
 

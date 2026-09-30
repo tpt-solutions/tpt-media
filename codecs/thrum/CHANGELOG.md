@@ -31,11 +31,12 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 - `ThrumConfig::max_packet_bits` derives the worst-case packet size from the
   level clamp and the per-code bit bound, so the encoder's single allocation
   provably cannot overflow.
-- CLI codec-table wiring: `--codec thrum` / `--codec LIVE` resolve and
-  `tpt list-codecs` advertises it. The `encode`/`decode`/`transcode`/
-  `benchmark` family remains audio-only and rejects it with an explicit
-  "video codec, audio-only" message rather than a misleading unknown-codec
-  error.
+- CLI wiring through the y4m bridge: `--codec thrum` / `--codec LIVE`
+  resolve and `tpt list-codecs` advertises it; `encode`/`benchmark` take a
+  `.y4m` input, `decode` writes a video track back out as `.y4m`, and
+  `tpt video-corpus` measures the codec over the §36 corpus. A video codec on
+  a non-video path still fails with an explicit video/audio message rather
+  than a misleading unknown-codec error.
 - Provenance records in `docs/provenance.md` (2026-09-28).
 
 ### Fixed

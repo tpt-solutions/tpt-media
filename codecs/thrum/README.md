@@ -158,9 +158,11 @@ does not allocate it at all.
   configuration is offline/smaller-frame only until the search window shrinks.
 - No B-frames, no sub-pixel motion, no multiple reference frames — all
   deliberate.
-- Not reachable from `tpt encode`/`decode`: the CLI's encode family is
-  audio-only and rejects `--codec thrum` with an explicit message. Drive the
-  crate directly (the CLI's `video`/`y4m` modules are the bridge).
+- Reachable from the CLI through the y4m bridge: `tpt encode --codec thrum
+  in.y4m out.tpt`, `tpt decode`, and `tpt benchmark` drive it end to end, and
+  `tpt video-corpus` measures it over the §36 corpus. The bridge is
+  progressive-only, `C420*`/`Cmono`-only, and lives in `tpt-cli`'s `y4m`
+  module rather than in `tpt-media-io`.
 
 ## License
 

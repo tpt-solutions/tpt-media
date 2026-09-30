@@ -68,14 +68,6 @@ impl Y4mParams {
 /// tag or count).
 pub type ParseResult<T> = Result<T, String>;
 
-fn plane_count(format: PixelFormat) -> usize {
-    match format {
-        PixelFormat::Yuv420 => 3,
-        PixelFormat::Gray8 => 1,
-        other => unreachable!("y4m bridge only handles yuv420/gray8, got {other:?}"),
-    }
-}
-
 /// Chroma plane dimensions for 4:2:0 (half width, half height).
 fn chroma_dims(width: u32, height: u32) -> (usize, usize) {
     ((width / 2) as usize, (height / 2) as usize)
@@ -112,16 +104,12 @@ fn parse_header_line(line: &str) -> ParseResult<Y4mParams> {
         let tag = chars.next().unwrap_or('\0');
         let value = chars.as_str();
         match tag {
-            'W' => {
-                width = Some(value.parse().map_err(|_| format!("bad width `{value}`"))?)
-            }
-            'H' => {
-                height = Some(value.parse().map_err(|_| format!("bad height `{value}`"))?)
-            }
+            'W' => width = Some(value.parse().map_err(|_| format!("bad width `{value}`"))?),
+            'H' => height = Some(value.parse().map_err(|_| format!("bad height `{value}`"))?),
             'F' => {
-                let (n, d) = value.split_once(':').ok_or_else(|| {
-                    format!("bad frame rate `{value}` (expected NUM:DEN)")
-                })?;
+                let (n, d) = value
+                    .split_once(':')
+                    .ok_or_else(|| format!("bad frame rate `{value}` (expected NUM:DEN)"))?;
                 let n: u32 = n.parse().map_err(|_| format!("bad frame rate `{value}`"))?;
                 let d: u32 = d.parse().map_err(|_| format!("bad frame rate `{value}`"))?;
                 if n == 0 || d == 0 {
@@ -147,14 +135,16 @@ fn parse_header_line(line: &str) -> ParseResult<Y4mParams> {
             "interlaced y4m input (I{i}) is not supported; deinterlace first"
         ));
     }
+    // `C` is the *tag*; the token after it is the colorspace name, so
+    // `C420jpeg` arrives here as "420jpeg". Matching the full tag (as an
+    // earlier revision did) meant no colorspace ever matched and every y4m
+    // file was rejected as unsupported.
     let format = match colorspace.as_deref() {
-        Some("C420jpeg") | Some("C420mpeg2") | Some("C420paldv") | Some("C420") => {
-            PixelFormat::Yuv420
-        }
-        Some("Cmono") => PixelFormat::Gray8,
+        Some("420jpeg") | Some("420mpeg2") | Some("420paldv") | Some("420") => PixelFormat::Yuv420,
+        Some("mono") => PixelFormat::Gray8,
         Some(other) => {
             return Err(format!(
-                "y4m colorspace `{other}` is not supported (only 4:2:0 and Cmono)"
+                "y4m colorspace `C{other}` is not supported (only 4:2:0 and Cmono)"
             ))
         }
         None => {
@@ -199,7 +189,13 @@ pub fn parse(bytes: &[u8]) -> ParseResult<(Y4mParams, Vec<VideoFrame>)> {
         if line_tok != FRAME_MAGIC {
             return Err(format!(
                 "expected a {FRAME_MAGIC} delimiter, found `{}`",
-                line_str.lines().next().unwrap_or("").chars().take(32).collect::<String>()
+                line_str
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(32)
+                    .collect::<String>()
             ));
         }
         if rest.len() < per_frame {
@@ -232,9 +228,7 @@ pub fn parse(bytes: &[u8]) -> ParseResult<(Y4mParams, Vec<VideoFrame>)> {
 /// mismatch is a programming error, and `expect` says so plainly.
 pub fn write(params: &Y4mParams, frames: &[VideoFrame]) -> Vec<u8> {
     let per_frame = frame_bytes(params);
-    let mut out = Vec::with_capacity(
-        128 + frames.len() * (FRAME_MAGIC.len() + 1 + per_frame),
-    );
+    let mut out = Vec::with_capacity(128 + frames.len() * (FRAME_MAGIC.len() + 1 + per_frame));
     out.extend_from_slice(
         format!(
             "{MAGIC} W{} H{} F{}:{} Ip A0:0 {}\n",
@@ -279,7 +273,9 @@ mod tests {
 
     #[test]
     fn yuv420_round_trips_byte_exactly() {
-        let frames: Vec<_> = (0..3).map(|i| frame(176, 144, PixelFormat::Yuv420, i)).collect();
+        let frames: Vec<_> = (0..3)
+            .map(|i| frame(176, 144, PixelFormat::Yuv420, i))
+            .collect();
         let params = Y4mParams {
             width: 176,
             height: 144,
@@ -299,7 +295,9 @@ mod tests {
 
     #[test]
     fn gray8_round_trips_byte_exactly() {
-        let frames: Vec<_> = (0..2).map(|i| frame(64, 48, PixelFormat::Gray8, i)).collect();
+        let frames: Vec<_> = (0..2)
+            .map(|i| frame(64, 48, PixelFormat::Gray8, i))
+            .collect();
         let params = Y4mParams {
             width: 64,
             height: 48,
@@ -316,15 +314,28 @@ mod tests {
 
     #[test]
     fn header_variants_parse() {
-        let (p, _) = parse(b"YUV4MPEG2 W32 H16 F30000:1001 Ip A1:1 C420mpeg2\nFRAME\n\x00")
-            .expect("C420mpeg2");
+        // `W2 H2` keeps the payloads tiny: 6 bytes for any 4:2:0 variant
+        // (4 luma + 2 chroma), 4 for `Cmono`. Each accepted header below is
+        // therefore followed by exactly one *complete* frame, which `parse`
+        // requires — a header-only stream is rejected (asserted in
+        // `truncation_and_empty_streams_are_errors`).
+        let (p, frames) = parse(
+            b"YUV4MPEG2 W2 H2 F30000:1001 Ip A1:1 C420mpeg2\nFRAME\n\x00\x00\x00\x00\x00\x00",
+        )
+        .expect("C420mpeg2");
         assert_eq!((p.fps_num, p.fps_den), (30_000, 1_001));
-        assert!(parse(b"YUV4MPEG2 W32 H16 F30:1 Ip A0:0 C420\nFRAME\n\x00").is_ok());
-        assert!(parse(b"YUV4MPEG2 W32 H16 F30:1 It A0:0 C420jpeg\nFRAME\n").is_err());
-        assert!(parse(b"YUV4MPEG2 W32 H16 F30:1 Ip A0:0 C422\nFRAME\n").is_err());
-        assert!(parse(b"YUV4MPEG2 W32 H16 F30:1 Ip A0:0 C420p10\nFRAME\n").is_err());
+        assert_eq!(frames.len(), 1);
+        let (mono, _) =
+            parse(b"YUV4MPEG2 W2 H2 F25:1 Ip A0:0 Cmono\nFRAME\n\x00\x00\x00\x00").expect("Cmono");
+        assert_eq!(mono.format, PixelFormat::Gray8);
+        assert!(
+            parse(b"YUV4MPEG2 W2 H2 F30:1 Ip A0:0 C420\nFRAME\n\x00\x00\x00\x00\x00\x00").is_ok()
+        );
+        assert!(parse(b"YUV4MPEG2 W2 H2 F30:1 It A0:0 C420jpeg\nFRAME\n").is_err());
+        assert!(parse(b"YUV4MPEG2 W2 H2 F30:1 Ip A0:0 C422\nFRAME\n").is_err());
+        assert!(parse(b"YUV4MPEG2 W2 H2 F30:1 Ip A0:0 C420p10\nFRAME\n").is_err());
         assert!(parse(b"RIFF....WAVEfmt ").is_err());
-        assert!(parse(b"YUV4MPEG2 W32 H16 Ip A0:0 C420jpeg\nFRAME\n").is_err());
+        assert!(parse(b"YUV4MPEG2 W2 H2 Ip A0:0 C420jpeg\nFRAME\n").is_err());
     }
 
     #[test]

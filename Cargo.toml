@@ -1,11 +1,16 @@
 [workspace]
 resolver = "2"
 # Note: as we work our way down todo.md, members are added to this list
-# one at a time. The foundation crates (crates/tpt-media-*),
-# tpt-container, the first three codecs (cinder/aura/reed), and the first
-# app (apps/tpt-cli) are enabled; the remaining codec crates and
-# the web/ui apps are listed in todo.md §2 and will be enabled
-# as their implementations land.
+# one at a time. Currently enabled: the nine `crates/tpt-media-*`
+# foundation/research crates, all four implemented codecs
+# (cinder/aura/reed/thrum), `tpt-container`, the CLI, and the C ABI
+# (`ffi/tpt-media-sys`). Still unimplemented — Vault and Mote (todo.md
+# §33/§34) and the WASM player `tpt-web` (§45) — are listed in
+# todo.md §2 and get a member entry when their implementation lands.
+# Their `[workspace.dependencies]` entries below exist already so the
+# `version` a future publish needs is declared up front; Cargo does not
+# resolve them until a member actually depends on them, so a dangling
+# `path` there is inert rather than an error.
 members = [
     "crates/tpt-media-core",
     "crates/tpt-media-bitstream",

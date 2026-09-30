@@ -17,7 +17,11 @@ lockstep with the workspace.
 - **Per-crate README, changelog, keywords and categories** (2026-09-30):
   crate-specific `README.md` and manifest `keywords`/`categories`. The README
   documents the full command surface, the option table, the exit codes, and
-  the audio-only scope of the encode family.
+  both bridges — the WAV bridge for audio and the YUV4MPEG2 bridge for
+  video.
+- `make_decodable_tpt()` test fixture (2026-09-30): builds a real `.tpt` by
+  running `tpt encode` and capturing the injected writer, for tests that
+  need decoding to actually succeed rather than fail early.
 - §36 video corpus (`video.rs`) and §37 video quality metrics (2026-09-28):
   eight deterministic seeded scenes in both coded formats; `psnr_db` (`None`
   for bit-exact frames — a real corpus case, not a corner), `ssim` over 8×8
@@ -33,19 +37,36 @@ lockstep with the workspace.
   with a saturating free path so a dealloc predating the window cannot wrap
   the counters. It measures every implemented codec against the budget table
   in `docs/performance.md` and pins Thrum's working set length-independent.
-- Y4M bridge for video (`video`/`y4m` modules, 2026-09-28).
-- `--codec thrum` resolves and `list-codecs` advertises it, with an explicit
-  "video codec, audio-only" rejection from the encode family rather than a
-  misleading unknown-codec error.
-
-### Removed
-
-- Exit code 3 ("codec not wired yet"): with every listed codec implemented, no
-  code path produced it, and the stale documentation claiming otherwise was
-  removed.
+- Y4M bridge for video (`video`/`y4m` modules, 2026-09-28): `encode` and
+  `benchmark` take a `.y4m` input with `--codec thrum` and encode one packet
+  per frame; `decode` writes a video track back out as `.y4m`; `transcode`
+  re-encodes it. Byte-exact, progressive-only, `C420*`/`Cmono`-only, and
+  aspect ratio is parsed then discarded (the `.tpt` track model has no aspect
+  field).
+- `--codec thrum` / `--codec LIVE` resolve and `tpt list-codecs` advertises
+  them. On a *non*-video path — a WAV into `encode`, an audio track into
+  `transcode` — the failure still names the video/audio mismatch rather than
+  claiming the codec is unregistered.
+- `tpt video-corpus`: measures `thrum` over the §36 synthetic video corpus
+  (PSNR, SSIM, bitrate, bits-per-pixel, encode/decode CPU and frame latency),
+  generating its own content so it reads no files.
 
 ### Fixed
 
+- **No `.y4m` file could be parsed at all.** The header parser takes `C` as
+  the *tag* and stores only what follows (`"420jpeg"`), but the colorspace
+  match compared the *full tag* (`"C420jpeg"`), so no colorspace ever
+  matched and every y4m input was rejected as unsupported. Fixed to match
+  the value, with the `C` re-added in the error message. Caught by the
+  `y4m::tests::*` unit tests, which had been failing since the bridge landed.
+- Two tests asserted the pre-y4m policy and now assert real behaviour:
+  `decode_rejects_wrong_container_flag` (decoding writes WAV for an audio
+  track and y4m for a video one, so the `--container` requirement depends on
+  the track) and `video_codecs_resolve_but_are_rejected_by_audio_commands`
+  (used a nonexistent input file, so it failed on I/O before reaching the
+  codec dispatch; now uses a real decodable fixture).
+- `cargo fmt --all --check` failed on ten hunks in `commands.rs` and
+  `y4m.rs`; reformatted.
 - **The hand-rolled JSON writer produced invalid JSON** for probe/benchmark
   output (found 2026-09-14 while adding `benchmark --json`; three related
   defects): `J::object()`/`J::arr()` emitted a separator *after* `field()`
@@ -56,6 +77,16 @@ lockstep with the workspace.
   `"audio":,{...}` for empty lists. Probe `--json` for any file with tracks was
   malformed. All three fixed, with regression tests pinning exact output
   shapes.
+
+### Removed
+
+- Dead code that was failing CI's `-D warnings`: the audio-only
+  `demux_and_decode` (superseded by `demux_and_decode_any`, which also
+  handles video tracks), the unused `y4m::plane_count`, and an unreachable
+  `Some(other)` arm over the single-variant `VideoCodec` enum.
+- Exit code 3 ("codec not wired yet"): with every listed codec implemented, no
+  code path produced it, and the stale documentation claiming otherwise was
+  removed.
 
 ## [0.1.0] — 2026-09-04
 

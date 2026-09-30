@@ -31,7 +31,7 @@ loop.
 
 ## 1. Node abstraction
 
-[`Node`](crates/tpt-media-pipeline/src/node.rs) is one processing stage:
+[`Node`](../crates/tpt-media-pipeline/src/node.rs) is one processing stage:
 
 ```rust
 pub trait Node {

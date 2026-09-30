@@ -13,6 +13,11 @@ The last rule is the point of the gate: sixteen crates sharing one inherited
 keyword list is worse than no list at all, because it looks like curation and
 is not.
 
+The gate also resolves every relative markdown link in the repository's
+`.md` files. A broken cross-reference between a crate README and a design
+document is invisible until someone clicks it, and by then it has usually
+been believed.
+
 Run locally:      python ci/check-metadata.py
 Requires Python   3.11+ (tomllib).
 """
@@ -91,6 +96,42 @@ VALID_CATEGORIES = {
 
 MAX_KEYWORDS = 5
 MAX_CATEGORIES = 5
+
+# Markdown relative-link checking.
+MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
+SKIP_DIRS = {"target", "history", ".git", ".tpt-weave", "node_modules"}
+
+
+def check_relative_links() -> tuple[int, list[str]]:
+    """Resolve every relative markdown link under the repository root.
+
+    Returns ``(checked, errors)``. Absolute URLs and bare anchors are
+    skipped; fenced code blocks are stripped first so example URLs in
+    snippets are not mistaken for links.
+    """
+    checked = 0
+    errors: list[str] = []
+
+    for md in sorted(REPO_ROOT.rglob("*.md")):
+        if SKIP_DIRS.intersection(md.relative_to(REPO_ROOT).parts):
+            continue
+        text = FENCED_CODE_RE.sub("", md.read_text(encoding="utf-8", errors="replace"))
+        for match in MD_LINK_RE.finditer(text):
+            target = match.group(1).split("#")[0].strip()
+            if (
+                not target
+                or target.startswith(("http://", "https://", "mailto:"))
+                or target.startswith("<")
+                or target.endswith(">")
+            ):
+                continue
+            checked += 1
+            if not (md.parent / target).exists():
+                rel = md.relative_to(REPO_ROOT)
+                errors.append(f"{rel}: broken relative link -> {target}")
+
+    return checked, errors
 
 
 def load_toml(path: Path) -> dict:
@@ -178,6 +219,9 @@ def main() -> int:
             if not pkg.get(required):
                 errors.append(f"{name}: no `{required}` declared")
 
+    links_checked, link_errors = check_relative_links()
+    errors.extend(link_errors)
+
     if errors:
         print(f"metadata check FAILED ({len(errors)} problem(s)):\n")
         for err in errors:
@@ -186,7 +230,8 @@ def main() -> int:
 
     print(
         f"metadata check passed: {len(members)} crates, each with a README.md, "
-        f"a CHANGELOG.md, and distinct keywords/categories."
+        f"a CHANGELOG.md, and distinct keywords/categories; "
+        f"{links_checked} relative markdown links resolve."
     )
     return 0
 

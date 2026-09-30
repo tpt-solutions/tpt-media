@@ -1504,14 +1504,18 @@ Additional work not on the original list, and why:
       when the residual would quantise to zero anyway. A fixed SAD
       constant disabled skip entirely at coarse `qp`, exactly where it
       is worth the most
-* [ ] CLI encode/decode — the CLI's `encode`/`decode`/`transcode`/
-      `benchmark` are WAV-in/WAV-out and drive audio only. `thrum`
-      resolves (`--codec thrum`, `--codec LIVE`) and appears in
-      `tpt list-codecs`, but reaching one of those commands with it
-      fails with an explicit "this is a video codec and the commands
-      are audio-only" message rather than a generic unknown-codec
-      error. Wiring raw video I/O through `tpt-media-io` is its own
-      change
+* [x] CLI encode/decode — the CLI carries video through a byte-exact
+      YUV4MPEG2 bridge (`apps/tpt-cli/src/y4m.rs`), not through
+      `tpt-media-io`: `encode`/`benchmark` take a `.y4m` input with
+      `--codec thrum` and encode one packet per frame, `decode` writes a
+      video track back out as `.y4m`, `transcode` re-encodes it, and
+      `tpt video-corpus` measures the codec over the §36 corpus without
+      reading files. The bridge is deliberately narrow: progressive only
+      (`Ip`), `C420*`/`Cmono` only, aspect ratio parsed and discarded
+      (the `.tpt` track model has no aspect field). A video codec on a
+      non-video path — a WAV into `encode`, an audio track into
+      `transcode` — still fails with an explicit explanation rather than a
+      generic unknown-codec error
 
 Initial intra-refresh target:
 
@@ -1540,6 +1544,11 @@ Initial intra-refresh target:
 * [ ] loop filtering
 * [ ] decoder
 * [ ] encoder
+* [ ] per-crate documentation — `codecs/vault/README.md` and
+      `CHANGELOG.md`, plus its own `keywords`/`categories`, land **in the
+      same change** that adds the crate as a workspace member
+      (CONTRIBUTING §9.4). The CI `metadata` job fails until they exist,
+      so this cannot be forgotten silently.
 
 Initial target:
 
@@ -1580,6 +1589,10 @@ Do not claim an absolute global minimum.
 * [ ] benchmark CPU
 * [ ] benchmark memory
 * [ ] test extremely low bitrate
+* [ ] per-crate documentation — `codecs/mote/README.md` and
+      `CHANGELOG.md`, plus its own `keywords`/`categories`, land **in the
+      same change** that adds the crate as a workspace member
+      (CONTRIBUTING §9.4; enforced by the CI `metadata` job).
 
 Initial target:
 
@@ -2085,6 +2098,12 @@ Create `tpt-web`.
 * [ ] memory limits
 * [ ] browser demo
 * [ ] performance benchmark
+* [ ] per-crate documentation — `apps/tpt-web/README.md` and
+      `CHANGELOG.md`, plus its own `keywords`/`categories`, land **in the
+      same change** that adds the crate as a workspace member
+      (CONTRIBUTING §9.4; enforced by the CI `metadata` job). A WASM app
+      is std/I-O-bound by nature, so it is exempt from the `no_std`-first
+      rule in CONTRIBUTING §10 but not from §9.4.
 
 ---
 
@@ -2332,8 +2351,9 @@ All twelve exist and were audited against the code 2026-09-28 (see §53's
 documentation-baseline note for what the audit found and fixed):
 
 * [x] README — crate table now distinguishes implemented vs *(planned)*
-      (video codecs, `tpt-web`, `tpt-media-sys`) and lists the two
-      research crates that existed but were missing from it
+      (Vault, Mote, `tpt-web`) and lists the two research crates that
+      existed but were missing from it; since 2026-09-30 every implemented
+      crate's name links to its own README (CONTRIBUTING §9.4)
 * [x] ARCHITECTURE — `ARCHITECTURE.md`; §6's codec-trait snippet now
       matches the real API (`CodecError`/`Vec<Frame>`,
       `DynEncoder`/`Registry`), §2's topology is complete, §7/§8/§11

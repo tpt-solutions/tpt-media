@@ -9,6 +9,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **The y4m bridge could not parse any YUV4MPEG2 file** (2026-09-30): the
+  header parser consumes `C` as the *tag* and stores only what follows
+  (`"420jpeg"`), but the colorspace match compared the *full tag*
+  (`"C420jpeg"`) — so no colorspace ever matched and every `.y4m` input
+  was rejected as unsupported. Found by the three `y4m::tests::*` unit
+  tests, which had never passed since the bridge landed in `22e365a`.
+  Fixed to match the value, with the `C` re-added in the error message so
+  it still names the tag the user wrote.
+- `make_decodable_tpt()` in `tpt-cli`'s test module: a fixture built by
+  running `tpt encode` and capturing the injected writer, because
+  `make_tpt()`'s hand-written packets are structurally valid but are not
+  real Cinder bitstreams — any test needing decoding to actually succeed
+  has to build its fixture through the encoder.
 - **Per-crate README, CHANGELOG, keywords and categories** (2026-09-30):
   all sixteen workspace members now carry their own `README.md`,
   `CHANGELOG.md`, and crate-specific `keywords`/`categories` in their
@@ -27,7 +40,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - A new CI `metadata` job enforces this (2026-09-30): every member must have a
   `README.md` and `CHANGELOG.md`, declare at most five keywords, declare only
   valid crates.io category slugs, and not duplicate another crate's keyword
-  set; the script is `ci/check-metadata.py`, runnable locally.
+  set. The same script resolves every relative markdown link in the
+  repository — 189 of them — because a broken cross-reference between a
+  crate README and a design document is invisible until someone clicks it.
+  The script is `ci/check-metadata.py`, runnable locally.
+- The obligation is now recorded per planned crate: `todo.md` §33 (Vault),
+  §34 (Mote) and §45 (`tpt-web`) each carry an explicit
+  "per-crate documentation" item that must land in the same change that adds
+  the crate as a member. The CI job fails until it happens, so the four
+  unimplemented crates cannot silently ship undocumented.
 
 ### Fixed
 
@@ -44,9 +65,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   in its README" while no codec had a README at all. The statement is now
   true, and it was reworded to name the benchmark harness rather than imply
   the recipes live anywhere they did not.
+- Four broken relative markdown links, three of them introduced when the
+  crate table was converted to links: the *(planned)* rows for Vault, Mote
+  and `tpt-web` pointed at directories that do not exist, so they are plain
+  code spans again. The fourth was pre-existing —
+  `docs/pipeline-design.md` linked `crates/...` instead of `../crates/...`.
+  `ci/check-metadata.py` now resolves all of them.
+- `docs/architecture.md` described `ffi/tpt-media-sys` as "planned ... not yet
+  on disk"; it shipped on 2026-09-29 and is the workspace's only `unsafe`
+  home today.
+- The root `README.md` ecosystem note listed "the video codecs, the WASM
+  player, and the FFI bridge" as planned. The FFI is implemented and Thrum
+  with it; only Vault, Mote and `tpt-web` remain.
+- Two `tpt-cli` tests asserted the pre-y4m policy and now assert the real
+  behaviour. `decode_rejects_wrong_container_flag` expected the old
+  "writes only wav output" wording — decoding now writes WAV for an audio
+  track and y4m for a video one, so the requirement depends on the track.
+  `video_codecs_resolve_but_are_rejected_by_audio_commands` used
+  `file_ctx(&[])` with a nonexistent `in.raw`, so it failed on the I/O error
+  before reaching the codec dispatch at all; it now uses a real decodable
+  fixture. The *intent* of both — that a video codec on an audio path is
+  explained rather than reported as unregistered — is unchanged and still
+  asserted.
+- `cargo fmt --all --check` failed on ten hunks in `apps/tpt-cli/src/
+  commands.rs` and `y4m.rs`, left by `22e365a`; CI's `check` job would have
+  failed on it. Reformatted.
+- `tpt-cli`'s module docs listed the command surface without `video-corpus`
+  (which `USAGE`, the crate README, `docs/cli-design.md` and the
+  implementation all list) and attributed `--json` to `probe` and `benchmark`
+  only.
+- `apps/tpt-cli/CHANGELOG.md` had two `### Fixed` blocks inside `[Unreleased]`,
+  so one release's entries rendered as two separate lists; they are merged.
+
+### Removed
+
+- Dead code in `tpt-cli`, all three of which were `-D warnings` failures in
+  CI: the audio-only `demux_and_decode` (superseded by
+  `demux_and_decode_any`, which also handles video tracks), the unused
+  `y4m::plane_count`, and an unreachable `Some(other)` arm over the
+  single-variant `VideoCodec` enum.
 
 ### Changed
 
+- **Documentation truth pass on the CLI's video support** (2026-09-30): the
+  y4m bridge landed in `22e365a`, but every document still described the CLI
+  as audio-only. Corrected in `tpt-cli`'s crate docs, `USAGE`, `args.rs`,
+  `commands.rs`, `apps/tpt-cli/README.md`, `codecs/thrum/README.md`,
+  `docs/cli-design.md`, `docs/codec-design.md`, and `todo.md` §32 — whose
+  "CLI encode/decode" item is now `[x]` because the work is done. The claim
+  "the encode family is audio-only" was wrong in both directions: it hid the
+  video path that exists and described `--codec thrum` as rejected when it is
+  accepted whenever the media matches.
 - **Renamed four native codecs to avoid collisions with existing
   products** (2026-09-28): `Vox` → `Reed` (collided with the Dialogic/OKI
   ADPCM ".vox" telephony codec), `Pulse` → `Cinder` (collided with

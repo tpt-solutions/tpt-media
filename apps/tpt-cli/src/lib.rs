@@ -9,6 +9,7 @@
 //! tpt decode --codec <name> [..] <in> [<out>]
 //! tpt transcode --codec <name> [..] <in> [<out>]
 //! tpt benchmark --codec <name> [..] <in>
+//! tpt video-corpus [--json] [--fps <n>] [--frames <n>]
 //! tpt list-codecs
 //! tpt --help
 //! ```
@@ -24,23 +25,25 @@
 //! | bitrate configuration | `--bitrate <n>[k\|m]` (parsed, `k`=`1e3`,`m`=`1e6`) |
 //! | metadata manipulation | `--set-meta key=value` (repeatable) |
 //! | streaming stdin/stdout | `-` as `<input>` / `<output>` |
-//! | machine-readable output | `--json` on `probe` and `benchmark` |
+//! | machine-readable output | `--json` on `probe`, `benchmark`, `video-corpus` |
 //! | error reporting | stable exit codes (0 ok, 1 I/O or unsupported, 2 usage) |
 //!
 //! `probe`/`inspect`/`list-codecs`/`encode`/`decode`/`transcode`/
-//! `benchmark` are all implemented. Objective quality metrics (§37)
-//! live in [`quality`]; the deterministic synthetic corpus they are
-//! validated against (§36, audio subset) lives in [`signals`].
+//! `benchmark`/`video-corpus` are all implemented. Objective quality
+//! metrics (§37) live in [`quality`]; the deterministic synthetic corpora
+//! they are validated against (§36) are [`signals`] for audio and
+//! [`video`] for video — both generated closed-form from a seeded PRNG,
+//! with no committed binary fixtures.
 //!
-//! **Scope: the `encode`/`decode`/`transcode`/`benchmark` family is
-//! audio-only** (WAV in, `.tpt`/WAV out). The native *video* codec
-//! `thrum` resolves by name (`--codec thrum`, `--codec LIVE`) and
-//! is listed by `tpt list-codecs`, but passing it to one of those
-//! commands fails with an explicit "this is a video codec and these
-//! commands are audio-only" message rather than a misleading
-//! unknown-codec error. Driving it means using the
-//! `tpt-video-thrum` crate directly; wiring raw video through
-//! `tpt-media-io` is its own change (todo.md §32).
+//! **Media, not just audio.** The `encode`/`decode`/`transcode`/
+//! `benchmark` family carries audio through the WAV bridge and video
+//! through the YUV4MPEG2 bridge in [`y4m`]: a `.y4m` input to
+//! `encode`/`benchmark` with `--codec thrum` is encoded one packet per
+//! frame, and `decode` writes a video track back out as `.y4m`. The
+//! bridge is byte-exact and deliberately narrow — progressive only,
+//! `C420*` or `Cmono`, no aspect-ratio round trip (see [`y4m`]'s module
+//! doc). Raw video never goes through `tpt-media-io`, which remains
+//! audio/raster only.
 
 pub mod args;
 pub mod commands;
@@ -195,6 +198,32 @@ mod tests {
             })
             .collect::<Vec<_>>();
         tpt_container::build_tpt(tb, &[(1, b"CIND", &[][..])], &packets)
+    }
+
+    /// A real, *decodable* `.tpt`: `sine_samples` driven through `tpt
+    /// encode`, captured from the injected writer.
+    ///
+    /// [`make_tpt`]'s hand-written packets are structurally valid but are
+    /// not Cinder bitstreams, so any test that needs decoding to actually
+    /// succeed (rather than fail earlier for an unrelated reason) has to
+    /// build its fixture through the encoder.
+    fn make_decodable_tpt() -> Vec<u8> {
+        let log: &'static WriteLog = Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+        let files: &'static [(String, Vec<u8>)] = Box::leak(Box::new(vec![(
+            "in.wav".to_string(),
+            io_wav(48_000, &sine_samples(2_048)),
+        )]));
+        let o = run(
+            &argv(&["encode", "--codec", "cinder", "in.wav", "out.tpt"]),
+            &file_ctx_with_writes(files, log),
+        );
+        assert_eq!(o.code, 0, "fixture encode failed: {}", o.err);
+        log.lock()
+            .unwrap()
+            .iter()
+            .find(|(p, _)| p == "out.tpt")
+            .map(|(_, bytes)| bytes.clone())
+            .expect("encode wrote out.tpt")
     }
 
     #[test]
@@ -436,10 +465,13 @@ mod tests {
     fn decode_rejects_wrong_container_flag() {
         let o = run(
             &argv(&["decode", "--container", "tpt", "-", "-"]),
-            &stdin_ctx(make_tpt()),
+            &stdin_ctx(make_decodable_tpt()),
         );
         assert_eq!(o.code, 1);
-        assert!(o.err.contains("writes only wav output"));
+        // The wording tracks `decode_cmd`'s audio branch: decoding an audio
+        // track writes WAV, decoding a video track writes y4m, so the
+        // `--container` requirement depends on which track is present.
+        assert!(o.err.contains("writes wav output"), "got: {}", o.err);
     }
 
     #[test]
@@ -516,9 +548,9 @@ mod tests {
     #[test]
     fn video_codecs_resolve_but_are_rejected_by_audio_commands() {
         // thrum is part of the native family, so --codec thrum
-        // and --codec LIVE both resolve - but the encode/decode family
-        // is audio-only, so the failure must say *why* rather than
-        // claiming no encoder is registered.
+        // and --codec LIVE both resolve - but on a *non*-y4m
+        // input the failure must say *why* rather than claiming
+        // no encoder is registered.
         assert_eq!(
             args::resolve_codec("thrum").unwrap(),
             tpt_media_core::CodecId::new(*b"THRM")
@@ -527,8 +559,18 @@ mod tests {
             args::resolve_codec("THRM").unwrap(),
             tpt_media_core::CodecId::new(*b"THRM")
         );
+        // A real, decodable `.tpt`, because every one of these commands reads
+        // (and `transcode` decodes) its input before dispatching on the
+        // codec: a missing file would fail first with an I/O error, and an
+        // undecodable one with a decode error — neither of which says
+        // anything about the codec. (The encode family is no longer
+        // audio-only — a y4m input takes the video path — so this
+        // deliberately exercises the other branch.)
+        let files: &'static [(String, Vec<u8>)] =
+            Box::leak(Box::new(vec![("in.tpt".to_string(), make_decodable_tpt())]));
+        let ctx = file_ctx(files);
         for cmd in ["encode", "transcode", "benchmark"] {
-            let o = run(&argv(&[cmd, "--codec", "thrum", "in.raw"]), &file_ctx(&[]));
+            let o = run(&argv(&[cmd, "--codec", "thrum", "in.tpt"]), &ctx);
             assert_eq!(o.code, 1, "{cmd} exit code");
             assert!(
                 o.err.contains("video codec"),

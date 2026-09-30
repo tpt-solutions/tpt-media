@@ -48,8 +48,9 @@ jobs:
       # CONTRIBUTING.md §9.4: every member ships its own README.md and
       # CHANGELOG.md, declares at most five keywords, uses only valid
       # crates.io categories, and does not duplicate another crate's
-      # keyword set. Cheap, and it is the only thing standing between
-      # sixteen crates and sixteen identical crate pages.
+      # keyword set. The same script resolves every relative markdown
+      # link in the repo, because a broken cross-reference between a
+      # crate README and a design document is invisible until clicked.
       - name: check crate metadata
         run: python ci/check-metadata.py
 

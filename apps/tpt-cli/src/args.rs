@@ -13,9 +13,9 @@ use tpt_media_probe::ContainerKind;
 /// The native TPT codec family (name -> 4-byte codec ID), shared by
 /// `--codec` resolution and `tpt list-codecs`.
 ///
-/// This is the *codec* table. Which of them `encode`/`decode` can
-/// actually drive is a separate question — see `crate::commands::VideoCodec` and the
-/// audio-only note in `tpt-cli`'s `lib.rs`.
+/// This is the *codec* table. Which of them a given command and input
+/// can drive is a separate question — see `crate::commands::VideoCodec`
+/// for how a video codec ID is recognised on a path that cannot take one.
 pub const NATIVE_CODECS: &[(&str, &str, &str)] = &[
     ("cinder", "CIND", "lossy audio (MDCT + noise shaping)"),
     ("aura", "AURA", "lossless audio (residual + range coding)"),
@@ -102,8 +102,9 @@ impl Default for OpSpec {
 ///
 /// This resolves against the whole native family ([`NATIVE_CODECS`]),
 /// including the video codecs. Resolving a name is not the same as being
-/// able to *drive* it: the `encode`/`decode`/`transcode` commands are
-/// audio-only and reject video codecs with an explicit message.
+/// able to *drive* it: a video codec needs a y4m input on `encode`/
+/// `benchmark`, or a `.tpt` carrying a video track on `decode`/
+/// `transcode`, and is rejected with an explicit message otherwise.
 pub fn resolve_codec(name: &str) -> Option<CodecId> {
     let lower = name.to_ascii_lowercase();
     if let Some((_, id, _)) = NATIVE_CODECS
@@ -307,8 +308,8 @@ USAGE:
 
 OPTIONS:
   --codec <name>       codec: cinder | aura | reed | thrum | <4cc>
-                       (the encode/decode commands drive the audio
-                       codecs only; thrum is a library codec)
+                       (the audio codecs ride the WAV bridge; thrum
+                       rides the y4m bridge)
   --container <kind>   tpt (default) | wav
   --quality <0..=100>  quality setting
   --bitrate <n>[k|m]   target bitrate (bits/s)

@@ -52,9 +52,9 @@ node methods directly from their own threads (see
 
 ## 6. Why a separate FFI crate?
 
-The planned `ffi/tpt-media-sys` (todo.md §46, not yet on disk) is
-intended to be the only crate that needs `unsafe`. Isolating `unsafe` to
-one boundary keeps the entire surface of `tpt-media` auditable as
+`ffi/tpt-media-sys` (todo.md §46) is the only crate that needs `unsafe` in
+this workspace. Isolating `unsafe` to one boundary keeps the entire surface of
+`tpt-media` auditable as
 memory-safe Rust, which is already true today: the workspace is safe
 Rust throughout. The `cbindgen`-generated header would be considered a
 stable ABI artifact; the safe-Rust APIs above it can evolve freely.

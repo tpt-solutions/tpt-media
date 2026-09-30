@@ -21,7 +21,7 @@ Part of the [`tpt-media`](../../README.md) workspace —
 | Version | `0.1.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
-| Scope | **The `encode`/`decode`/`transcode`/`benchmark` family is audio-only** |
+| Scope | Audio via the WAV bridge **and** video via the y4m bridge |
 
 ## Commands
 
@@ -32,6 +32,7 @@ tpt encode --codec <name> [..] <in> [<out>]
 tpt decode --codec <name> [..] <in> [<out>]
 tpt transcode --codec <name> [..] <in> [<out>]
 tpt benchmark --codec <name> [..] <in>
+tpt video-corpus [--json] [--fps <n>] [--frames <n>]
 tpt list-codecs
 tpt --help
 ```
@@ -54,7 +55,7 @@ cargo run -p tpt-cli -- benchmark --codec aura --json in.wav
 | Option | Behaviour |
 |---|---|
 | `--codec <name>` | `cinder`, `aura`, `reed`, `thrum`, or a raw 4-byte codec ID. Unknown codec = usage error (exit 2) |
-| `--container <tpt\|wav>` | Output container; `encode` accepts only `tpt`, `decode` only `wav` |
+| `--container <tpt\|wav>` | Output container. `encode`/`transcode` accept only `tpt`; `decode` writes `wav` for an audio track and y4m (the default) for a video track |
 | `--quality 0..=100` | Maps onto the codec's coefficient bit depth (Cinder/Aura 4–12 bits, Reed LSF bit depth). Out of range = usage error |
 | `--bitrate <n>[k\|m]` | Parsed and validated (`k` = ×1e3, `m` = ×1e6). **No effect yet** — no codec here has rate control |
 | `--set-meta key=value` | Repeatable; published in order, non-empty keys validated |
@@ -74,13 +75,28 @@ There is deliberately no exit code 3; an earlier draft reserved it for
 "codec not wired yet", and with every listed codec implemented, no code path
 produces it.
 
-## Video scope
+## Audio and video
 
-`--codec thrum` resolves and `tpt list-codecs` advertises it, but the
-encode-family commands are audio-only and reject it with an explicit "this is
-a video codec and these commands are audio-only" message rather than a
-misleading unknown-codec error. Driving it means using
-[`tpt-video-thrum`](../../codecs/thrum) directly.
+Audio rides the WAV bridge: a 16-bit mono WAV at 44.1/48 kHz in, `cinder` /
+`aura` / `reed` into a `.tpt`, and back out as WAV.
+
+Video rides the YUV4MPEG2 (`.y4m`) bridge, which is byte-exact and
+deliberately narrow — progressive only, `C420*` or `Cmono`, no aspect-ratio
+round trip:
+
+```bash
+tpt encode   --codec thrum --quality 60 in.y4m out.tpt   # one packet per frame
+tpt decode   --codec thrum out.tpt back.y4m
+tpt benchmark --codec thrum --json in.y4m
+```
+
+`tpt video-corpus` measures `thrum` over the §36 synthetic video corpus
+(PSNR, SSIM, bitrate, encode/decode CPU and frame latency per scene) without
+reading any files.
+
+A video codec on a *non*-video path — `encode --codec thrum` with a WAV, or a
+`.tpt` whose track is audio — fails with an explicit explanation rather than a
+misleading unknown-codec error.
 
 ## Testing
 
@@ -103,8 +119,10 @@ allocator behind `tests/memory_budget.rs`).
 
 ## Known limitations
 
-- `encode`/`decode`/`transcode`/`benchmark` handle audio only (WAV in,
-  `.tpt`/WAV out).
+- Video I/O goes through the `tpt-cli` y4m bridge, not `tpt-media-io`:
+  progressive only, `C420*`/`Cmono` only, and aspect ratio is parsed and
+  discarded rather than round-tripped (the `.tpt` track model has no aspect
+  field).
 - `--bitrate` is accepted and validated but has no effect.
 - `transcode` requires a `.tpt` input and a 44.1/48 kHz source track.
 - The JSON writer is hand-rolled (no serde) — which is how three

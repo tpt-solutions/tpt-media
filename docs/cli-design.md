@@ -13,6 +13,7 @@ tpt encode --codec <name> [..] <in> [<out>]    compress
 tpt decode --codec <name> [..] <in> [<out>]    decompress
 tpt transcode --codec <name> [..] <in> [<out>]
 tpt benchmark --codec <name> [..] <in>
+tpt video-corpus [--json] [--fps <n>] [--frames <n>]
 tpt list-codecs
 tpt --help
 ```
@@ -25,7 +26,7 @@ real filesystem or stdin.
 
 | # | §43 requirement | implementation |
 |---|---|---|
-| 1 | codec selection | `--codec <name>` → `args::resolve_codec` (any native codec name — `cinder\|aura\|reed\|thrum` — or a raw 4-byte codec ID). Unknown codec = usage error (2); `thrum` resolves but the audio-only commands reject it with an explicit "video codec, audio-only" error (1) rather than a misleading unknown-codec. |
+| 1 | codec selection | `--codec <name>` → `args::resolve_codec` (any native codec name — `cinder\|aura\|reed\|thrum` — or a raw 4-byte codec ID). Unknown codec = usage error (2). `thrum` resolves everywhere, but each command needs the matching *media*: a `.y4m` input for `encode`/`benchmark`, a `.tpt` carrying a video track for `decode`/`transcode`. A video codec on an audio path fails with an explicit "video codec, audio-only" error (1) rather than a misleading unknown-codec. |
 | 2 | container selection | `--container tpt\|wav` → `probe::ContainerKind`. Default `tpt`. Invalid = usage error (2). |
 | 3 | quality configuration | `--quality 0..=100` → validated `u8`. Out of range = usage error (2). |
 | 4 | bitrate configuration | `--bitrate <n>[k\|m]` → `args::parse_bitrate` (`k` = ×1e3, `m` = ×1e6). Overflow / non-numeric = usage error (2). |
@@ -90,6 +91,22 @@ code path produces it.
   `tpt_cli::quality`) of the round trip. `--json` emits the same data
   structurally; a bit-exact round trip reports `"bit_exact": true`
   instead of an unrepresentable infinite `snr_db`.
+
+- **Video is live too** (2026-09-28, y4m bridge): `encode` and
+  `benchmark` take a YUV4MPEG2 (`.y4m`) input with `--codec thrum` and
+  encode one packet per frame into a video track carrying the geometry,
+  pixel format and frame rate (`--quality` maps onto Thrum's quantiser
+  index); `decode` writes a video track back out as `.y4m`, so it takes
+  the default container rather than `--container wav`; `transcode`
+  re-encodes it. The bridge (`src/y4m.rs`) is byte-exact — what goes in
+  comes out, so a lossless round trip is a byte-identical file — and
+  deliberately narrow: progressive only (`Ip`), `C420*`/`Cmono` only, and
+  aspect ratio is parsed then discarded because the `.tpt` track model has
+  no aspect field. It lives in `tpt-cli`, not in `tpt-media-io`.
+- `video-corpus` is live (2026-09-28): measures `thrum` over the §36
+  synthetic video corpus — PSNR, SSIM, bitrate, bits-per-pixel, and
+  encode/decode CPU and frame latency per scene — generating its own
+  content so it reads no files (`--fps`, `--frames`, `--json`).
 
 ## Testability
 

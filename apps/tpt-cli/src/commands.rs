@@ -454,11 +454,11 @@ impl AudioCodec {
     }
 }
 
-/// The native video codecs. The `encode`/`decode`/`transcode`/`benchmark`
-/// commands drive raw video nowhere yet (they are WAV-in/WAV-out), so a
-/// video codec ID reaching them is rejected with an explicit message
-/// rather than a generic "no encoder registered" that would read as if
-/// the codec did not exist.
+/// The native video codecs. A video codec ID reaching a *non*-video
+/// path — an `encode`/`benchmark` input that is not y4m, a `.tpt` whose
+/// track is audio — is rejected with an explicit message rather than a
+/// generic "no encoder registered" that would read as if the codec did
+/// not exist.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VideoCodec {
     Thrum,
@@ -664,8 +664,8 @@ fn run_video_encode_job(job: &VideoEncodeJob) -> Result<(Vec<u8>, usize), String
         ..ThrumConfig::default()
     };
     let fw = FrameworkCodecConfig::default();
-    let mut encoder = ThrumEncoder::new(fw.clone(), cfg.clone())
-        .map_err(|e| format!("thrum encoder: {e}"))?;
+    let mut encoder =
+        ThrumEncoder::new(fw.clone(), cfg.clone()).map_err(|e| format!("thrum encoder: {e}"))?;
     let tb = Timebase::new(job.fps_den, job.fps_num);
     let mut muxer = tpt_container::TptMuxer::new(tb);
     let mut track = Track::new(0, MediaType::Video, CodecId::new(*b"THRM"), tb);
@@ -682,7 +682,9 @@ fn run_video_encode_job(job: &VideoEncodeJob) -> Result<(Vec<u8>, usize), String
 
     let mut written = 0usize;
     for f in &job.frames {
-        let packets = encoder.encode(f).map_err(|e| format!("encode failed: {e}"))?;
+        let packets = encoder
+            .encode(f)
+            .map_err(|e| format!("encode failed: {e}"))?;
         for pkt in packets {
             muxer
                 .write_packet_raw(&pkt)
@@ -783,8 +785,8 @@ fn demux_and_decode_any(
                 extra: track.codec_config.data.clone(),
                 limits: ResourceLimits::default(),
             };
-            let mut decoder = ThrumDecoder::new(fw, cfg)
-                .map_err(|e| (1, format!("thrum decoder: {e}")))?;
+            let mut decoder =
+                ThrumDecoder::new(fw, cfg).map_err(|e| (1, format!("thrum decoder: {e}")))?;
             let mut frames: Vec<VideoFrame> = Vec::new();
             loop {
                 match demux.next_packet() {
@@ -802,10 +804,7 @@ fn demux_and_decode_any(
             }
             Ok(DemuxedMedia::Video(track, frames))
         }
-        other => Err((
-            1,
-            format!("first track is {other:?}, which has no decoder"),
-        )),
+        other => Err((1, format!("first track is {other:?}, which has no decoder"))),
     }
 }
 
@@ -968,64 +967,6 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         format!("encoded {written} packets ({sample_count} samples)"),
         ctx,
     )
-}
-
-/// Demux and fully decode a `.tpt` byte buffer: returns the audio track
-/// (with its metadata intact) and every decoded frame with block-size
-/// padding already trimmed. Errors carry the CLI exit code they map to
-/// (1 = I/O, malformed, or an unsupported codec/rate combination).
-fn demux_and_decode(
-    input: &[u8],
-    requested: Option<CodecId>,
-) -> Result<(tpt_media_core::Track, Vec<tpt_media_core::AudioFrame>), (i32, String)> {
-    let mut demux = tpt_container::TptDemuxer::new(input)
-        .map_err(|e| (1, format!("invalid tpt input: {e}")))?;
-    let track = demux
-        .tracks()
-        .iter()
-        .find(|t| t.media_type == MediaType::Audio)
-        .cloned();
-    let track = match track {
-        Some(t) => t,
-        None => return Err((1, "no audio track found".into())),
-    };
-    let codec_id = track.codec_config.codec_id;
-    if let Some(wanted) = requested {
-        if wanted != codec_id {
-            return Err((
-                1,
-                format!("file track uses {codec_id:?}, not the requested {wanted:?}"),
-            ));
-        }
-    }
-    let codec = match AudioCodec::from_id(codec_id) {
-        Some(c) => c,
-        None => match VideoCodec::from_id(codec_id) {
-            Some(v) => return Err((1, video_codec_unsupported_here(v))),
-            None => return Err((1, "no decoder registered for this codec".into())),
-        },
-    };
-    let rate = track.media.sample_rate.unwrap_or(48_000);
-    let mut decoder = build_decoder(codec, rate, &track).map_err(|e| (1, e))?;
-
-    let mut frames: Vec<tpt_media_core::AudioFrame> = Vec::new();
-    loop {
-        match demux.next_packet() {
-            Ok(pkt) => {
-                let decoded = decoder
-                    .decode(&pkt)
-                    .map_err(|e| (1, format!("decode failed: {e}")))?;
-                frames.extend(decoded);
-            }
-            Err(tpt_media_container::ContainerError::Truncated) => break,
-            Err(e) => return Err((1, format!("malformed container: {e:?}"))),
-        }
-    }
-    if frames.is_empty() {
-        return Err((1, "no decodable packets found".into()));
-    }
-    trim_padding(&mut frames, &track);
-    Ok((track, frames))
 }
 
 /// `tpt decode`: `.tpt` -> codec -> WAV or y4m.
@@ -1766,7 +1707,6 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     if input.starts_with(b"YUV4MPEG2") {
         match VideoCodec::from_id(codec) {
             Some(VideoCodec::Thrum) => return benchmark_video(spec, &input),
-            Some(other) => return Outcome::fail(1, format!("unhandled video codec {other:?}")),
             None => {
                 let name = NATIVE_CODECS
                     .iter()
