@@ -15,6 +15,28 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Added
 
+- **`tests/dyn_contract.rs` — the crate's first integration test.** Every
+  test until now was inline, and inline tests can reach private items, so
+  nothing proved the framework is usable from *outside* the crate — which is
+  exactly how `tpt-media-sys` (the C ABI) and `tpt-cli` consume it. Five
+  tests drive the type-erased path end to end: `Registry` → `build()` →
+  `DynDecoder`/`DynEncoder`, including that `drain()` and `flush()` are
+  distinguishable (a decoder that made them identical would make
+  `Capabilities::supports_drain` a lie), that an empty packet is
+  `MalformedPacket` rather than a fabricated frame, and that a built codec
+  reports the same `CodecInfo` its factory advertised.
+- **§38 unit-test sweep over the crate's public API** (2026-09-30): 24 new
+  tests (6 → 30) for the items that had no coverage — every
+  `ResourceLimits::check_*` at its exact boundary (`max` passes, `max + 1`
+  does not) and reporting its own `ResourceLimitKind`, `Default` resolving
+  to `strict()`, `strict()` being stricter on all seven fields rather than
+  the one the old test compared, `usize::MAX` rejected by every byte limit,
+  `SupportedFormat::matches` within and across variants, `supports_format`
+  (including that an empty list supports *nothing*, not everything),
+  `CodecError`'s `Display` for all nine variants and its `std::error::Error`
+  impl, `Capabilities::default`, `CodecConfig::default`, and the
+  `Registry`'s encoder side, ID iteration, empty case, duplicate-ID
+  shadowing and hand-written `Debug`.
 - **Per-crate README, changelog, keywords and categories** (2026-09-30):
   crate-specific `README.md` and manifest `keywords`/`categories`.
 - `drain()` on both `Encoder` and `Decoder` (2026-09-29, with the C ABI

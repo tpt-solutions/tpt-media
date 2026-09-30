@@ -636,12 +636,12 @@ mod tests {
         assert!(l.check_metadata(m + 1).is_err());
 
         assert!(l.check_reference_frames(l.max_reference_frames).is_ok());
-        assert!(l.check_reference_frames(l.max_reference_frames + 1).is_err());
+        assert!(l
+            .check_reference_frames(l.max_reference_frames + 1)
+            .is_err());
 
         assert!(l.check_recursion_depth(l.max_recursion_depth).is_ok());
-        assert!(l
-            .check_recursion_depth(l.max_recursion_depth + 1)
-            .is_err());
+        assert!(l.check_recursion_depth(l.max_recursion_depth + 1).is_err());
     }
 
     #[test]
@@ -762,6 +762,17 @@ mod tests {
         let guard = PacketGuard::new(&limits);
         let mut p = Packet::empty(
             0,
+            tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::MILLISECONDS),
+        );
+        p.data = alloc::vec![0u8; (limits.max_packet_bytes as usize) + 1];
+        let called = Cell::new(false);
+        let out: CodecResult<()> = guard.check(&p, || {
+            called.set(true);
+            Ok(())
+        });
+        assert!(out.is_err());
+        assert!(!called.get(), "closure ran despite the limit firing");
+    }
 
     fn audio(rate: u32) -> SupportedFormat {
         SupportedFormat::Audio {
@@ -872,6 +883,24 @@ mod tests {
                 CodecError::ResourceLimit(ResourceLimitKind::PacketSize),
                 "resource limit: PacketSize",
             ),
+            (CodecError::Unsupported("8x8 DCT"), "unsupported: 8x8 DCT"),
+            (CodecError::InvalidConfig("qp"), "invalid config: qp"),
+            (CodecError::Internal, "internal error"),
+            (
+                CodecError::Bitstream(String::from("bad huffman")),
+                "bitstream: bad huffman",
+            ),
+            (
+                CodecError::Downstream(String::from("disk full")),
+                "downstream: disk full",
+            ),
+        ];
+        for (err, want) in cases {
+            out.clear();
+            write!(out, "{err}").expect("write to String");
+            assert_eq!(out, want);
+        }
+    }
 
     struct StubFactory {
         id: [u8; 4],
@@ -923,8 +952,14 @@ mod tests {
         reg.register_decoder(StubFactory::new(b"DCOD", "Decoder only"));
         reg.register_encoder(StubFactory::new(b"ENCD", "Encoder only"));
 
-        assert_eq!(reg.find_decoder(b"DCOD").map(|f| f.info().name), Some("Decoder only"));
-        assert_eq!(reg.find_encoder(b"ENCD").map(|f| f.info().name), Some("Encoder only"));
+        assert_eq!(
+            reg.find_decoder(b"DCOD").map(|f| f.info().name),
+            Some("Decoder only")
+        );
+        assert_eq!(
+            reg.find_encoder(b"ENCD").map(|f| f.info().name),
+            Some("Encoder only")
+        );
         // The decoder side does not answer for the encoder's ID, and vice
         // versa: a decode-only build must not appear to offer an encoder.
         assert!(reg.find_decoder(b"ENCD").is_none());
@@ -938,7 +973,7 @@ mod tests {
         let mut reg = Registry::new();
         reg.register_decoder(StubFactory::new(b"AAAA", "A"));
         reg.register_decoder(StubFactory::new(b"BBBB", "B"));
-        let ids: Vec<[u8; 4]> = reg.decoder_ids().map(|i| *i).collect();
+        let ids: Vec<[u8; 4]> = reg.decoder_ids().copied().collect();
         assert_eq!(ids, alloc::vec![*b"AAAA", *b"BBBB"]);
     }
 
@@ -951,7 +986,10 @@ mod tests {
         let mut reg = Registry::new();
         reg.register_decoder(StubFactory::new(b"DUP1", "First"));
         reg.register_decoder(StubFactory::new(b"DUP1", "Second"));
-        assert_eq!(reg.find_decoder(b"DUP1").map(|f| f.info().name), Some("First"));
+        assert_eq!(
+            reg.find_decoder(b"DUP1").map(|f| f.info().name),
+            Some("First")
+        );
         // Both are still listed, so `decoder_ids().count()` is not a
         // distinct-codec count.
         assert_eq!(reg.decoder_ids().count(), 2);
@@ -979,22 +1017,6 @@ mod tests {
         assert!(!text.contains("AAAA"), "{text}");
     }
 
-            (CodecError::Unsupported("8x8 DCT"), "unsupported: 8x8 DCT"),
-            (CodecError::InvalidConfig("qp"), "invalid config: qp"),
-            (CodecError::Internal, "internal error"),
-            (CodecError::Bitstream("bad huffman"), "bitstream: bad huffman"),
-            (
-                CodecError::Downstream("disk full"),
-                "downstream: disk full",
-            ),
-        ];
-        for (err, want) in cases {
-            out.clear();
-            write!(out, "{err}").expect("write to String");
-            assert_eq!(out, want);
-        }
-    }
-
     #[cfg(feature = "std")]
     #[test]
     fn codec_error_is_a_std_error() {
@@ -1005,18 +1027,6 @@ mod tests {
         assert_eq!(as_std(&e), "malformed packet");
         // `source()` is the error-chain hook; none of these carry a cause.
         assert!(std::error::Error::source(&e).is_none());
-    }
-
-            tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::MILLISECONDS),
-        );
-        p.data = alloc::vec![0u8; (limits.max_packet_bytes as usize) + 1];
-        let called = Cell::new(false);
-        let out: CodecResult<()> = guard.check(&p, || {
-            called.set(true);
-            Ok(())
-        });
-        assert!(out.is_err());
-        assert!(!called.get(), "closure ran despite the limit firing");
     }
 
     #[test]
@@ -1031,5 +1041,4 @@ mod tests {
         let out: CodecResult<u32> = guard.check(&p, || Err(CodecError::MalformedPacket));
         assert_eq!(out.unwrap_err(), CodecError::MalformedPacket);
     }
-
 }
