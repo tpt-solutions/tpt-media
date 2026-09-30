@@ -6,14 +6,16 @@ use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig as FrameworkCodecConfig, Decoder, Encoder, ResourceLimits};
 use tpt_media_container::Container;
 use tpt_media_core::{
-    ChannelLayout, CodecId, MediaType, MetadataValue, SampleFormat, Timebase, Timestamp, Track,
-    TrackMedia,
+    ChannelLayout, CodecId, MediaType, MetadataValue, PixelFormat, SampleFormat, Timebase,
+    Timestamp, Track, TrackMedia, VideoFrame,
 };
 use tpt_media_io::{decode_wav, write_wav};
 use tpt_media_probe::{sniff, ContainerKind, ProbeReport};
+use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
 
 use crate::args::{Command, OpSpec, NATIVE_CODECS};
 use crate::json::J;
+use crate::y4m;
 
 /// Injectable file reader (`&'a` dyn fn returning file bytes).
 pub type ReadFile<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, String>;
@@ -479,14 +481,14 @@ impl VideoCodec {
     }
 }
 
-/// The message shown when a video codec is passed to an audio-only
-/// command.
+/// The message shown when a video codec is passed to the WAV-based
+/// audio path (e.g. `encode --codec thrum` with a non-y4m input).
 fn video_codec_unsupported_here(codec: VideoCodec) -> String {
     format!(
-        "{} is a video codec and the encode/decode/transcode/benchmark \
-         commands are audio-only (WAV in, WAV out); drive the \
-         tpt-video-thrum crate directly, or run `tpt list-codecs` to \
-         see what the CLI has wired",
+        "{} is a video codec and this path is audio-only (WAV in); \
+         give encode/benchmark a y4m file with --codec {}, or decode a \
+         .tpt that contains a video track",
+        codec.name(),
         codec.name()
     )
 }
@@ -623,16 +625,263 @@ fn supported_input_rates(codec: AudioCodec) -> &'static [u32] {
     }
 }
 
-/// `tpt encode`: WAV -> codec -> `.tpt`.
+// ---------------------------------------------------------------------------
+// Video (thrum): y4m in, `.tpt` out — the video counterpart of the audio job
+// ---------------------------------------------------------------------------
+
+/// `--quality 0..=100` mapped onto Thrum's quantiser index: higher
+/// quality means a *lower* `qp`, and the full slider spans the codec's
+/// legal `1..=51` (`51 - q/2`). Unspecified keeps Thrum's own default.
+fn quality_to_qp(quality: Option<u8>) -> u8 {
+    match quality {
+        None => ThrumConfig::default().qp,
+        Some(q) => (51 - (u16::from(q) * 50 / 100)).max(1) as u8,
+    }
+}
+
+/// The unit of work for `tpt encode --codec thrum` and video
+/// `tpt transcode`: y4m-parsed frames plus muxing parameters. Frames
+/// carry their PTS already (the y4m bridge assigns frame `i` tick `i`
+/// on the `fps_den/fps_num` timebase).
+struct VideoEncodeJob {
+    fps_num: u32,
+    fps_den: u32,
+    qp: u8,
+    frames: Vec<VideoFrame>,
+    extra_meta: Vec<(String, MetadataValue)>,
+}
+
+/// Encode a video job into a finished `.tpt`: a video `Track` carrying
+/// the geometry in `TrackMedia` and Thrum's codec-private bytes, one
+/// packet per frame.
+fn run_video_encode_job(job: &VideoEncodeJob) -> Result<(Vec<u8>, usize), String> {
+    let first = job.frames.first().ok_or("no frames to encode")?;
+    let cfg = ThrumConfig {
+        width: first.width,
+        height: first.height,
+        format: first.format,
+        qp: job.qp,
+        ..ThrumConfig::default()
+    };
+    let fw = FrameworkCodecConfig::default();
+    let mut encoder = ThrumEncoder::new(fw.clone(), cfg.clone())
+        .map_err(|e| format!("thrum encoder: {e}"))?;
+    let tb = Timebase::new(job.fps_den, job.fps_num);
+    let mut muxer = tpt_container::TptMuxer::new(tb);
+    let mut track = Track::new(0, MediaType::Video, CodecId::new(*b"THRM"), tb);
+    track.codec_config.version = encoder.info().version;
+    track.codec_config.data = cfg.to_codec_private();
+    track.media = TrackMedia {
+        width: Some(cfg.width),
+        height: Some(cfg.height),
+        pixel_format: Some(cfg.format),
+        ..TrackMedia::default()
+    };
+    track.metadata = job.extra_meta.clone();
+    muxer.register_track(&track);
+
+    let mut written = 0usize;
+    for f in &job.frames {
+        let packets = encoder.encode(f).map_err(|e| format!("encode failed: {e}"))?;
+        for pkt in packets {
+            muxer
+                .write_packet_raw(&pkt)
+                .map_err(|e| format!("mux failed: {e:?}"))?;
+            written += 1;
+        }
+    }
+    Ok((muxer.finish(), written))
+}
+
+/// A fully decoded `.tpt` input: whichever track comes first and its
+/// decoded frames. `tpt decode` and `tpt transcode` dispatch on this.
+enum DemuxedMedia {
+    Audio(Track, Vec<tpt_media_core::AudioFrame>),
+    Video(Track, Vec<VideoFrame>),
+}
+
+/// Demux and fully decode a `.tpt` byte buffer's first track, audio or
+/// video, with padding/metadata handling identical to the audio-only
+/// [`demux_and_decode`].
+fn demux_and_decode_any(
+    input: &[u8],
+    requested: Option<CodecId>,
+) -> Result<DemuxedMedia, (i32, String)> {
+    let mut demux = tpt_container::TptDemuxer::new(input)
+        .map_err(|e| (1, format!("invalid tpt input: {e}")))?;
+    let track = demux
+        .tracks()
+        .first()
+        .cloned()
+        .ok_or((1, "no tracks found".to_string()))?;
+    let codec_id = track.codec_config.codec_id;
+    if let Some(wanted) = requested {
+        if wanted != codec_id {
+            return Err((
+                1,
+                format!("file track uses {codec_id:?}, not the requested {wanted:?}"),
+            ));
+        }
+    }
+    match track.media_type {
+        MediaType::Audio => {
+            let codec = match AudioCodec::from_id(codec_id) {
+                Some(c) => c,
+                None => {
+                    return Err((1, "no decoder registered for this codec".into()));
+                }
+            };
+            let rate = track.media.sample_rate.unwrap_or(48_000);
+            let mut decoder = build_decoder(codec, rate, &track).map_err(|e| (1, e))?;
+            let mut frames: Vec<tpt_media_core::AudioFrame> = Vec::new();
+            loop {
+                match demux.next_packet() {
+                    Ok(pkt) => frames.extend(
+                        decoder
+                            .decode(&pkt)
+                            .map_err(|e| (1, format!("decode failed: {e}")))?,
+                    ),
+                    Err(tpt_media_container::ContainerError::Truncated) => break,
+                    Err(e) => return Err((1, format!("malformed container: {e:?}"))),
+                }
+            }
+            if frames.is_empty() {
+                return Err((1, "no decodable packets found".into()));
+            }
+            trim_padding(&mut frames, &track);
+            Ok(DemuxedMedia::Audio(track, frames))
+        }
+        MediaType::Video => {
+            if AudioCodec::from_id(codec_id).is_some() {
+                return Err((1, "video track carries an audio codec id".into()));
+            }
+            if VideoCodec::from_id(codec_id).is_none() {
+                return Err((1, "no decoder registered for this video codec".into()));
+            }
+            let width = track
+                .media
+                .width
+                .ok_or((1, "video track is missing its width".to_string()))?;
+            let height = track
+                .media
+                .height
+                .ok_or((1, "video track is missing its height".to_string()))?;
+            let format = track.media.pixel_format.unwrap_or(PixelFormat::Yuv420);
+            let cfg = if track.codec_config.data.len() >= ThrumConfig::CODEC_PRIVATE_LEN {
+                ThrumConfig::from_codec_private(width, height, &track.codec_config.data)
+                    .map_err(|e| (1, format!("bad thrum codec-private data: {e}")))?
+            } else {
+                ThrumConfig {
+                    width,
+                    height,
+                    format,
+                    ..ThrumConfig::default()
+                }
+            };
+            let fw = FrameworkCodecConfig {
+                version: track.codec_config.version,
+                extra: track.codec_config.data.clone(),
+                limits: ResourceLimits::default(),
+            };
+            let mut decoder = ThrumDecoder::new(fw, cfg)
+                .map_err(|e| (1, format!("thrum decoder: {e}")))?;
+            let mut frames: Vec<VideoFrame> = Vec::new();
+            loop {
+                match demux.next_packet() {
+                    Ok(pkt) => frames.extend(
+                        decoder
+                            .decode(&pkt)
+                            .map_err(|e| (1, format!("decode failed: {e}")))?,
+                    ),
+                    Err(tpt_media_container::ContainerError::Truncated) => break,
+                    Err(e) => return Err((1, format!("malformed container: {e:?}"))),
+                }
+            }
+            if frames.is_empty() {
+                return Err((1, "no decodable packets found".into()));
+            }
+            Ok(DemuxedMedia::Video(track, frames))
+        }
+        other => Err((
+            1,
+            format!("first track is {other:?}, which has no decoder"),
+        )),
+    }
+}
+
+/// The Y4M stream parameters for a decoded video track: geometry and
+/// pixel format from `TrackMedia`, the frame rate from the track
+/// timebase (`fps_den/fps_num` — a frame plays at tick · num/den
+/// seconds).
+fn y4m_params_for_track(track: &Track, frames: &[VideoFrame]) -> Option<y4m::Y4mParams> {
+    let first = frames.first()?;
+    Some(y4m::Y4mParams {
+        width: track.media.width.unwrap_or(first.width),
+        height: track.media.height.unwrap_or(first.height),
+        fps_num: track.timebase.den,
+        fps_den: track.timebase.num,
+        format: first.format,
+    })
+}
+
+/// Encode y4m-parsed frames with `thrum` (the `encode` video path).
+fn encode_video(spec: &OpSpec, input: &[u8], ctx: &Ctx<'_>) -> Outcome {
+    let (params, frames) = match y4m::parse(input) {
+        Ok(r) => r,
+        Err(e) => return Outcome::fail(1, format!("input is not a readable y4m: {e}")),
+    };
+    if params.width % 16 != 0 || params.height % 16 != 0 {
+        return Outcome::fail(
+            1,
+            format!(
+                "thrum requires frame dimensions that are non-zero multiples \
+                 of 16 (got {}x{})",
+                params.width, params.height
+            ),
+        );
+    }
+    let job = VideoEncodeJob {
+        fps_num: params.fps_num,
+        fps_den: params.fps_den,
+        qp: quality_to_qp(spec.quality),
+        frames,
+        extra_meta: spec
+            .meta
+            .iter()
+            .map(|(k, v)| (k.clone(), MetadataValue::Text(v.clone())))
+            .collect(),
+    };
+    let count = job.frames.len();
+    let (bytes, written) = match run_video_encode_job(&job) {
+        Ok(r) => r,
+        Err(e) => return Outcome::fail(1, e),
+    };
+    write_output(
+        spec,
+        bytes,
+        format!(
+            "encoded {written} packets ({count} frames, {}x{} @ {}/{} fps)",
+            params.width, params.height, params.fps_num, params.fps_den
+        ),
+        ctx,
+    )
+}
+
+/// `tpt encode`: WAV or y4m -> codec -> `.tpt`.
 ///
-/// Reads a 16-bit mono WAV at one of the codec's supported rates (44.1/48
-/// kHz for Cinder/Aura, 8/16 kHz for Reed), chunks it into codec blocks,
-/// encodes each block, and muxes everything into a `.tpt` container with
-/// full track metadata (track timebase `1/sample_rate`, codec version,
-/// sample rate, channel layout, `--set-meta` tags). `--quality` maps onto
-/// Cinder/Aura coefficient bit depth and Reed's per-coefficient LSF bit
-/// depth; `--bitrate` is validated but not yet applied (Cinder has no
-/// rate control).
+/// Audio codecs read a 16-bit mono WAV at one of the codec's supported
+/// rates (44.1/48 kHz for Cinder/Aura, 8/16 kHz for Reed), chunk it into
+/// codec blocks, encode each block, and mux everything into a `.tpt`
+/// container with full track metadata (track timebase `1/sample_rate`,
+/// codec version, sample rate, channel layout, `--set-meta` tags).
+/// `--quality` maps onto Cinder/Aura coefficient bit depth and Reed's
+/// per-coefficient LSF bit depth; `--bitrate` is validated but not yet
+/// applied (no codec here has rate control).
+///
+/// A YUV4MPEG2 input (`YUV4MPEG2` magic) takes the video path instead:
+/// it requires a video codec (thrum) and encodes every frame as one
+/// packet into a video track carrying the geometry, pixel format, and
+/// frame rate. `--quality` maps onto Thrum's quantiser index.
 pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     if spec.container != ContainerKind::Tpt {
         return Outcome::fail(
@@ -644,16 +893,33 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Some(c) => c,
         None => return Outcome::usage("encode requires --codec"),
     };
+    let input = match read_source(&spec.input, ctx) {
+        Ok(b) => b,
+        Err(e) => return Outcome::fail(1, e),
+    };
+    if input.starts_with(b"YUV4MPEG2") {
+        if AudioCodec::from_id(codec).is_some() {
+            let name = NATIVE_CODECS
+                .iter()
+                .find(|(_, id, _)| id.as_bytes() == codec.as_bytes())
+                .map(|(n, _, _)| *n)
+                .unwrap_or("this codec");
+            return Outcome::fail(
+                1,
+                format!("{name} is an audio codec; y4m input needs a video codec (--codec thrum)"),
+            );
+        }
+        if VideoCodec::from_id(codec).is_none() {
+            return Outcome::fail(1, "no encoder registered for this codec");
+        }
+        return encode_video(spec, &input, ctx);
+    }
     let codec = match AudioCodec::from_id(codec) {
         Some(c) => c,
         None => match VideoCodec::from_id(codec) {
             Some(v) => return Outcome::fail(1, video_codec_unsupported_here(v)),
             None => return Outcome::fail(1, "no encoder registered for this codec"),
         },
-    };
-    let input = match read_source(&spec.input, ctx) {
-        Ok(b) => b,
-        Err(e) => return Outcome::fail(1, e),
     };
     let frame = match decode_wav(&input) {
         Ok(f) => f,
@@ -762,19 +1028,14 @@ fn demux_and_decode(
     Ok((track, frames))
 }
 
-/// `tpt decode`: `.tpt` -> codec -> WAV.
+/// `tpt decode`: `.tpt` -> codec -> WAV or y4m.
 ///
-/// Opens any `.tpt` container, finds its first audio track, decodes every
-/// packet with the track's codec (the `--codec` argument, if given, must
-/// match), and writes a single 16-bit WAV. Unimplemented codecs (reed) and
-/// non-`.tpt` inputs are rejected up front.
+/// Opens any `.tpt` container and decodes its first track: an audio
+/// track (the `--codec` argument, if given, must match) writes a 16-bit
+/// WAV and requires `--container wav`; a video track writes YUV4MPEG2
+/// and requires the default container. Non-`.tpt` inputs are rejected
+/// up front.
 pub fn decode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
-    if spec.container != ContainerKind::Wav {
-        return Outcome::fail(
-            1,
-            "decode currently writes only wav output (use --container wav)",
-        );
-    }
     let input = match read_source(&spec.input, ctx) {
         Ok(b) => b,
         Err(e) => return Outcome::fail(1, e),
@@ -788,21 +1049,51 @@ pub fn decode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
             return Outcome::fail(1, "input is not a recognisable media file")
         }
     }
-    let (_track, frames) = match demux_and_decode(&input, spec.codec) {
-        Ok(r) => r,
-        Err((code, msg)) => return Outcome::fail(code, msg),
-    };
-    let wav = match write_wav(&frames) {
-        Ok(w) => w,
-        Err(e) => return Outcome::fail(1, format!("could not write wav output: {e}")),
-    };
-    let samples: usize = frames.iter().map(|f| f.sample_count as usize).sum();
-    write_output(
-        spec,
-        wav,
-        format!("decoded {} packets ({} samples)", frames.len(), samples),
-        ctx,
-    )
+    match demux_and_decode_any(&input, spec.codec) {
+        Ok(DemuxedMedia::Audio(_track, frames)) => {
+            if spec.container != ContainerKind::Wav {
+                return Outcome::fail(
+                    1,
+                    "decoding an audio track writes wav output (use --container wav)",
+                );
+            }
+            let wav = match write_wav(&frames) {
+                Ok(w) => w,
+                Err(e) => return Outcome::fail(1, format!("could not write wav output: {e}")),
+            };
+            let samples: usize = frames.iter().map(|f| f.sample_count as usize).sum();
+            write_output(
+                spec,
+                wav,
+                format!("decoded {} packets ({} samples)", frames.len(), samples),
+                ctx,
+            )
+        }
+        Ok(DemuxedMedia::Video(track, frames)) => {
+            if spec.container == ContainerKind::Wav {
+                return Outcome::fail(
+                    1,
+                    "decoding a video track writes y4m output (drop --container wav)",
+                );
+            }
+            let params = match y4m_params_for_track(&track, &frames) {
+                Some(p) => p,
+                None => return Outcome::fail(1, "video track decoded no frames"),
+            };
+            let bytes = y4m::write(&params, &frames);
+            let count = frames.len();
+            write_output(
+                spec,
+                bytes,
+                format!(
+                    "decoded {count} frames ({}x{} @ {}/{} fps)",
+                    params.width, params.height, params.fps_num, params.fps_den
+                ),
+                ctx,
+            )
+        }
+        Err((code, msg)) => Outcome::fail(code, msg),
+    }
 }
 
 /// Drop block-size padding from the tail of the decoded frames, using the
@@ -988,14 +1279,18 @@ fn write_output(spec: &OpSpec, bytes: Vec<u8>, summary: String, ctx: &Ctx<'_>) -
 
 /// `tpt transcode`: `.tpt` -> (decode) -> codec -> (re-mux) -> `.tpt`.
 ///
-/// Decodes the input container's first audio track, then re-encodes the
-/// recovered samples with `--codec` and muxes a fresh `.tpt`. The source
-/// track's metadata tags are carried over (a `--set-meta` pair overrides
-/// a tag of the same key), and the sample-count bookkeeping is refreshed
-/// so the output decodes back to exactly the decoded sample count.
-/// Transcoding is always lossy-with-respect-to-the-*source* when the
-/// target is Cinder (lossy of lossy compounds); Aura targets re-mux the
-/// decoded samples bit-exactly.
+/// Decodes the input container's first track — audio or video — then
+/// re-encodes it with `--codec` and muxes a fresh `.tpt`. Audio targets
+/// (cinder/aura/reed) require an audio track; a video track needs
+/// `--codec thrum` (the only video codec), which re-quantises at
+/// `--quality`. The source track's metadata tags are carried over (a
+/// `--set-meta` pair overrides a tag of the same key), and audio
+/// sample-count bookkeeping is refreshed so the output decodes back to
+/// exactly the decoded sample count. Transcoding is always
+/// lossy-with-respect-to-the-*source* when the target is Cinder (lossy
+/// of lossy compounds); Aura targets re-mux the decoded samples
+/// bit-exactly, and a thrum→thrum transcode re-quantises the decoded
+/// frames.
 pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     if spec.container != ContainerKind::Tpt {
         return Outcome::fail(
@@ -1007,13 +1302,11 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Some(c) => c,
         None => return Outcome::usage("transcode requires --codec"),
     };
-    let target = match AudioCodec::from_id(target) {
-        Some(c) => c,
-        None => match VideoCodec::from_id(target) {
-            Some(v) => return Outcome::fail(1, video_codec_unsupported_here(v)),
-            None => return Outcome::fail(1, "no encoder registered for this codec"),
-        },
-    };
+    let target_audio = AudioCodec::from_id(target);
+    let target_video = VideoCodec::from_id(target);
+    if target_audio.is_none() && target_video.is_none() {
+        return Outcome::fail(1, "no encoder registered for this codec");
+    }
     let input = match read_source(&spec.input, ctx) {
         Ok(b) => b,
         Err(e) => return Outcome::fail(1, e),
@@ -1024,73 +1317,149 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
             return Outcome::fail(1, "input is a wav file; use `tpt encode` to compress it")
         }
         ContainerKind::Unknown => {
-            return Outcome::fail(1, "input is not a recognisable media file")
+            // A video-codec target with no .tpt at all reads as "video
+            // codec addressed at an audio command" — say that instead
+            // of the generic sniff failure.
+            if let Some(v) = target_video {
+                return Outcome::fail(
+                    1,
+                    format!(
+                        "{} is a video codec; transcode needs a .tpt input \
+                         containing a video track",
+                        v.name()
+                    ),
+                );
+            }
+            return Outcome::fail(1, "input is not a recognisable media file");
         }
     }
-    let (track, frames) = match demux_and_decode(&input, None) {
+    let decoded = match demux_and_decode_any(&input, None) {
         Ok(r) => r,
         Err((code, msg)) => return Outcome::fail(code, msg),
     };
-    let source = match AudioCodec::from_id(track.codec_config.codec_id) {
-        Some(c) => c,
-        None => AudioCodec::Reed, // unknown source: name is display-only
-    };
-    let rate = track.media.sample_rate.unwrap_or(48_000);
-    if !supported_input_rates(target).contains(&rate) {
-        return Outcome::fail(
-            1,
-            format!(
-                "transcode to {} requires a {} Hz source track (got {rate} Hz); \
-                 there is no CLI resampler",
-                target.name(),
-                supported_input_rates(target)
-                    .iter()
-                    .map(|r| r.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" or ")
-            ),
-        );
-    }
-    let samples: Vec<u8> = frames
-        .iter()
-        .flat_map(|f| f.samples.iter().copied())
-        .collect();
-    let sample_count: usize = frames.iter().map(|f| f.sample_count as usize).sum();
     // Carry the source tags, minus any key the caller overrides with
     // `--set-meta` (later pairs win by construction).
-    let mut extra_meta: Vec<(String, MetadataValue)> = track
-        .metadata
-        .iter()
-        .filter(|(k, _)| !spec.meta.iter().any(|(nk, _)| nk == k))
-        .cloned()
-        .collect();
-    extra_meta.extend(
-        spec.meta
+    let carry_meta = |track: &Track| -> Vec<(String, MetadataValue)> {
+        let mut extra_meta: Vec<(String, MetadataValue)> = track
+            .metadata
             .iter()
-            .map(|(k, v)| (k.clone(), MetadataValue::Text(v.clone()))),
-    );
-    let job = EncodeJob {
-        codec: target,
-        rate,
-        bits_per_coef: quality_param(target, spec.quality),
-        samples,
-        sample_count,
-        extra_meta,
+            .filter(|(k, _)| !spec.meta.iter().any(|(nk, _)| nk == k))
+            .cloned()
+            .collect();
+        extra_meta.extend(
+            spec.meta
+                .iter()
+                .map(|(k, v)| (k.clone(), MetadataValue::Text(v.clone()))),
+        );
+        extra_meta
     };
-    let (bytes, written) = match run_encode_job(&job) {
-        Ok(r) => r,
-        Err(e) => return Outcome::fail(1, e),
-    };
-    write_output(
-        spec,
-        bytes,
-        format!(
-            "transcoded {written} packets ({sample_count} samples, {} -> {})",
-            source.name(),
-            target.name()
-        ),
-        ctx,
-    )
+    match decoded {
+        DemuxedMedia::Audio(track, frames) => {
+            let target = match target_audio {
+                Some(c) => c,
+                None => {
+                    return Outcome::fail(
+                        1,
+                        format!(
+                            "cannot transcode an audio track to {} (a video codec)",
+                            target_video.expect("checked above").name()
+                        ),
+                    );
+                }
+            };
+            let source = match AudioCodec::from_id(track.codec_config.codec_id) {
+                Some(c) => c,
+                None => AudioCodec::Reed, // unknown source: name is display-only
+            };
+            let rate = track.media.sample_rate.unwrap_or(48_000);
+            if !supported_input_rates(target).contains(&rate) {
+                return Outcome::fail(
+                    1,
+                    format!(
+                        "transcode to {} requires a {} Hz source track (got {rate} Hz); \
+                         there is no CLI resampler",
+                        target.name(),
+                        supported_input_rates(target)
+                            .iter()
+                            .map(|r| r.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" or ")
+                    ),
+                );
+            }
+            let samples: Vec<u8> = frames
+                .iter()
+                .flat_map(|f| f.samples.iter().copied())
+                .collect();
+            let sample_count: usize = frames.iter().map(|f| f.sample_count as usize).sum();
+            let job = EncodeJob {
+                codec: target,
+                rate,
+                bits_per_coef: quality_param(target, spec.quality),
+                samples,
+                sample_count,
+                extra_meta: carry_meta(&track),
+            };
+            let (bytes, written) = match run_encode_job(&job) {
+                Ok(r) => r,
+                Err(e) => return Outcome::fail(1, e),
+            };
+            write_output(
+                spec,
+                bytes,
+                format!(
+                    "transcoded {written} packets ({sample_count} samples, {} -> {})",
+                    source.name(),
+                    target.name()
+                ),
+                ctx,
+            )
+        }
+        DemuxedMedia::Video(track, frames) => {
+            let target = match target_video {
+                Some(c) => c,
+                None => {
+                    return Outcome::fail(
+                        1,
+                        format!(
+                            "cannot transcode a video track to {} (an audio codec); \
+                             a video track needs --codec thrum",
+                            target_audio.expect("checked above").name()
+                        ),
+                    );
+                }
+            };
+            let params = match y4m_params_for_track(&track, &frames) {
+                Some(p) => p,
+                None => return Outcome::fail(1, "video track decoded no frames"),
+            };
+            let count = frames.len();
+            let job = VideoEncodeJob {
+                fps_num: params.fps_num,
+                fps_den: params.fps_den,
+                qp: quality_to_qp(spec.quality),
+                frames,
+                extra_meta: carry_meta(&track),
+            };
+            let (bytes, written) = match run_video_encode_job(&job) {
+                Ok(r) => r,
+                Err(e) => return Outcome::fail(1, e),
+            };
+            write_output(
+                spec,
+                bytes,
+                format!(
+                    "transcoded {written} packets ({count} frames, {}x{}, \
+                     thrum -> {} at --quality {})",
+                    params.width,
+                    params.height,
+                    target.name(),
+                    spec.quality.map_or("-".into(), |q| q.to_string())
+                ),
+                ctx,
+            )
+        }
+    }
 }
 
 /// Median of a list (average of the two middle values for even lengths).
@@ -1165,21 +1534,258 @@ fn bench_pass(
 /// preemption can only ever make a pass slower, never faster). Timings
 /// are machine-dependent by nature; the *quality* numbers and the packet
 /// count are fully deterministic (§39).
+/// The video counterpart of the audio benchmark: y4m in, Thrum
+/// round-tripped `--runs` times after an untimed warm-up, with the §37
+/// video metrics (PSNR, SSIM, bits-per-pixel, bitrate) computed on the
+/// final pass and per-frame latency reported against the clip's own
+/// frame rate. One P-frame's encode+decode is the one-way latency
+/// contribution — Thrum never holds a frame back.
+fn benchmark_video(spec: &OpSpec, input: &[u8]) -> Outcome {
+    let (params, frames) = match y4m::parse(input) {
+        Ok(r) => r,
+        Err(e) => return Outcome::fail(1, format!("input is not a readable y4m: {e}")),
+    };
+    if params.width % 16 != 0 || params.height % 16 != 0 {
+        return Outcome::fail(
+            1,
+            format!(
+                "thrum requires frame dimensions that are non-zero multiples \
+                 of 16 (got {}x{})",
+                params.width, params.height
+            ),
+        );
+    }
+    let qp = quality_to_qp(spec.quality);
+    let cfg = ThrumConfig {
+        width: params.width,
+        height: params.height,
+        format: params.format,
+        qp,
+        ..ThrumConfig::default()
+    };
+    let fw = FrameworkCodecConfig::default();
+    let mut encoder = match ThrumEncoder::new(fw.clone(), cfg.clone()) {
+        Ok(e) => e,
+        Err(e) => return Outcome::fail(1, format!("thrum encoder: {e}")),
+    };
+    let mut decoder = match ThrumDecoder::new(fw, cfg) {
+        Ok(d) => d,
+        Err(e) => return Outcome::fail(1, format!("thrum decoder: {e}")),
+    };
+    let runs = spec.runs.unwrap_or(5);
+
+    // Pass 0 is an untimed warm-up (plan construction, page-ins); the
+    // measured passes reuse the same encoder/decoder, so the numbers
+    // are steady-state exactly like the audio benchmark's.
+    let mut encode_ms = Vec::new();
+    let mut decode_ms = Vec::new();
+    let mut last_pass: Option<(Vec<tpt_media_core::Packet>, Vec<VideoFrame>)> = None;
+    for run in 0..=runs {
+        let t0 = std::time::Instant::now();
+        let mut packets = Vec::new();
+        for f in &frames {
+            match encoder.encode(f) {
+                Ok(p) => packets.extend(p),
+                Err(e) => return Outcome::fail(1, format!("encode failed: {e}")),
+            }
+        }
+        let e = t0.elapsed().as_secs_f64() * 1e3;
+        let t1 = std::time::Instant::now();
+        let mut decoded = Vec::new();
+        for pkt in &packets {
+            match decoder.decode(pkt) {
+                Ok(f) => decoded.extend(f),
+                Err(e) => return Outcome::fail(1, format!("decode failed: {e}")),
+            }
+        }
+        let d = t1.elapsed().as_secs_f64() * 1e3;
+        if run > 0 {
+            encode_ms.push(e);
+            decode_ms.push(d);
+            last_pass = Some((packets, decoded));
+        }
+    }
+    let (packets, decoded) =
+        last_pass.expect("at least one measured run is guaranteed by --runs >= 1");
+    let packet_count = packets.len();
+    let payload_bytes: u64 = packets.iter().map(|p| p.data.len() as u64).sum();
+    let count = frames.len();
+    let pixels = u64::from(params.width) * u64::from(params.height);
+
+    // §37 video quality on the final pass: PSNR/SSIM averaged over the
+    // frames that have a finite score (a bit-exact frame on the skip
+    // path contributes none, exactly as the corpus tests define it).
+    let mut psnr_sum = 0f64;
+    let mut psnr_n = 0usize;
+    let mut ssim_sum = 0f64;
+    let mut ssim_n = 0usize;
+    for (src, out) in frames.iter().zip(&decoded) {
+        if let Some(p) = crate::quality::psnr_db(src, out).filter(|p| p.is_finite()) {
+            psnr_sum += p;
+            psnr_n += 1;
+        }
+        if let Some(s) = crate::quality::ssim(src, out) {
+            ssim_sum += s;
+            ssim_n += 1;
+        }
+    }
+    let psnr = (psnr_n > 0).then(|| psnr_sum / psnr_n as f64);
+    let ssim = (ssim_n > 0).then(|| ssim_sum / ssim_n as f64);
+
+    let enc_med = median(&encode_ms).unwrap_or_default();
+    let enc_min = encode_ms.iter().cloned().fold(f64::INFINITY, f64::min);
+    let dec_med = median(&decode_ms).unwrap_or_default();
+    let dec_min = decode_ms.iter().cloned().fold(f64::INFINITY, f64::min);
+    let fps = params.fps_num as f64 / params.fps_den as f64;
+    let frame_ms = 1e3 / fps;
+    let duration_s = count as f64 / fps;
+    let enc_factor = if enc_min > 0.0 {
+        duration_s / (enc_min / 1e3)
+    } else {
+        0.0
+    };
+    let dec_factor = if dec_min > 0.0 {
+        duration_s / (dec_min / 1e3)
+    } else {
+        0.0
+    };
+    let bpp = crate::quality::bits_per_pixel(payload_bytes, count as u64, pixels);
+    let bitrate =
+        crate::quality::video_bitrate_bits_per_second(payload_bytes, count as u64, params.fps_num);
+
+    if spec.json {
+        let mut j = crate::json::J::new();
+        j.object();
+        j.field("codec");
+        j.value_str("thrum");
+        j.field("quality");
+        match spec.quality {
+            Some(q) => j.value_u64(u64::from(q)),
+            None => j.value_null(),
+        }
+        j.field("qp");
+        j.value_u64(u64::from(qp));
+        j.field("width");
+        j.value_u64(u64::from(params.width));
+        j.field("height");
+        j.value_u64(u64::from(params.height));
+        j.field("fps");
+        j.value_f64(fps);
+        j.field("frames");
+        j.value_u64(count as u64);
+        j.field("duration_seconds");
+        j.value_f64(duration_s);
+        j.field("packets");
+        j.value_u64(packet_count as u64);
+        j.field("runs");
+        j.value_u64(runs as u64);
+        j.field("payload_bytes");
+        j.value_u64(payload_bytes);
+        if let Some(b) = bpp {
+            j.field("bits_per_pixel");
+            j.value_f64(b);
+        }
+        if let Some(b) = bitrate {
+            j.field("bitrate_bits_per_second");
+            j.value_u64(b);
+        }
+        j.field("encode_ms");
+        j.object();
+        j.field("median");
+        j.value_f64(enc_med);
+        j.field("min");
+        j.value_f64(enc_min);
+        j.close();
+        j.field("decode_ms");
+        j.object();
+        j.field("median");
+        j.value_f64(dec_med);
+        j.field("min");
+        j.value_f64(dec_min);
+        j.close();
+        j.field("encode_realtime_factor_min");
+        j.value_f64(enc_factor);
+        j.field("decode_realtime_factor_min");
+        j.value_f64(dec_factor);
+        if let Some(p) = psnr {
+            j.field("psnr_db");
+            j.value_f64(p);
+        }
+        if let Some(s) = ssim {
+            j.field("ssim");
+            j.value_f64(s);
+        }
+        j.close();
+        Outcome::ok(j.finish())
+    } else {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "benchmark: thrum, {}x{} @ {:.3} fps, {count} frames ({duration_s:.3} s), \
+             {packet_count} packets, qp {qp}\n",
+            params.width, params.height, fps,
+        ));
+        out.push_str(&format!(
+            "encode:   median {enc_med:.3} ms, min {enc_min:.3} ms  ({enc_factor:.0}x realtime)\n"
+        ));
+        out.push_str(&format!(
+            "decode:   median {dec_med:.3} ms, min {dec_min:.3} ms  ({dec_factor:.0}x realtime)\n"
+        ));
+        out.push_str(&format!(
+            "latency:  {:.3} ms per-frame budget at this fps; one P-frame's \
+             encode+decode min {:.3} ms\n",
+            frame_ms,
+            enc_min + dec_min
+        ));
+        out.push_str(&format!(
+            "payload:  {payload_bytes} bytes, {} bits/pixel, {}\n",
+            bpp.map_or("n/a".into(), |b| format!("{b:.4}")),
+            bitrate.map_or("n/a".into(), |b| format!("{b} bit/s"))
+        ));
+        out.push_str(&format!(
+            "quality:  {}\n",
+            psnr.map_or("PSNR n/a (all frames bit-exact)".into(), |p| format!(
+                "PSNR {p:.2} dB"
+            ))
+        ));
+        if let Some(s) = ssim {
+            out.push_str(&format!("          SSIM {s:.4}\n"));
+        }
+        Outcome::ok(out)
+    }
+}
+
 pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     let codec = match spec.codec {
         Some(c) => c,
         None => return Outcome::usage("benchmark requires --codec"),
     };
+    let input = match read_source(&spec.input, ctx) {
+        Ok(b) => b,
+        Err(e) => return Outcome::fail(1, e),
+    };
+    if input.starts_with(b"YUV4MPEG2") {
+        match VideoCodec::from_id(codec) {
+            Some(VideoCodec::Thrum) => return benchmark_video(spec, &input),
+            Some(other) => return Outcome::fail(1, format!("unhandled video codec {other:?}")),
+            None => {
+                let name = NATIVE_CODECS
+                    .iter()
+                    .find(|(_, id, _)| id.as_bytes() == codec.as_bytes())
+                    .map(|(n, _, _)| *n)
+                    .unwrap_or("this codec");
+                return Outcome::fail(
+                    1,
+                    format!("{name} is an audio codec; y4m benchmarking needs --codec thrum"),
+                );
+            }
+        }
+    }
     let codec = match AudioCodec::from_id(codec) {
         Some(c) => c,
         None => match VideoCodec::from_id(codec) {
             Some(v) => return Outcome::fail(1, video_codec_unsupported_here(v)),
             None => return Outcome::fail(1, "no encoder registered for this codec"),
         },
-    };
-    let input = match read_source(&spec.input, ctx) {
-        Ok(b) => b,
-        Err(e) => return Outcome::fail(1, e),
     };
     let frame = match decode_wav(&input) {
         Ok(f) => f,

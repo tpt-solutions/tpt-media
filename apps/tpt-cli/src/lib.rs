@@ -49,6 +49,7 @@ pub mod memprobe;
 pub mod quality;
 pub mod signals;
 pub mod video;
+pub mod y4m;
 
 use args::Command;
 
