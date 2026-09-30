@@ -75,8 +75,27 @@ where
     rep.synthesize(&recon, config, out.view_mut());
     let mse = Mse.distortion(signal, out.view());
     RdPoint {
-        bits_per_sample: total_bits / signal.data().len() as f64,
+        bits_per_sample: bits_per_sample(total_bits, signal.data().len()),
         mse,
+    }
+}
+
+/// `total_bits` spread over `samples` samples.
+///
+/// A zero-length volume has no per-sample rate to speak of, and the plain
+/// division answers `0.0 / 0.0` — `NaN`. That is not a rounding curiosity:
+/// this crate's stated validity contract is that *every reported value is
+/// finite* (`harness`'s module docs, and the experiments assert it), and an
+/// `NaN` here poisons the whole RD curve it belongs to — `partial_cmp` on
+/// `NaN` is `None`, so the sort in `rd_curve` and the dedup in
+/// `interpolated_distortion` both degrade to treating every comparison as
+/// equal. Nothing transmits and nothing distorts over an empty volume, so the
+/// honest rate is 0 bits/sample.
+fn bits_per_sample(total_bits: f64, samples: usize) -> f64 {
+    if samples == 0 {
+        0.0
+    } else {
+        total_bits / samples as f64
     }
 }
 
@@ -102,7 +121,7 @@ where
     M: RateEstimator<Q::Quantized>,
 {
     let coeffs = rep.analyze(signal, config);
-    let n = signal.data().len() as f64;
+    let n = signal.data().len();
     let mut points: Vec<RdPoint> = steps
         .iter()
         .map(|&step| {
@@ -113,7 +132,7 @@ where
             rep.synthesize(&recon, config, out.view_mut());
             let mse = Mse.distortion(signal, out.view());
             RdPoint {
-                bits_per_sample: total_bits / n,
+                bits_per_sample: bits_per_sample(total_bits, n),
                 mse,
             }
         })
@@ -267,6 +286,110 @@ mod tests {
     use crate::signals::spatial::gradient;
     use crate::uniform::{EntropyRate, LinearQuantizer};
     use tpt_media_representation::{SignalBuffer, SignalDims};
+
+    /// An empty volume has no per-sample rate, and dividing 0 bits by 0
+    /// samples used to answer `NaN` — which broke this crate's stated
+    /// validity contract ("every reported value finite") and, worse, poisoned
+    /// the whole curve: `partial_cmp` on `NaN` is `None`, so the sort in
+    /// `rd_curve` and the dedup in `interpolated_distortion` both degrade to
+    /// treating every comparison as equal.
+    #[test]
+    fn an_empty_volume_reports_zero_bits_per_sample_not_nan() {
+        let dims = SignalDims {
+            width: 0,
+            height: 0,
+            frames: 0,
+        };
+        let sig = SignalBuffer::zeroed(dims);
+        let mut out = SignalBuffer::zeroed(dims);
+        let point = rd_point(
+            sig.view(),
+            &Baseline,
+            &BaselineConfig,
+            &LinearQuantizer::<BaselineCoeffs>::new(0.1),
+            &EntropyRate,
+            &mut out,
+        );
+        assert_eq!(point.bits_per_sample, 0.0);
+        assert!(point.bits_per_sample.is_finite());
+        assert_eq!(point.mse, 0.0);
+
+        let curve = rd_curve(
+            sig.view(),
+            &Baseline,
+            &BaselineConfig,
+            &[0.1, 0.2],
+            LinearQuantizer::<BaselineCoeffs>::new,
+            &EntropyRate,
+            &mut out,
+        );
+        assert_eq!(curve.len(), 2);
+        assert!(
+            curve.iter().all(|p| p.bits_per_sample.is_finite()),
+            "every reported value must be finite, got {curve:?}"
+        );
+        // Interpolation still refuses to invent a rate the curve never
+        // reached — it is now a curve at 0, not a curve of NaN.
+        assert_eq!(interpolated_distortion(&curve, 0.0), Some(0.0));
+        assert_eq!(interpolated_distortion(&curve, 1.0), None);
+    }
+
+    /// §38: empty input. Interpolation answers `None` rather than guessing
+    /// when there is nothing to interpolate between.
+    #[test]
+    fn interpolation_refuses_to_guess_on_degenerate_curves() {
+        assert_eq!(interpolated_distortion(&[], 1.0), None);
+        // A single point can only answer its own rate.
+        let one = vec![RdPoint {
+            bits_per_sample: 2.0,
+            mse: 5.0,
+        }];
+        assert_eq!(interpolated_distortion(&one, 2.0), Some(5.0));
+        assert_eq!(interpolated_distortion(&one, 2.5), None);
+    }
+
+    /// A `NaN` rate anywhere in the list would make every `partial_cmp` return
+    /// `None` and the sort meaningless. With the divisor fixed such a point
+    /// can no longer be produced, so any `NaN` reaching here is a hand-built
+    /// one — and it must not be interpolated into a confident answer.
+    #[test]
+    fn a_nan_rate_is_never_interpolated_into_a_number() {
+        let pts = vec![
+            RdPoint {
+                bits_per_sample: 1.0,
+                mse: 10.0,
+            },
+            RdPoint {
+                bits_per_sample: f64::NAN,
+                mse: 0.0,
+            },
+            RdPoint {
+                bits_per_sample: 3.0,
+                mse: 30.0,
+            },
+        ];
+        // `NaN` compares as unordered, so the curve's sampled range is not a
+        // well-defined interval and the answer must be `None`, not a number
+        // derived from a comparison that never resolved.
+        assert!(interpolated_distortion(&pts, 2.0).is_none());
+    }
+
+    /// The default sweep is a strictly increasing geometric ladder over 16
+    /// steps, spanning 2^-8 to 2^7. The rate axis of every experiment depends
+    /// on it, so its shape is pinned rather than assumed.
+    #[test]
+    fn the_default_sweep_is_a_strictly_increasing_geometric_ladder() {
+        let steps = default_steps();
+        assert_eq!(steps.len(), 16);
+        assert_eq!(steps[0], 2.0f32.powi(-8));
+        assert_eq!(steps[15], 2.0f32.powi(7));
+        assert!(steps.windows(2).all(|w| w[1] > w[0]), "{steps:?}");
+        // Each step is exactly twice the previous.
+        assert!(
+            steps.windows(2).all(|w| (w[1] / w[0] - 2.0).abs() < 1e-6),
+            "{steps:?}"
+        );
+    }
 
     #[test]
     fn interpolated_distortion_never_extrapolates() {

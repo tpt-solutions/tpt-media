@@ -139,4 +139,60 @@ mod tests {
         // All outputs finite (validity, not a claim about quality).
         assert!(curve.iter().all(|p| p.mse.is_finite()));
     }
+
+    /// §38: empty input. An empty threshold list asks for no measurements, so
+    /// the curve is empty rather than a defaulted entry.
+    #[test]
+    fn an_empty_threshold_list_produces_an_empty_curve() {
+        let sig = gradient(8, 8);
+        let mut out = SignalBuffer::zeroed(sig.dims());
+        let curve = retention_curve(
+            sig.view(),
+            &Baseline,
+            &BaselineConfig,
+            BaselineCoeffs(sig.data().to_vec()),
+            &[],
+            &mut out,
+        );
+        assert!(curve.is_empty());
+    }
+
+    /// §38: edge cases. An empty quantized stream has no coefficients at all,
+    /// so the diagnostics must be empty-but-valid rather than dividing by
+    /// zero or defaulting to "one dominant coefficient".
+    #[test]
+    fn an_empty_quantized_stream_diagnoses_to_nothing() {
+        let d = secondary_diagnostics(&[]);
+        assert_eq!(d.total, 0);
+        assert_eq!(d.nonzero, 0);
+        assert_eq!(d.entropy_bits, 0.0);
+        assert_eq!(d.coefficients_for_99pct_energy, 0);
+        assert!(d.entropy_bits.is_finite());
+    }
+
+    /// An all-zero stream carries no information, so its 99%-energy answer is
+    /// "you need all of them" — the target is unreachable when every
+    /// coefficient holds zero energy. Pinned because it is the same `total`
+    /// fallback a caller would otherwise read as a real measurement.
+    #[test]
+    fn an_all_zero_stream_cannot_reach_its_energy_target() {
+        let d = secondary_diagnostics(&[0, 0, 0]);
+        assert_eq!(d.total, 3);
+        assert_eq!(d.nonzero, 0);
+        assert_eq!(d.entropy_bits, 0.0);
+        assert_eq!(d.coefficients_for_99pct_energy, 3);
+    }
+
+    /// A dominant coefficient makes the stream maximally compact: one symbol
+    /// carries essentially all the energy, so the 99% target is met by the
+    /// first coefficient however many follow it.
+    #[test]
+    fn a_dominant_coefficient_is_identified_as_such() {
+        let mut q = vec![0i32; 200];
+        q[0] = 10_000;
+        let d = secondary_diagnostics(&q);
+        assert_eq!(d.total, 200);
+        assert_eq!(d.nonzero, 1);
+        assert_eq!(d.coefficients_for_99pct_energy, 1);
+    }
 }

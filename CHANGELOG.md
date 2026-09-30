@@ -136,6 +136,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`tpt-media-research`'s RD harness reported `NaN` bits-per-sample for an
+  empty volume, and `codebook_mse` returned `NaN` for an empty training set**
+  (2026-10-01, found while auditing that crate's public API against section 38's
+  unit-test gate - the last unswept crate with no `tests/` directory at all).
+  Both were `0/0`, and both are worse than a bad number. `rd_point`/`rd_curve`
+  divide by `signal.data().len()`, which an empty `SignalBuffer` - which is
+  constructible from outside the crate - makes zero; the result broke the
+  crate's own stated validity contract ("every reported value is finite"), and
+  because `partial_cmp` on `NaN` is `None`, the sort in `rd_curve` and the
+  dedup in `interpolated_distortion` both silently degrade to treating every
+  comparison as equal, corrupting the whole curve rather than one point.
+  `codebook_mse` asserts `entries > 0` but never `n > 0`, and since it exists
+  to *compare* codebooks, a `NaN` there orders as "less than" any real
+  codebook - quietly picking a winner. Both now report 0, and `dim == 0` is
+  rejected explicitly instead of dividing by it.
 - **§38 unit-test sweep over `tpt-media-representation`'s public API**
   (2026-10-01): the crate had 37 public items, 10 tests, all inline, and **no
   `tests/` directory at all**; `representation`, `quantizer` and `rate` — three

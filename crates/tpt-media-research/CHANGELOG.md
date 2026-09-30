@@ -17,8 +17,39 @@ lockstep with the workspace.
 
 ### Added
 
-- **Per-crate README, changelog, keywords and categories** (2026-09-30):
-  crate-specific `README.md` and manifest `keywords`/`categories`.
+- **§38 unit-test sweep over `tpt-media-research`'s public API** (2026-10-01):
+  26 new inline tests (51 → 77) plus `tests/harness_contract.rs`, the crate's
+  **first integration test** (7 tests), covering the §38 categories that had
+  no coverage — empty input, maximum values, overflow, edge cases, malformed
+  input, and the documented panics. The inline tests can reach private items,
+  so `tests/harness_contract.rs` is what actually proves the platform
+  composes *from outside* the crate, which is the whole claim: it drives
+  `baseline` and `block_dct` through the same `rd_curve` machinery, checks
+  every reported value is finite (the crate's stated validity contract),
+  checks a matched rate is interpolated but never extrapolated, that
+  `rd_point` and `rd_curve` agree on the same step, and that repeated
+  measurements are byte-identical — the property the published numbers in
+  `docs/representation-research.md` rest on.
+
+### Fixed
+
+- **`rd_point`/`rd_curve` reported `NaN` bits-per-sample for an empty volume**
+  (2026-10-01, found during that sweep). The rate is `total_bits /
+  signal.data().len()`, which is `0/0` when the volume has no samples — and
+  an empty `SignalBuffer` is constructible from outside the crate. That
+  broke the crate's own documented validity contract ("every reported value
+  is finite"), and it was worse than a bad number: `partial_cmp` on `NaN` is
+  `None`, so the sort in `rd_curve` and the dedup in
+  `interpolated_distortion` both degrade to treating every comparison as
+  equal, silently corrupting the whole curve. An empty volume transmits and
+  distorts nothing, so the honest rate is 0 bits/sample.
+
+- **`codebook_mse` returned `NaN` for an empty training set** (2026-10-01,
+  same sweep). It asserts `entries > 0` but never `n > 0`, so the final
+  `total / n` was `0/0`. This function exists precisely to *compare* two
+  codebooks, and a `NaN` there orders as "less than" any real codebook —
+  quietly picking a winner. Now 0, and `dim == 0` is rejected explicitly
+  rather than dividing by it.
 
 ## [0.1.0] — 2026-09-04
 

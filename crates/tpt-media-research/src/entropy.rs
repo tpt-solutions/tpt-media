@@ -93,4 +93,64 @@ mod tests {
         let uniform = vec![0, 0, 0, 0, 1, 1, 1, 1];
         assert!(empirical_entropy_bits(&skewed) < empirical_entropy_bits(&uniform));
     }
+
+    /// §38: empty input. Every entry point answers 0 rather than `0/0` — the
+    /// crate's finiteness contract depends on it, and a rate of `NaN` would
+    /// silently order as "less than" any real rate in an RD comparison.
+    #[test]
+    fn an_empty_stream_costs_nothing() {
+        assert_eq!(empirical_entropy_bits(&[]), 0.0);
+        assert_eq!(empirical_total_bits(&[]), 0.0);
+        assert_eq!(empirical_entropy_bits_u32(&[]), 0.0);
+        assert_eq!(empirical_total_bits_u32(&[]), 0.0);
+    }
+
+    /// §38: maximum values. Symbol *values* are irrelevant to entropy — only
+    /// their frequency matters — so the extremes of both integer types must
+    /// behave like any other symbol rather than overflowing a count.
+    #[test]
+    fn extreme_symbol_values_are_just_symbols() {
+        let extremes = [i32::MIN, i32::MAX, -1, 0];
+        assert_eq!(empirical_entropy_bits(&extremes), 2.0, "4 distinct");
+        assert_eq!(empirical_total_bits(&extremes), 8.0);
+        let uextremes = [u32::MIN, u32::MAX];
+        assert_eq!(empirical_entropy_bits_u32(&uextremes), 1.0);
+        assert_eq!(empirical_total_bits_u32(&uextremes), 2.0);
+    }
+
+    /// Entropy of an `n`-symbol uniform distribution is exactly `log2 n`, and
+    /// a distribution over `k` distinct symbols can never exceed `log2 k`.
+    /// The second bound is the one a measurement can silently violate if the
+    /// accumulation drifts, so it is checked over a range of `k`.
+    #[test]
+    fn entropy_never_exceeds_the_bound_set_by_the_symbol_count() {
+        for k in 2..=12usize {
+            // `k` distinct symbols, each appearing `k` times.
+            let symbols: Vec<i32> = (0..k as i32)
+                .flat_map(|s| std::iter::repeat_n(s, k))
+                .collect();
+            let h = empirical_entropy_bits(&symbols);
+            assert!(h <= (k as f64).log2() + 1e-9, "k={k} h={h}");
+            assert!(h >= 0.0, "k={k} h={h}");
+            assert!(h.is_finite(), "k={k} h={h}");
+        }
+    }
+
+    /// The counts are accumulated in a `BTreeMap` specifically so the
+    /// floating-point summation order is identical run to run. That is the
+    /// crate's byte-identical determinism contract, so it is asserted rather
+    /// than assumed.
+    #[test]
+    fn entropy_is_bit_identical_across_repeated_calls() {
+        let symbols: Vec<i32> = (0..1000).map(|i| (i * 7919 % 13) - 6).collect();
+        let first = empirical_entropy_bits(&symbols);
+        for _ in 0..8 {
+            assert_eq!(empirical_entropy_bits(&symbols), first);
+        }
+        // The same multiset in a different input order must give the same
+        // answer too — that is what the sorted accumulation buys.
+        let mut shuffled = symbols.clone();
+        shuffled.reverse();
+        assert_eq!(empirical_entropy_bits(&shuffled), first);
+    }
 }

@@ -160,4 +160,72 @@ mod tests {
         let bits = EntropyRate.estimate_bits(&q);
         assert!(((bits - 16.0) / 16.0).abs() < 1e-6, "bits={bits}");
     }
+
+    /// §38: empty input. An empty stream transmits nothing, so it costs
+    /// nothing — and must not produce the `NaN` that `0 * 0/0` would give.
+    #[test]
+    fn empty_streams_round_trip_and_cost_nothing() {
+        let step = ScalarStep::new(0.25);
+        assert!(quantize_stream(&[], &step).is_empty());
+        assert!(dequantize_stream(&[], &step).is_empty());
+        assert_eq!(EntropyRate.estimate_bits(&Vec::<i32>::new()), 0.0);
+    }
+
+    /// §38: overflow. `value / step` is a `f32` division cast to `i32`, which
+    /// saturates rather than wrapping — so an absurd ratio pins at
+    /// `i32::MAX`/`i32::MIN` instead of aliasing onto a plausible small
+    /// index that would silently round-trip to the wrong value.
+    #[test]
+    fn an_out_of_range_index_saturates_rather_than_wrapping() {
+        let tiny = ScalarStep::new(1e-30);
+        assert_eq!(tiny.index(1.0), i32::MAX);
+        assert_eq!(tiny.index(-1.0), i32::MIN);
+        assert_eq!(tiny.index(f32::MAX), i32::MAX);
+        // A step far coarser than its input collapses it to the zero level,
+        // which is the correct answer for a quantiser that coarse.
+        let huge = ScalarStep::new(1e30);
+        assert_eq!(huge.index(1.0), 0);
+        assert_eq!(huge.index(-1.0), 0);
+    }
+
+    /// §38: malformed input. A step that is zero, negative, NaN or infinite
+    /// has no meaningful level spacing, and the documented behaviour is a
+    /// panic rather than a silently wrong index. `catch_unwind` rather than
+    /// `#[should_panic]` because this checks all five bad values, not one.
+    #[test]
+    fn a_non_positive_or_non_finite_step_is_rejected() {
+        for bad in [0.0f32, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let r = std::panic::catch_unwind(|| ScalarStep::new(bad));
+            assert!(r.is_err(), "step {bad} should be rejected");
+        }
+    }
+
+    /// Zero is the coefficient every stream has, and it must map to index 0
+    /// and back to exactly 0.0 — including `-0.0`, which compares equal but
+    /// would otherwise produce a negative zero on the way back.
+    #[test]
+    fn zero_round_trips_exactly_in_both_signs() {
+        let step = ScalarStep::new(0.25);
+        assert_eq!(step.index(0.0), 0);
+        assert_eq!(step.index(-0.0), 0);
+        assert_eq!(step.value(0), 0.0);
+        let back = dequantize_stream(&quantize_stream(&[0.0, -0.0], &step), &step);
+        assert_eq!(back, vec![0.0, 0.0]);
+    }
+
+    /// The `LinearQuantizer` must be a faithful adapter: whatever
+    /// `quantize_stream`/`dequantize_stream` do, it must do identically
+    /// through the trait, since that is the path every experiment takes.
+    #[test]
+    fn the_linear_quantizer_matches_the_free_functions_it_adapts() {
+        use tpt_media_representation::Quantizer;
+        let stream = vec![0.5f32, -1.25, 3.0, 0.0];
+        let q = LinearQuantizer::<crate::representations::BaselineCoeffs>::new(0.25);
+        let coeffs = crate::representations::BaselineCoeffs(stream.clone());
+        let step = ScalarStep::new(0.25);
+        assert_eq!(q.quantize(&coeffs), quantize_stream(&stream, &step));
+        let indices = q.quantize(&coeffs);
+        let back = q.dequantize(&indices);
+        assert_eq!(back.stream(), dequantize_stream(&indices, &step));
+    }
 }

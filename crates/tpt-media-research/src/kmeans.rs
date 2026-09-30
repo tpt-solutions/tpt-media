@@ -150,10 +150,20 @@ pub fn kmeans_train(
 
 /// Mean squared error of quantising `vectors` with `codebook`
 /// (`entries = codebook.len()/dim`), under nearest-codeword search.
+///
+/// An empty `vectors` slice has nothing to be wrong about and yields `0.0`.
+/// The plain division would answer `0.0 / 0` — `NaN` — which would break the
+/// crate's finiteness contract at the one place a caller uses this to
+/// *compare* two codebooks. `dim == 0` is a programming error and still
+/// panics, as does an empty codebook.
 pub fn codebook_mse(vectors: &[f32], dim: usize, codebook: &[f32]) -> f64 {
+    assert!(dim > 0, "codebook dimension must be positive");
     let n = vectors.len() / dim;
     let entries = codebook.len() / dim;
     assert!(entries > 0, "codebook must be non-empty");
+    if n == 0 {
+        return 0.0;
+    }
     let mut total = 0.0f64;
     for v in 0..n {
         let vec = &vectors[v * dim..(v + 1) * dim];
@@ -251,5 +261,82 @@ mod tests {
         let mean1 = v.chunks_exact(2).map(|c| c[1] as f64).sum::<f64>() / 100.0;
         assert!((cb[0] as f64 - mean0).abs() < 1e-4);
         assert!((cb[1] as f64 - mean1).abs() < 1e-4);
+    }
+
+    /// An empty training set used to answer `NaN` from `0.0 / 0` — and this
+    /// function exists precisely to *compare* codebooks, so a `NaN` here
+    /// silently orders as "less than" any real codebook. There is nothing to
+    /// be wrong about over no vectors, so the answer is 0.
+    #[test]
+    fn an_empty_training_set_has_zero_error_not_nan() {
+        let mse = codebook_mse(&[], 2, &[0.0, 0.0]);
+        assert_eq!(mse, 0.0);
+        assert!(mse.is_finite());
+    }
+
+    #[test]
+    fn an_exact_codebook_has_zero_error() {
+        // Every vector is its own codeword, so the nearest search is exact.
+        let v = [0.0f32, 0.0, 1.0, 1.0, 2.0, 2.0];
+        let cb: Vec<f32> = v.to_vec();
+        assert_eq!(codebook_mse(&v, 2, &cb), 0.0);
+    }
+
+    /// §38: malformed input. The documented preconditions are enforced, each
+    /// with a message that names the actual problem.
+    #[test]
+    #[should_panic(expected = "codebook dimension must be positive")]
+    fn a_zero_dimension_is_rejected_rather_than_dividing_by_it() {
+        kmeans_train(&[1.0, 2.0], 0, 1, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "vectors length must be a multiple of dim")]
+    fn a_ragged_training_set_is_rejected() {
+        kmeans_train(&[1.0, 2.0, 3.0], 2, 1, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one training vector required")]
+    fn training_on_nothing_is_rejected() {
+        kmeans_train(&[], 2, 1, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "entries must be in 1..=n")]
+    fn more_entries_than_vectors_is_rejected() {
+        // 2 vectors, asking for 4 codewords.
+        kmeans_train(&[1.0, 2.0, 3.0, 4.0], 2, 4, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "iterations must be positive")]
+    fn zero_iterations_is_rejected() {
+        kmeans_train(&[1.0, 2.0], 2, 1, 0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "codebook must be non-empty")]
+    fn measuring_against_no_codebook_is_rejected() {
+        codebook_mse(&[1.0, 2.0], 2, &[]);
+    }
+
+    /// §38: edge cases. One codeword per training vector is the largest legal
+    /// codebook, and it must still terminate and return every vector
+    /// distinctly — the initialisation's rejection sampling has to pick `n`
+    /// distinct indices out of `n` without spinning.
+    #[test]
+    fn a_codebook_as_large_as_the_training_set_terminates_and_covers_it() {
+        let v = [1.0f32, 2.0, 3.0, 4.0];
+        let (cb, assign) = kmeans_train(&v, 2, 2, 1, 0);
+        assert_eq!(cb.len(), 4, "entries * dim");
+        assert_eq!(assign.len(), 2, "one assignment per vector");
+        // Every centroid is one of the training vectors, so the two are a
+        // permutation of the input.
+        let mut got: Vec<f32> = cb.clone();
+        let mut want = v.to_vec();
+        got.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        want.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(got, want);
     }
 }
