@@ -89,13 +89,56 @@ fn read_source(input: &str, ctx: &Ctx<'_>) -> Result<Vec<u8>, String> {
     }
 }
 
+/// The codec registry `probe`/`inspect` resolve capabilities against:
+/// every native codec this binary can actually encode *and* decode.
+///
+/// `tpt_media_probe::probe` answers from an *empty* registry, which is the
+/// right default for a library that cannot know what its caller linked in —
+/// but from this binary it made `tpt probe` print
+/// `encoder=false, decoder=false` for codecs the same program encodes and
+/// decodes one subcommand later. A capability report that contradicts the
+/// tool reporting it is worse than no report.
+///
+/// Thrum's factories are geometry-parameterised (a video codec's
+/// configuration *is* its geometry), so they are built from
+/// [`ThrumConfig::default`]. That placeholder never reaches the report —
+/// `CodecCapabilityReport` carries no geometry, and `build()` takes the
+/// real dimensions from the track's codec-private bytes — but it is why
+/// this function exists rather than a plain list of unit structs.
+fn probe_registry() -> tpt_media_codec::Registry {
+    use tpt_audio_aura::{AuraDecoderFactory, AuraEncoderFactory};
+    use tpt_audio_cinder::{CinderDecoderFactory, CinderEncoderFactory};
+    use tpt_audio_reed::{ReedDecoderFactory, ReedEncoderFactory};
+    use tpt_video_thrum::{ThrumDecoderFactory, ThrumEncoderFactory};
+
+    let mut r = tpt_media_codec::Registry::new();
+    r.register_decoder(CinderDecoderFactory);
+    r.register_encoder(CinderEncoderFactory);
+    r.register_decoder(AuraDecoderFactory);
+    r.register_encoder(AuraEncoderFactory);
+    r.register_decoder(ReedDecoderFactory);
+    r.register_encoder(ReedEncoderFactory);
+    // Geometry placeholders only; see the doc comment. A factory that
+    // refuses to construct would silently under-report the codec, so the
+    // defaults are validated here and a failure leaves the video codec
+    // unregistered rather than panicking in a reporting path.
+    if let (Ok(dec), Ok(enc)) = (
+        ThrumDecoderFactory::new(ThrumConfig::default()),
+        ThrumEncoderFactory::new(ThrumConfig::default()),
+    ) {
+        r.register_decoder(dec);
+        r.register_encoder(enc);
+    }
+    r
+}
+
 /// `tpt probe` / `tpt inspect`.
 pub fn probe(input: &str, json: bool, ctx: &Ctx<'_>) -> Outcome {
     let bytes = match read_source(input, ctx) {
         Ok(b) => b,
         Err(e) => return Outcome::fail(1, e),
     };
-    let report = tpt_media_probe::probe(&bytes);
+    let report = tpt_media_probe::probe_with_registry(&bytes, &probe_registry());
     if json {
         Outcome::ok(probe_json(&report))
     } else {

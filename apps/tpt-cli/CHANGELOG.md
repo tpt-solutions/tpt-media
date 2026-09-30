@@ -53,6 +53,25 @@ lockstep with the workspace.
 
 ### Fixed
 
+- `tpt probe` reported that no codec was available, for codecs the same binary
+  encodes and decodes one subcommand later. It called
+  `tpt_media_probe::probe`, which answers from an *empty* registry — the right
+  default for a library that cannot know what its caller linked in, the wrong
+  one for a CLI that knows exactly which codecs it carries. `tpt probe out.tpt`
+  on a `THRM` file printed `encoder=false, decoder=false` immediately after
+  `tpt encode --codec thrum` had succeeded. It now resolves against a registry
+  of all four native codecs, and the flags come from each codec's own declared
+  capabilities:
+
+  ```text
+  Codec THRM: native=true, decoder=true, encoder=true, lossless=false, lossy=true, rt=true
+  ```
+
+  `probe --json` changes with it (`encoder_available`/`decoder_available` are
+  now `true` for native codecs). Pinned by two new tests. Thrum's factories are
+  geometry-parameterised, so they are built from `ThrumConfig::default()`; that
+  placeholder never reaches the report, which carries no geometry, and
+  `build()` takes the real dimensions from the track's codec-private bytes.
 - **No `.y4m` file could be parsed at all.** The header parser takes `C` as
   the *tag* and stores only what follows (`"420jpeg"`), but the colorspace
   match compared the *full tag* (`"C420jpeg"`), so no colorspace ever

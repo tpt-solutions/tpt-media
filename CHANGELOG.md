@@ -52,6 +52,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- `tpt probe` claimed no codec was available — `encoder=false, decoder=false` —
+  for the codecs the same binary encodes and decodes one subcommand later,
+  because it used `tpt_media_probe::probe`, which answers from an empty
+  registry. That default is right for a library (it cannot know what its caller
+  linked in) and wrong for a CLI (it carries exactly four native codecs), so
+  `probe`/`inspect` now resolve against a registry of all four and the flags
+  come from each codec's own declared capabilities. A `THRM` file now reports
+  `native=true, decoder=true, encoder=true, lossless=false, lossy=true,
+  rt=true`; `probe --json`'s `encoder_available`/`decoder_available` change
+  with it. Pinned by two new tests.
 - `tpt-media-sys` could not be packaged at all (found 2026-09-30 while
   auditing crate metadata). Two independent causes, both reproduced:
   `readme.workspace = true` resolves relative to the *member* directory, so

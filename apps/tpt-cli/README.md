@@ -60,7 +60,7 @@ cargo run -p tpt-cli -- benchmark --codec aura --json in.wav
 | `--bitrate <n>[k\|m]` | Parsed and validated (`k` = ×1e3, `m` = ×1e6). **No effect yet** — no codec here has rate control |
 | `--set-meta key=value` | Repeatable; published in order, non-empty keys validated |
 | `--runs <n>` | Measured passes for `benchmark` (default 5) |
-| `--json` | Deterministic machine-readable output for `probe` and `benchmark` |
+| `--json` | Deterministic machine-readable output for `probe`, `benchmark` and `video-corpus` |
 | `-` as path | Read from stdin / write to stdout |
 
 ## Exit codes
@@ -97,6 +97,20 @@ reading any files.
 A video codec on a *non*-video path — `encode --codec thrum` with a WAV, or a
 `.tpt` whose track is audio — fails with an explicit explanation rather than a
 misleading unknown-codec error.
+
+## What `probe` reports about codecs
+
+`probe`/`inspect` resolve each track's codec against a registry holding the
+four native codecs, so the capability line reflects *this* binary:
+
+```text
+Codec THRM: native=true, decoder=true, encoder=true, lossless=false, lossy=true, rt=true
+```
+
+The flags come from each codec's own declared capabilities, not from a
+hard-coded table. (`tpt_media_probe::probe`, the library entry point, answers
+from an empty registry because a library cannot know what its caller linked in;
+`tpt` uses `probe_with_registry` instead.)
 
 ## Testing
 

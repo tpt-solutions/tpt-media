@@ -226,6 +226,47 @@ mod tests {
             .expect("encode wrote out.tpt")
     }
 
+    /// A real *video* `.tpt`: a synthetic y4m stream driven through
+    /// `tpt encode --codec thrum`. The video counterpart of
+    /// [`make_decodable_tpt`], and the fixture `probe` needs to see a
+    /// `THRM` track.
+    fn make_video_tpt() -> Vec<u8> {
+        let (w, h) = (32u32, 32u32);
+        let frames: Vec<_> = (0..2)
+            .map(|i| {
+                let mut f =
+                    tpt_media_core::VideoFrame::alloc(w, h, tpt_media_core::PixelFormat::Yuv420);
+                // A luma ramp: distinguishable frames, still cheap to encode.
+                for (n, px) in f.pixels.iter_mut().enumerate() {
+                    *px = ((n + i * 8) % 256) as u8;
+                }
+                f
+            })
+            .collect();
+        let params = y4m::Y4mParams {
+            width: w,
+            height: h,
+            fps_num: 30,
+            fps_den: 1,
+            format: tpt_media_core::PixelFormat::Yuv420,
+        };
+        let y4m_bytes = y4m::write(&params, &frames);
+        let log: &'static WriteLog = Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+        let files: &'static [(String, Vec<u8>)] =
+            Box::leak(Box::new(vec![("in.y4m".to_string(), y4m_bytes)]));
+        let o = run(
+            &argv(&["encode", "--codec", "thrum", "in.y4m", "out.tpt"]),
+            &file_ctx_with_writes(files, log),
+        );
+        assert_eq!(o.code, 0, "fixture encode failed: {}", o.err);
+        log.lock()
+            .unwrap()
+            .iter()
+            .find(|(p, _)| p == "out.tpt")
+            .map(|(_, bytes)| bytes.clone())
+            .expect("encode wrote out.tpt")
+    }
+
     #[test]
     fn help_prints_usage() {
         let o = run(&argv(&["--help"]), &file_ctx(&[]));
@@ -264,6 +305,54 @@ mod tests {
         assert!(o.out.ends_with("}\n") || o.out.ends_with('}'));
         assert!(o.out.contains("\"codec_id\":\"CIND\""));
         assert!(o.out.contains("\"duration_seconds\""));
+    }
+
+    #[test]
+    fn probe_reports_the_codecs_this_binary_actually_has() {
+        // `tpt probe` used to resolve capabilities against an *empty*
+        // registry, so it reported `encoder=false, decoder=false` for
+        // codecs this same program encodes and decodes one subcommand
+        // later. A capability report that contradicts the tool printing
+        // it is worse than no report, so both the audio and the video
+        // track must now report real availability.
+        let o = run(&argv(&["probe", "-"]), &stdin_ctx(make_tpt()));
+        assert_eq!(o.code, 0);
+        let cind = o
+            .out
+            .lines()
+            .find(|l| l.contains("Codec CIND"))
+            .unwrap_or_else(|| panic!("no CIND capability line in:\n{}", o.out));
+        assert!(cind.contains("encoder=true"), "got: {cind}");
+        assert!(cind.contains("decoder=true"), "got: {cind}");
+
+        let v = run(&argv(&["probe", "-"]), &stdin_ctx(make_video_tpt()));
+        assert_eq!(v.code, 0);
+        let thrm = v
+            .out
+            .lines()
+            .find(|l| l.contains("Codec THRM"))
+            .unwrap_or_else(|| panic!("no THRM capability line in:\n{}", v.out));
+        assert!(thrm.contains("encoder=true"), "got: {thrm}");
+        assert!(thrm.contains("decoder=true"), "got: {thrm}");
+        // Thrum declares itself lossy and real-time; the report carries
+        // the codec's own declaration, not a hard-coded guess.
+        assert!(thrm.contains("lossy=true"), "got: {thrm}");
+    }
+
+    #[test]
+    fn probe_json_reports_codec_availability_too() {
+        let o = run(&argv(&["probe", "--json", "-"]), &stdin_ctx(make_tpt()));
+        assert_eq!(o.code, 0);
+        assert!(
+            o.out.contains("\"decoder_available\":true"),
+            "got: {}",
+            o.out
+        );
+        assert!(
+            o.out.contains("\"encoder_available\":true"),
+            "got: {}",
+            o.out
+        );
     }
 
     #[test]

@@ -98,7 +98,8 @@ std prelude — invisible until the crate was actually built for
 - Bitrate and sample-count figures are estimates derived from duration and
   packet counts, labelled as such.
 - `probe` without a registry reports codecs as unavailable even when an
-  implementation exists — use `probe_with_registry`.
+  implementation exists — use `probe_with_registry`. The `tpt` CLI does, so
+  its capability lines reflect the codecs that binary carries.
 
 ## License
 
