@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["speech-codec", "vocoder", "lpc", "low-bitrate", "no-std"]
+categories = ["multimedia::audio", "encoding", "compression", "no-std"]
+readme = "README.md"
 description = "Reed: TPT extremely-low-bandwidth speech codec (no_std LPC vocoder with LSP quantization and stochastic-excitation VQ)."
 
 [dependencies]

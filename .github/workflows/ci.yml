@@ -35,6 +35,24 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --locked
 
+  metadata:
+    name: crate metadata (README/CHANGELOG/keywords/categories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # CONTRIBUTING.md §9.4: every member ships its own README.md and
+      # CHANGELOG.md, declares at most five keywords, uses only valid
+      # crates.io categories, and does not duplicate another crate's
+      # keyword set. Cheap, and it is the only thing standing between
+      # sixteen crates and sixteen identical crate pages.
+      - name: check crate metadata
+        run: python ci/check-metadata.py
+
   msrv:
     name: MSRV (rust-version from Cargo.toml)
     runs-on: ubuntu-latest

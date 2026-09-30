@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["audio-codec", "mdct", "low-latency", "real-time", "packet-loss-concealment"]
+categories = ["multimedia::audio", "encoding", "compression"]
+readme = "README.md"
 description = "Cinder: TPT native real-time low-latency audio codec (MDCT + scalar quantisation + PLC)."
 
 [dependencies]

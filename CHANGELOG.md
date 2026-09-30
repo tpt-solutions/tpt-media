@@ -7,6 +7,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-crate README, CHANGELOG, keywords and categories** (2026-09-30):
+  all sixteen workspace members now carry their own `README.md`,
+  `CHANGELOG.md`, and crate-specific `keywords`/`categories` in their
+  manifests. Before this, **zero** of sixteen crates had a README or a
+  changelog, and all sixteen inherited one identical keyword/category set
+  from `[workspace.package]` — which made every crate in the workspace look
+  the same in crates.io search, and asserted `no-std` for the std-only ones
+  (`tpt-container`, Cinder, Aura, both research crates). Each README is
+  user-facing (what it is, real usage, feature flags, API surface, testing,
+  known limitations) and links to `docs/` rather than duplicating it; each
+  codec's carries the measured performance table from `docs/performance.md`
+  and the profiling recipe that document previously claimed existed but did
+  not. Policy is CONTRIBUTING §9.4: the root changelog stays canonical, the
+  per-crate files are filtered views of it. Two packaging blockers in
+  `tpt-media-sys` were fixed along the way — see *Fixed*.
+- A new CI `metadata` job enforces this (2026-09-30): every member must have a
+  `README.md` and `CHANGELOG.md`, declare at most five keywords, declare only
+  valid crates.io category slugs, and not duplicate another crate's keyword
+  set; the script is `ci/check-metadata.py`, runnable locally.
+
+### Fixed
+
+- `tpt-media-sys` could not be packaged at all (found 2026-09-30 while
+  auditing crate metadata). Two independent causes, both reproduced:
+  `readme.workspace = true` resolves relative to the *member* directory, so
+  it pointed at a `README.md` that did not exist — `error: readme
+  'README.md' does not appear to exist`; and the five path dependencies
+  carried no `version` — `error: all dependencies must have a version
+  requirement specified when packaging`. Fixed by declaring `readme`
+  explicitly (as every other member now does) and adding `version =
+  "0.1.0"` to each dependency.
+- `docs/performance.md` stated "A profiling recipe for each codec is recorded
+  in its README" while no codec had a README at all. The statement is now
+  true, and it was reworded to name the benchmark harness rather than imply
+  the recipes live anywhere they did not.
+
 ### Changed
 
 - **Renamed four native codecs to avoid collisions with existing

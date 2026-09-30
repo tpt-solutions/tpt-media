@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["codec-research", "rate-distortion", "synthetic-signals", "benchmark", "experiments"]
+categories = ["science", "mathematics", "encoding", "development-tools::testing"]
+readme = "README.md"
 description = "Representation-research harness for tpt-media: synthetic signals, rate/distortion + sparsity measurement, and alternative video representations benchmarked against conventional block-transform coding."
 
 [dependencies]

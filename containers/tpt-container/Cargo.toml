@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["container-format", "tpt", "muxing", "demuxing", "streaming"]
+categories = ["encoding", "parser-implementations", "multimedia", "filesystem"]
+readme = "README.md"
 description = "The native .tpt container format: TLV chunks, header, TRAK, CLUS, seeking, streaming."
 
 [dependencies]

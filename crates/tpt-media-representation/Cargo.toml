@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["transform-coding", "rate-distortion", "quantization", "sparsity", "research"]
+categories = ["science", "mathematics", "encoding", "algorithms"]
+readme = "README.md"
 description = "Swappable media representation contracts (analysis/synthesis, quantisation, rate/distortion, sparsity) for the tpt-media representation-research platform."
 
 [dependencies]

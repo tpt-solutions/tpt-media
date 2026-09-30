@@ -2372,6 +2372,23 @@ documentation-baseline note for what the audit found and fixed):
       tour of the byte-exact WAV + PPM round trips (the `examples/`
       directory at the repo root is intentionally empty; examples live
       in the crate they demonstrate)
+* [x] per-crate documentation — 2026-09-30: every one of the sixteen
+      workspace members has its own `README.md` (user-facing: what it is,
+      real usage, feature flags, API surface, testing, known limitations,
+      linking `docs/` rather than duplicating it — the §8 "one canonical
+      record" discipline applied to documentation) *and* its own
+      `CHANGELOG.md` (a filtered view of the root one, per the new
+      CONTRIBUTING §9.4 policy: lockstep versioning means a per-crate file
+      cannot carry independent release history even if we wanted it to)
+      *and* its own crate-specific `keywords`/`categories` instead of
+      inheriting one workspace set — which had made all sixteen crates look
+      identical in crates.io search and asserted `no-std` for the five
+      std-only ones. Before this change **no crate had a README or a
+      changelog**. `ci/check-metadata.py` (new CI `metadata` job) enforces
+      all of it. The audit also fixed two real packaging blockers in
+      `tpt-media-sys`: its inherited `readme` resolved to a file that did not
+      exist, and its five path dependencies carried no `version` —
+      `cargo package` failed on both.
 
 ---
 
@@ -2521,6 +2538,14 @@ Before 0.1:
       docs (container/pipeline/media-io/cli/security/provenance/
       performance/representation-research) were verified accurate —
       they were written with their implementations
+
+* [x] crate metadata — 2026-09-30: every member declares its own
+      `readme`, `keywords` and `categories`, ships a `README.md` and a
+      `CHANGELOG.md`, and passes `ci/check-metadata.py` (the CI `metadata`
+      job). This also cleared the last blocker to `cargo package`: the
+      `tpt-media-sys` manifest was unpackageable (inherited `readme` path
+      and versionless path dependencies), so a first crates.io publish was
+      impossible before this.
 
 Before 0.2:
 

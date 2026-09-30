@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["audio-codec", "lossless", "mdct", "psychoacoustics", "archival"]
+categories = ["multimedia::audio", "encoding", "compression"]
+readme = "README.md"
 description = "Aura: TPT high-fidelity / archival audio codec (lossless LPC + lossy MDCT)."
 
 [dependencies]

@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["pcm", "wav", "media-io", "streaming", "no-std"]
+categories = ["multimedia::audio", "multimedia::images", "filesystem", "no-std"]
+readme = "README.md"
 description = "PCM/WAV/raw audio and image frame I/O plus streaming sources/sinks for the tpt-media stack (reuses tpt-dsp-io for WAV/DSP)."
 
 [dependencies]

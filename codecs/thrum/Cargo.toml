@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["video-codec", "low-latency", "intra-prediction", "motion-estimation", "real-time"]
+categories = ["multimedia::video", "encoding", "compression", "no-std"]
+readme = "README.md"
 description = "Thrum: TPT low-latency video communication codec (I/P frames, intra refresh, 8x8 DCT)."
 
 [dependencies]

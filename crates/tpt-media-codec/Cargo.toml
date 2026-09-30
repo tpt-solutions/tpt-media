@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["codec", "encoder", "decoder", "capabilities", "resource-limits"]
+categories = ["encoding", "multimedia", "no-std"]
+readme = "README.md"
 description = "Generic codec framework: Encoder, Decoder, Codec traits, capabilities, resource limits."
 
 [dependencies]

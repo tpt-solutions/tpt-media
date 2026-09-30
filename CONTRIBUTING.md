@@ -172,7 +172,7 @@ document (there are deliberately no per-crate `PROVENANCE.md` files).
   Versioning").
 - **Record as you land.** Every change gets its `CHANGELOG.md`
   `[Unreleased]` entry when it lands, not retroactively at release
-  time.
+  time. See §9.4 for how the per-crate changelogs relate to this one.
 
 ### 9.2 API stability expectations
 
@@ -206,6 +206,35 @@ document (there are deliberately no per-crate `PROVENANCE.md` files).
   `rust-version` only when a dependency forces it (prefer pinning a
   dependency lower), record the bump in `CHANGELOG.md`, and update the
   `msrv` job in the same change so the three places can never drift.
+
+### 9.4 Per-crate documentation
+
+Every workspace member owns a `README.md` and a `CHANGELOG.md`, plus its own
+`keywords` and `categories` in its manifest. Three rules keep sixteen crates
+of documentation honest rather than a maintenance burden:
+
+- **The root `CHANGELOG.md` is canonical; per-crate changelogs are filtered
+  views.** Versions are lockstep (§9.1), so a per-crate changelog could not
+  carry independent release history even if we wanted it to. A change that
+  touches one crate gets an entry in that crate's file *and* a line in the
+  root entry; a change that touches several is recorded in the root, which
+  remains the record, and the crate files link to it rather than restating it.
+- **READMEs are user-facing; they point at `docs/`, they do not replace it.**
+  A README covers what the crate is, real usage, feature flags, the API
+  surface, testing, and known limitations. Specifications, measured numbers,
+  threat models and provenance records stay in [`docs/`](docs/) and are linked.
+  The same discipline as §8: one canonical record per fact, never a copy that
+  can drift.
+- **Metadata is per-crate on purpose.** A shared `keywords`/`categories` set
+  makes every crate in the workspace look identical in crates.io search, and
+  `no-std` is simply false for the std-only crates. Each member declares its
+  own, and a new crate does the same rather than inheriting the
+  `[workspace.package]` defaults.
+
+A member that inherits `readme` from `[workspace.package]` must have a
+`README.md` in its own directory: Cargo resolves an inherited path relative to
+the member, not the workspace root, and `cargo package` fails on a missing
+one. Declare `readme = "README.md"` explicitly.
 
 ## 10. Feature Flags
 

@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["media", "timestamp", "timebase", "packet", "frame"]
+categories = ["multimedia::audio", "multimedia::video", "data-structures", "no-std"]
+readme = "README.md"
 description = "Shared media data types for the tpt-media stack (timestamps, packets, frames, tracks, metadata)."
 
 [dependencies]

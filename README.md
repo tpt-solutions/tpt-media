@@ -40,25 +40,32 @@ marked *(planned)* below.
 
 | Crate                  | Purpose                                                 |
 | ---------------------- | ------------------------------------------------------- |
-| `tpt-media-core`       | Media data models (Timestamp, Frame, Packet, Track)     |
-| `tpt-media-bitstream`  | Bit reader/writer, Huffman, Rice, range coder            |
-| `tpt-media-codec`      | Generic codec interfaces (`Encoder`, `Decoder`)         |
-| `tpt-media-container`  | Generic container abstraction                           |
-| `tpt-media-pipeline`   | Node-based pipeline (Source → Demux → Decode → Sink)    |
-| `tpt-media-io`         | PCM/WAV/raw I/O integration                             |
-| `tpt-media-probe`      | Container + codec introspection                         |
-| `tpt-container`        | The native `.tpt` container format                      |
-| `tpt-media-representation` | Swappable signal-representation trait contracts (research) |
-| `tpt-media-research`   | Representation research harness (`docs/representation-research.md`) |
-| `tpt-audio-cinder`      | Real-time low-latency audio codec                       |
-| `tpt-audio-aura`       | High-fidelity / archival audio (lossless + lossy)       |
-| `tpt-audio-reed`        | Extremely low-bandwidth speech codec (`no_std` LPC vocoder) |
-| `tpt-video-thrum`   | Real-time video communication (I/P, intra refresh, 8x8 DCT)  |
-| `tpt-cli`              | Command-line encoder/decoder/probe                      |
-| `tpt-video-vault`      | *(planned)* High-compression archival video             |
-| `tpt-video-mote`    | *(planned)* Extreme-edge dictionary-coded video         |
-| `tpt-web`              | *(planned)* WASM browser player                         |
-| `tpt-media-sys`       | Stable C ABI (§46: opaque handles, error codes, C header)  |
+| [`tpt-media-core`](crates/tpt-media-core)       | Media data models (Timestamp, Frame, Packet, Track)     |
+| [`tpt-media-bitstream`](crates/tpt-media-bitstream)  | Bit reader/writer, Huffman, Rice, range coder            |
+| [`tpt-media-codec`](crates/tpt-media-codec)      | Generic codec interfaces (`Encoder`, `Decoder`)         |
+| [`tpt-media-container`](crates/tpt-media-container)  | Generic container abstraction                           |
+| [`tpt-media-pipeline`](crates/tpt-media-pipeline)   | Node-based pipeline (Source → Demux → Decode → Sink)    |
+| [`tpt-media-io`](crates/tpt-media-io)         | PCM/WAV/raw I/O integration                             |
+| [`tpt-media-probe`](crates/tpt-media-probe)      | Container + codec introspection                         |
+| [`tpt-container`](containers/tpt-container)        | The native `.tpt` container format                      |
+| [`tpt-media-representation`](crates/tpt-media-representation) | Swappable signal-representation trait contracts (research) |
+| [`tpt-media-research`](crates/tpt-media-research)   | Representation research harness (`docs/representation-research.md`) |
+| [`tpt-audio-cinder`](codecs/cinder)      | Real-time low-latency audio codec                       |
+| [`tpt-audio-aura`](codecs/aura)       | High-fidelity / archival audio (lossless + lossy)       |
+| [`tpt-audio-reed`](codecs/reed)        | Extremely low-bandwidth speech codec (`no_std` LPC vocoder) |
+| [`tpt-video-thrum`](codecs/thrum)   | Real-time video communication (I/P, intra refresh, 8x8 DCT)  |
+| [`tpt-cli`](apps/tpt-cli)              | Command-line encoder/decoder/probe                      |
+| [`tpt-video-vault`](../tpt-media/codecs/vault)      | *(planned)* High-compression archival video             |
+| [`tpt-video-mote`](../tpt-media/codecs/mote)    | *(planned)* Extreme-edge dictionary-coded video         |
+| [`tpt-web`](../tpt-media/apps/tpt-web)              | *(planned)* WASM browser player                         |
+| [`tpt-media-sys`](ffi/tpt-media-sys)       | Stable C ABI (§46: opaque handles, error codes, C header)  |
+
+Each crate link goes to its own `README.md`, which carries the usage examples,
+feature flags, testing entry points and known limitations for that crate, and
+links onward to the shared design documents. Each crate also carries its own
+`CHANGELOG.md`, scoped to that crate — see
+[CONTRIBUTING §9.4](CONTRIBUTING.md#94-per-crate-documentation) for how those
+relate to the workspace-level [CHANGELOG.md](CHANGELOG.md).
 
 ## Building
 

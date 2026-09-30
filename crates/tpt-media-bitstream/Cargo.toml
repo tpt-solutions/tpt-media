@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["bitstream", "entropy-coding", "huffman", "rice-coding", "range-coder"]
+categories = ["encoding", "algorithms", "no-std"]
+readme = "README.md"
 description = "Zero-allocation bit reader/writer and entropy coding for tpt-media."
 
 [dependencies]

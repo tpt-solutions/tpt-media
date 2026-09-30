@@ -37,6 +37,14 @@ license = "MIT OR Apache-2.0"
 authors = ["TPT Solutions"]
 repository = "https://github.com/TPT-Solutions/tpt-media"
 homepage = "https://github.com/TPT-Solutions/tpt-media"
+# Defaults for a *new* member. Every crate implemented so far overrides
+# all three with its own values: keywords and categories are per-crate
+# (a shared set makes every crate in the workspace look identical in
+# crates.io search, and "no-std" is simply false for the std-only
+# crates), and `readme` points at that crate's own README.md. Cargo
+# resolves an inherited `readme` path relative to the *member*
+# directory, so a member that inherits this must have its own
+# README.md — `ffi/tpt-media-sys` proved that the hard way.
 keywords = ["media", "codec", "container", "audio", "video"]
 categories = ["multimedia", "video", "compression", "no-std"]
 readme = "README.md"

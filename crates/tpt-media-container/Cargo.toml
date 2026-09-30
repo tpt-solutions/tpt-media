@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["container", "demuxer", "muxer", "chunk", "no-std"]
+categories = ["encoding", "parser-implementations", "no-std"]
+readme = "README.md"
 description = "Generic container abstraction (Demuxer/Muxer traits)."
 
 [dependencies]

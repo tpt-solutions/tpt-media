@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["media-pipeline", "streaming", "backpressure", "scheduling", "no-std"]
+categories = ["multimedia", "encoding", "no-std", "algorithms"]
+readme = "README.md"
 description = "Node-based media pipeline (Source -> Demux -> Decode -> Filter -> Encode -> Mux -> Sink)."
 
 [dependencies]

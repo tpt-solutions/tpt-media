@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["media-probe", "introspection", "metadata", "container", "no-std"]
+categories = ["multimedia", "parser-implementations", "no-std"]
+readme = "README.md"
 description = "Container and codec introspection for the tpt-media stack."
 
 [dependencies]

@@ -299,4 +299,6 @@ proportionality with a frame rather than to nothing.
 - `Instruments` on macOS.
 - `VTune` on Windows / Linux.
 
-A profiling recipe for each codec is recorded in its README.
+A profiling recipe for each crate with benchmarks is recorded in its own
+README (`benches/` names the harness, and the recipe says which tool to point
+at it); the canonical measured numbers are the tables above.

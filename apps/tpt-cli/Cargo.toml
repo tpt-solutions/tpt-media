@@ -7,8 +7,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["cli", "media-tool", "transcoder", "probe", "tpt"]
+categories = ["command-line-utilities", "multimedia::audio", "encoding"]
+readme = "README.md"
 description = "TPT media command-line interface (probe, encode, decode, transcode, inspect, benchmark)."
 
 [[bin]]
