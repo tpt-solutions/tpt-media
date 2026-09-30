@@ -681,6 +681,238 @@ mod tests {
         assert!(o.out.contains("THRM"), "{}", o.out);
     }
 
+    /// A synthetic y4m clip: a luma ramp that changes per frame, so a
+    /// decoder that drops or reorders pictures is visible.
+    fn ramp_y4m(w: u32, h: u32, frames: usize) -> Vec<u8> {
+        let pics: Vec<_> = (0..frames)
+            .map(|i| {
+                let mut f =
+                    tpt_media_core::VideoFrame::alloc(w, h, tpt_media_core::PixelFormat::Yuv420);
+                for (n, px) in f.pixels.iter_mut().enumerate() {
+                    *px = ((n + i * 8) % 256) as u8;
+                }
+                f
+            })
+            .collect();
+        y4m::write(
+            &y4m::Y4mParams {
+                width: w,
+                height: h,
+                fps_num: 30,
+                fps_den: 1,
+                format: tpt_media_core::PixelFormat::Yuv420,
+            },
+            &pics,
+        )
+    }
+
+    /// Run `encode --codec <name> in.y4m out.tpt` and return the written file.
+    fn encode_video(name: &str, y4m_bytes: Vec<u8>) -> (Outcome, Vec<u8>) {
+        let log: &'static WriteLog = Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+        let files: &'static [(String, Vec<u8>)] =
+            Box::leak(Box::new(vec![("in.y4m".to_string(), y4m_bytes)]));
+        let o = run(
+            &argv(&["encode", "--codec", name, "in.y4m", "out.tpt"]),
+            &file_ctx_with_writes(files, log),
+        );
+        let bytes = log
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(p, _)| p == "out.tpt")
+            .map(|(_, b)| b.clone())
+            .unwrap_or_default();
+        (o, bytes)
+    }
+
+    /// Every video codec the y4m bridge claims to drive must actually round
+    /// trip through `encode` and `decode` (todo.md §33's open item).
+    ///
+    /// The assertion is deliberately about the *file*, not the exit codes: a
+    /// codec that encodes and then cannot decode its own output would pass a
+    /// smoke test that only checked `code == 0`. `decode` also re-derives the
+    /// decoder from the track header alone, so this exercises the
+    /// codec-private bytes as well as the packet stream.
+    #[test]
+    fn every_video_codec_round_trips_through_the_y4m_bridge() {
+        for (name, id) in [("thrum", *b"THRM"), ("vault", *b"VAUL"), ("mote", *b"MOTE")] {
+            let (enc, tpt) = encode_video(name, ramp_y4m(32, 32, 3));
+            assert_eq!(enc.code, 0, "{name} encode failed: {}", enc.err);
+            assert!(!tpt.is_empty(), "{name} encode wrote no out.tpt");
+
+            // The track must name the codec that produced it.
+            let (_, tracks, _) = tpt_container::parse_tpt(&tpt).expect("parsable tpt");
+            assert_eq!(
+                tracks[0].codec_config.codec_id,
+                tpt_media_core::CodecId::new(id),
+                "{name} wrote the wrong codec id"
+            );
+
+            // Decode it back through the public command, from a .tpt input.
+            let dlog: &'static WriteLog = Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+            let dfiles: &'static [(String, Vec<u8>)] =
+                Box::leak(Box::new(vec![("in.tpt".to_string(), tpt)]));
+            let dec = run(
+                &argv(&["decode", "in.tpt", "out.y4m"]),
+                &file_ctx_with_writes(dfiles, dlog),
+            );
+            assert_eq!(dec.code, 0, "{name} decode failed: {}", dec.err);
+            let out = dlog
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(p, _)| p == "out.y4m")
+                .map(|(_, b)| b.clone())
+                .unwrap_or_default();
+            assert!(
+                out.starts_with(b"YUV4MPEG2"),
+                "{name} decode did not produce a y4m stream"
+            );
+        }
+    }
+
+    /// Every encoded frame must keep the PTS the y4m bridge assigned it.
+    ///
+    /// This is the regression the generalisation could have introduced: the
+    /// type-erased `Dyn*` contracts carry no PTS, so routing the video path
+    /// through them would silently stamp every packet with
+    /// `Timestamp::zero`. The CLI erases at `Frame = VideoFrame` instead, and
+    /// this pins the difference where it is observable.
+    #[test]
+    fn video_packets_keep_the_pts_the_bridge_assigned() {
+        for name in ["thrum", "vault", "mote"] {
+            let (o, tpt) = encode_video(name, ramp_y4m(32, 32, 4));
+            assert_eq!(o.code, 0, "{name}: {}", o.err);
+            let (_, _, packets) = tpt_container::parse_tpt(&tpt).expect("parsable tpt");
+            assert!(
+                packets.len() >= 4,
+                "{name}: at least one packet per frame, got {}",
+                packets.len()
+            );
+            // Not "one packet per frame": Mote prefixes its first frame with
+            // an out-of-band dictionary packet, so its count is higher. What
+            // must hold for every codec is that each frame's PTS survived, so
+            // the distinct timestamps are exactly the frame indices the y4m
+            // bridge assigned (0,1,2,... on a 30/1 timebase).
+            let mut ticks: Vec<i64> = packets.iter().map(|p| p.pts.ticks).collect();
+            ticks.sort_unstable();
+            ticks.dedup();
+            assert_eq!(ticks, vec![0, 1, 2, 3], "{name}: frame PTS not preserved");
+            for p in &packets {
+                assert_eq!(p.pts.timebase.num, 1, "{name}: packet tb num");
+                assert_eq!(p.pts.timebase.den, 30, "{name}: packet tb den");
+            }
+        }
+    }
+
+    /// A geometry the chosen codec cannot code must be refused by *its own*
+    /// validation, with a message naming that codec — not a generic "no
+    /// encoder registered", which would read as if the codec did not exist.
+    ///
+    /// 40x24 is a multiple of 8 but not of 16: Vault codes in 8x8 units so it
+    /// accepts, Thrum and Mote want 16-pixel macroblocks so they do not. That
+    /// the three differ is the point — a single hard-coded rule in the CLI
+    /// would get at least two of them wrong.
+    #[test]
+    fn an_uncodable_geometry_names_the_codec_that_refused_it() {
+        let files: &'static [(String, Vec<u8>)] =
+            Box::leak(Box::new(vec![("in.y4m".to_string(), ramp_y4m(40, 24, 1))]));
+        for name in ["thrum", "mote"] {
+            let o = run(
+                &argv(&["encode", "--codec", name, "in.y4m", "out.tpt"]),
+                &file_ctx(files),
+            );
+            assert_eq!(o.code, 1, "{name} should refuse 40x24");
+            assert!(
+                o.err.contains(name) && o.err.contains("encoder"),
+                "{name} error should name the codec and the failure, got: {}",
+                o.err
+            );
+        }
+        // Vault's coarser alignment accepts the same frame.
+        let (o, bytes) = encode_video("vault", ramp_y4m(40, 24, 1));
+        assert_eq!(o.code, 0, "vault should accept 40x24: {}", o.err);
+        assert!(!bytes.is_empty());
+    }
+
+    /// `benchmark` must drive every video codec and report the one it
+    /// actually measured, in both the human and JSON forms.
+    #[test]
+    fn benchmark_drives_every_video_codec_and_names_it() {
+        for name in ["thrum", "vault", "mote"] {
+            let files: &'static [(String, Vec<u8>)] =
+                Box::leak(Box::new(vec![("in.y4m".to_string(), ramp_y4m(32, 32, 2))]));
+
+            let human = run(
+                &argv(&["benchmark", "--codec", name, "--runs", "1", "in.y4m"]),
+                &file_ctx(files),
+            );
+            assert_eq!(human.code, 0, "{name} benchmark failed: {}", human.err);
+            assert!(
+                human.out.contains(&format!("benchmark: {name},")),
+                "{name} benchmark should name itself, got:\n{}",
+                human.out
+            );
+
+            let json = run(
+                &argv(&[
+                    "benchmark",
+                    "--codec",
+                    name,
+                    "--json",
+                    "--runs",
+                    "1",
+                    "in.y4m",
+                ]),
+                &file_ctx(files),
+            );
+            assert_eq!(json.code, 0, "{name} --json failed: {}", json.err);
+            assert!(
+                json.out.contains(&format!("\"codec\":\"{name}\"")),
+                "{name} JSON should report its own name, got:\n{}",
+                json.out
+            );
+        }
+    }
+
+    /// `transcode` between two *different* video codecs: encode as Vault,
+    /// then decode that track and re-encode it as Mote. Exercises both the
+    /// source and target halves of the generalisation, and the message must
+    /// name both ends truthfully rather than assuming thrum.
+    #[test]
+    fn transcode_moves_between_different_video_codecs() {
+        let (_, src) = encode_video("vault", ramp_y4m(32, 32, 2));
+        assert!(!src.is_empty(), "vault encode wrote nothing");
+
+        let tlog: &'static WriteLog = Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+        let tfiles: &'static [(String, Vec<u8>)] =
+            Box::leak(Box::new(vec![("in.tpt".to_string(), src)]));
+        let o = run(
+            &argv(&["transcode", "--codec", "mote", "in.tpt", "dst.tpt"]),
+            &file_ctx_with_writes(tfiles, tlog),
+        );
+        assert_eq!(o.code, 0, "transcode failed: {}", o.err);
+        assert!(
+            o.out.contains("vault -> mote"),
+            "transcode should name both codecs, got:\n{}",
+            o.out
+        );
+
+        let dst = tlog
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(p, _)| p == "dst.tpt")
+            .map(|(_, b)| b.clone())
+            .unwrap_or_default();
+        let (_, tracks, packets) = tpt_container::parse_tpt(&dst).expect("parsable tpt");
+        assert_eq!(
+            tracks[0].codec_config.codec_id,
+            tpt_media_core::CodecId::new(*b"MOTE")
+        );
+        assert!(!packets.is_empty(), "transcode produced no packets");
+    }
+
     #[test]
     fn video_corpus_reports_every_scene_with_both_metrics() {
         let o = run(&argv(&["video-corpus", "--frames", "2"]), &file_ctx(&[]));
@@ -737,6 +969,97 @@ mod tests {
         ] {
             assert!(s.contains(key), "missing {key} in {s}");
         }
+    }
+
+    /// The corpus sweep must run for every video codec and report the one it
+    /// actually measured — todo.md §33's "§36/§37 video-corpus quality and a
+    /// bitrate comparison against another codec".
+    #[test]
+    fn video_corpus_measures_every_video_codec_and_names_it() {
+        for name in ["thrum", "vault", "mote"] {
+            let o = run(
+                &argv(&["video-corpus", "--codec", name, "--frames", "2"]),
+                &file_ctx(&[]),
+            );
+            assert_eq!(o.code, 0, "{name} corpus failed: {}", o.err);
+            assert!(
+                o.out.contains(&format!("video corpus: {name} ")),
+                "{name} corpus should name itself, got:\n{}",
+                o.out
+            );
+            for scene in ["talking-head", "camera-motion", "static-scene"] {
+                assert!(o.out.contains(scene), "{name} missing {scene}");
+            }
+
+            let j = run(
+                &argv(&["video-corpus", "--codec", name, "--json", "--frames", "2"]),
+                &file_ctx(&[]),
+            );
+            assert_eq!(j.code, 0, "{name} --json failed: {}", j.err);
+            assert!(
+                j.out.contains(&format!("\"codec\":\"{name}\"")),
+                "{name} JSON should report its own name, got:\n{}",
+                j.out
+            );
+        }
+    }
+
+    /// The reported frame count is decoded *pictures*, not packets.
+    ///
+    /// Mote prefixes its first frame with a dictionary packet that carries no
+    /// picture, so counting packets would report one frame too many — and
+    /// because `frames` is the divisor in the bitrate and bpp maths, would
+    /// understate Mote's rate by a frame's worth. Pinned on the codec that
+    /// actually emits the extra packet.
+    #[test]
+    fn corpus_counts_decoded_pictures_not_packets() {
+        for (name, frames) in [("thrum", "3"), ("vault", "3"), ("mote", "3")] {
+            let o = run(
+                &argv(&["video-corpus", "--codec", name, "--frames", frames]),
+                &file_ctx(&[]),
+            );
+            assert_eq!(o.code, 0, "{name}: {}", o.err);
+            assert!(
+                o.out.contains(&format!("{frames} frames/scene")),
+                "{name} should report {frames} frames/scene, got:\n{}",
+                o.out
+            );
+        }
+    }
+
+    /// A codec that cannot produce a corpus measurement must say so, rather
+    /// than falling through to a confusing encode error.
+    #[test]
+    fn video_corpus_rejects_a_non_video_codec_by_name() {
+        for bad in ["cinder", "aura", "reed"] {
+            let o = run(
+                &argv(&["video-corpus", "--codec", bad, "--frames", "1"]),
+                &file_ctx(&[]),
+            );
+            assert_ne!(o.code, 0, "{bad} should be rejected");
+            assert!(
+                o.err.contains("not a video codec"),
+                "{bad} error should explain, got: {}",
+                o.err
+            );
+        }
+        // A name that is neither in the table nor a well-formed 4-byte
+        // codec ID is a usage error (exit 2), not a codec error. Note
+        // `--codec nope` is *not* such a case: `resolve_codec` accepts any
+        // four characters as a raw codec ID, so "nope" is a well-formed
+        // `nope` codec that simply is not a video one.
+        let o = run(
+            &argv(&["video-corpus", "--codec", "notacodec", "--frames", "1"]),
+            &file_ctx(&[]),
+        );
+        assert_eq!(o.code, 2, "unknown codec is a usage error: {}", o.err);
+
+        // A four-character non-video codec ID reaches the video check.
+        let o = run(
+            &argv(&["video-corpus", "--codec", "nope", "--frames", "1"]),
+            &file_ctx(&[]),
+        );
+        assert_eq!(o.code, 1, "a raw non-video 4cc is a codec error: {}", o.err);
     }
 
     #[test]

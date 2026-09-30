@@ -54,7 +54,7 @@ cargo run -p tpt-cli -- benchmark --codec aura --json in.wav
 
 | Option | Behaviour |
 |---|---|
-| `--codec <name>` | `cinder`, `aura`, `reed`, `thrum`, or a raw 4-byte codec ID. Unknown codec = usage error (exit 2) |
+| `--codec <name>` | `cinder`, `aura`, `reed`, `thrum`, `vault`, `mote`, or a raw 4-byte codec ID. Unknown codec = usage error (exit 2) |
 | `--container <tpt\|wav>` | Output container. `encode`/`transcode` accept only `tpt`; `decode` writes `wav` for an audio track and y4m (the default) for a video track |
 | `--quality 0..=100` | Maps onto the codec's coefficient bit depth (Cinder/Aura 4–12 bits, Reed LSF bit depth). Out of range = usage error |
 | `--bitrate <n>[k\|m]` | Parsed and validated (`k` = ×1e3, `m` = ×1e6). **No effect yet** — no codec here has rate control |
@@ -90,9 +90,26 @@ tpt decode   --codec thrum out.tpt back.y4m
 tpt benchmark --codec thrum --json in.y4m
 ```
 
-`tpt video-corpus` measures `thrum` over the §36 synthetic video corpus
-(PSNR, SSIM, bitrate, encode/decode CPU and frame latency per scene) without
-reading any files.
+All three video codecs — `thrum`, `vault` and `mote` — are driven by the
+y4m bridge for `encode`, `decode`, `transcode` and `benchmark`, and each
+declares its own geometry limits (a frame the codec cannot code is refused
+by the codec itself, with that codec named in the message, rather than by a
+rule duplicated in the CLI). `list-codecs` reports all of them.
+
+`transcode` moves between video codecs, naming both ends of the conversion
+(`vault -> mote`).
+
+`tpt video-corpus` measures a video codec (`--codec`, Thrum by default) over
+the §36 synthetic video corpus — PSNR, SSIM, bitrate, encode/decode CPU and
+frame latency per scene — without reading any files:
+
+```bash
+tpt video-corpus --codec vault --frames 8
+tpt video-corpus --codec mote --json
+```
+
+The frame count it reports is decoded *pictures*, not packets, so Mote's
+out-of-band dictionary packet does not understate its rate.
 
 A video codec on a *non*-video path — `encode --codec thrum` with a WAV, or a
 `.tpt` whose track is audio — fails with an explicit explanation rather than a

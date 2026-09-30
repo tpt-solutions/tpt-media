@@ -25,6 +25,16 @@ pub const NATIVE_CODECS: &[(&str, &str, &str)] = &[
         "THRM",
         "low-latency video (I/P, intra refresh, 8x8 DCT)",
     ),
+    (
+        "vault",
+        "VAUL",
+        "high-compression video (I/P, 64x64 superblocks, multi-reference)",
+    ),
+    (
+        "mote",
+        "MOTE",
+        "extreme-edge video (8x8 patch dictionary VQ, delta frames)",
+    ),
 ];
 
 /// A requested pipeline operation.
@@ -47,6 +57,8 @@ pub enum Command {
     VideoCorpus {
         /// Emit machine-readable JSON instead of a table.
         json: bool,
+        /// Which video codec to measure (`--codec`); Thrum by default.
+        codec: CodecId,
         /// Frame rate used for the timestamp timebase and bitrate math.
         fps: u32,
         /// Frames generated per scene.
@@ -146,10 +158,17 @@ pub fn parse(argv: &[String]) -> Result<Command, String> {
             let mut json = false;
             let mut fps = 30u32;
             let mut frames = 6usize;
+            let mut codec = CodecId::new(*b"THRM");
             let mut i = 1;
             while i < argv.len() {
                 match argv[i].as_str() {
                     "--json" => json = true,
+                    "--codec" => {
+                        i += 1;
+                        let v = argv.get(i).ok_or("video-corpus --codec needs a value")?;
+                        codec = resolve_codec(v)
+                            .ok_or_else(|| format!("unknown codec `{v}` for video-corpus"))?;
+                    }
                     "--fps" => {
                         i += 1;
                         let v = argv.get(i).ok_or("video-corpus --fps needs a value")?;
@@ -174,7 +193,12 @@ pub fn parse(argv: &[String]) -> Result<Command, String> {
                 }
                 i += 1;
             }
-            Ok(Command::VideoCorpus { json, fps, frames })
+            Ok(Command::VideoCorpus {
+                json,
+                codec,
+                fps,
+                frames,
+            })
         }
         Some(cmd @ ("probe" | "inspect")) => {
             let mut json = false;
@@ -307,9 +331,10 @@ USAGE:
   tpt --help
 
 OPTIONS:
-  --codec <name>       codec: cinder | aura | reed | thrum | <4cc>
-                       (the audio codecs ride the WAV bridge; thrum
-                       rides the y4m bridge)
+  --codec <name>       codec: cinder | aura | reed | thrum | vault |
+                        mote | <4cc>
+                        (the audio codecs ride the WAV bridge; the video
+                        codecs ride the y4m bridge)
   --container <kind>   tpt (default) | wav
   --quality <0..=100>  quality setting
   --bitrate <n>[k|m]   target bitrate (bits/s)
@@ -322,9 +347,10 @@ OPTIONS:
   --                    nothing else; `-` means stdin/stdout
 
 COMMANDS:
-  video-corpus         measure thrum over the synthetic video corpus
-                       (todo.md 36): PSNR, SSIM, bitrate, encode/decode
-                       CPU and frame latency per scene. Generates its own
+  video-corpus         measure a video codec (--codec, thrum by default)
+                       over the synthetic video corpus (todo.md 36):
+                       PSNR, SSIM, bitrate, encode/decode CPU and
+                       frame latency per scene. Generates its own
                        content, so it reads no files.
 
 Use `-` as <input> to read from stdin. <out> defaults to stdout.";

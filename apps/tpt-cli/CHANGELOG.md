@@ -14,6 +14,58 @@ lockstep with the workspace.
 
 ### Added
 
+- **`vault` and `mote` are driven by the y4m bridge** (2026-10-01,
+  todo.md §33's open item): `--codec vault` / `--codec mote` now work for
+  `encode`, `decode`, `transcode` and `benchmark` exactly as `--codec thrum`
+  does, and both appear in `list-codecs` and `--help`. `VideoCodec` grew the
+  two variants plus `codec_id`/`new_encoder`/`new_decoder`, and the five
+  video command paths (`run_video_encode_job`, the decode branch of
+  `demux_and_decode_any`, `encode_video`, `benchmark_video`, the transcode
+  re-encode) now go through them instead of naming Thrum's concrete types.
+
+  The erasure point is `Encoder`/`Decoder<Frame = VideoFrame>`, **not** the
+  type-erased `Dyn*` contracts the FFI and `tpt-web` use. `DynFrame` carries
+  no PTS and the `Dyn*` wrappers substitute `Timestamp::zero` for it, so a
+  `.tpt` muxed through them would lose every frame timestamp — and setting
+  those timestamps is the y4m bridge's job. `new_encoder` returns the encoder
+  *and* its codec-private bytes together, because the track records the
+  configuration the encoder was built with and a decoder reconstructs from
+  those bytes alone.
+
+  Two behaviour changes worth calling out, both intentional:
+  `benchmark` now names the codec it measured in its human and JSON output
+  instead of a hard-coded "thrum", and `transcode` names the *source* codec
+  from the track rather than assuming thrum (so `vault -> mote` reports
+  truthfully). The Thrum-only `% 16` geometry check was removed in favour of
+  each codec's own `validate()` — a rule copied into the CLI would have been
+  wrong for at least two of the three codecs.
+
+  Five new tests: a y4m round trip per codec through `decode` (which
+  re-derives the decoder from the track header, so it covers the
+  codec-private bytes too), PTS preservation, per-codec geometry refusal,
+  `benchmark` naming its codec, and a vault→mote `transcode`.
+
+- **`tpt video-corpus --codec` measures any of the three video codecs**
+  (2026-10-01, todo.md §33's remaining open item): the same eight §36 scenes
+  at the same geometry, reporting the codec it actually measured in both the
+  table and the JSON. Two real fixes fell out of generalising it:
+
+  - The packet↔frame pairing was a `zip` that assumed one packet per frame.
+    Mote breaks that assumption — it prefixes the first frame with a
+    dictionary packet that decodes to nothing — which would have compared
+    every frame with its predecessor. Source frames are now indexed by PTS
+    and a decoded picture is scored against the frame it came from, which is
+    correct whatever packet-to-frame mapping a codec uses.
+  - The reported `frames` was `packets.len()`, and since that is the divisor
+    in the bitrate and bpp maths, Mote's out-of-band dictionary understated
+    its rate by 25% (496 → 621 kbps on talking-head). It is now the number of
+    decoded *pictures*.
+
+  Measured cross-codec numbers are in `todo.md` §33, with the explicit
+  caveat that they are synthetic clips at a shared `qp` and support no
+  compression claim. Three new tests, including one that fails if the
+  packet count is used for `frames` again.
+
 - **Per-crate README, changelog, keywords and categories** (2026-09-30):
   crate-specific `README.md` and manifest `keywords`/`categories`. The README
   documents the full command surface, the option table, the exit codes, and

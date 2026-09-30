@@ -21,7 +21,7 @@ patches. The decoder is a table lookup and a copy. Part of the
 |---|---|
 | Role | Native extreme-edge video codec (todo.md §34) |
 | Codec ID | `MOTE` · bitstream `VERSION = 1` |
-| Status | Implemented (v0.1); not yet driven by the CLI's y4m bridge |
+| Status | Implemented (v0.1); driven by the CLI's y4m bridge |
 | Version | `0.1.0`, lockstep with the workspace |
 | MSRV | 1.86 |
 | License | MIT OR Apache-2.0 |
@@ -153,10 +153,6 @@ CRC and random bodies behind a valid header), `low_bitrate.rs` (exact
 - **Self-trained dictionaries are small**, and figures for a dictionary trained
   on the same frames it is tested on flatter the codec; the benchmark also
   prints a held-out-site number.
-- **Not wired into `tpt encode`/`decode`.** Mote is registered in the CLI's
-  `probe` registry only. A y4m bridge like Thrum's would need `VideoCodec`
-  threaded through five command paths in `tpt-cli`, which was left out of this
-  change to avoid colliding with concurrent CLI work.
 - Tree/product quantisation for larger dictionaries (todo.md §8) is not
   implemented; search is the accelerated linear scan.
 

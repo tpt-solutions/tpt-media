@@ -1637,15 +1637,62 @@ Additional work not on the original list, and why:
 
 Not done, and why (left honestly open):
 
-* [ ] CLI `encode`/`decode`/`benchmark` through the y4m bridge — the five
-      video command paths in `tpt-cli` are written against Thrum's concrete
-      types; wiring Vault needs them generalised, which is not a minimal
-      edit and another agent may be editing that file. Vault is registered in
-      the probe registry only
-* [ ] §36/§37 video-corpus quality and a bitrate comparison against another
-      codec — the corpus in `tpt-cli` is Thrum-specific, and no real-video
-      corpus exists in the repo; only synthetic clips were measured, so no
-      "high-compression" claim relative to any other codec is made
+* [x] CLI `encode`/`decode`/`benchmark`/`transcode` through the y4m bridge
+      (2026-10-01) — `VideoCodec` now covers thrum, vault and mote, and the
+      five video command paths erase at `Encoder/Decoder<Frame = VideoFrame>`
+      rather than Thrum's concrete types. **Deliberately *not* the type-erased
+      `Dyn*` contracts the FFI and the web player use**: `DynFrame` carries no
+      PTS and the `Dyn*` wrappers substitute `Timestamp::zero` for it, so a
+      stream muxed through them loses every frame timestamp. The CLI's y4m
+      bridge sets PTS and the container needs it, so erasure happens at the
+      concrete frame type — enough to drop the per-codec types, without
+      losing timestamps. `video_packets_keep_the_pts_the_bridge_assigned`
+      pins that, and fails if the path is ever rerouted through `Dyn*`.
+      The Thrum-specific `% 16` geometry check is gone: each codec's own
+      `validate()` refuses a frame it cannot code and names the real
+      constraint, where the hard-coded rule would have been wrong for at
+      least two of the three (Vault codes in 8x8 units and accepts 40x24,
+      which Thrum and Mote reject). Five new tests: a y4m round trip per
+      codec through `decode` (which re-derives the decoder from the track
+      header alone, so it covers the codec-private bytes too), PTS
+      preservation, per-codec geometry refusal, `benchmark` naming the codec
+      it measured in both human and JSON output, and a vault->mote
+      `transcode`. `todo.md` §33's probe-registry-only caveat no longer
+      applies
+* [x] §36/§37 video-corpus quality and a bitrate comparison against another
+      codec (2026-10-01) — `tpt video-corpus` takes `--codec` and now
+      measures thrum, vault or mote over the same eight scenes at the same
+      geometry, reporting the codec it actually measured in both the table
+      and the JSON. QCIF 176x144 4:2:0, 4 frames/scene, release build on a
+      shared machine, mean PSNR / bytes per scene (luma):
+
+      | scene | thrum | vault | mote |
+      |---|---|---|---|
+      | talking-head | 34.0 dB / 422 B | 44.1 dB / 317 B | 44.8 dB / 10 342 B |
+      | camera-motion | 52.2 / 312 | 54.8 / 87 | 58.6 / 10 116 |
+      | static-scene | 52.3 / 312 | 55.3 / 87 | exact / 10 116 |
+      | high-motion | 18.3 / 29 333 | 28.6 / 37 401 | 15.7 / 11 635 |
+      | screen-content | 25.0 / 1 222 | 36.2 / 1 849 | 35.7 / 10 133 |
+
+      Vault is uniformly higher-quality than Thrum at the same `qp`, and on
+      the three predictable scenes it is *also* smaller (87 B vs 312 B at
+      camera-motion) — but it pays for it in encode CPU: 17-104 ms/frame
+      against Thrum's 4-7, so it blows the 33.3 ms frame budget on every
+      scene except the two easiest. Mote is the opposite: ~0.5-5 ms/frame and
+      ~10 KB per scene regardless of content, the latter dominated by its
+      dictionary packet amortised over only four frames; it also collapses on
+      high-motion (15.7 dB, SSIM 0.28), which is the expected result for a
+      codec built for static cameras. **No cross-codec "high-compression"
+      claim is made**: these are synthetic clips, all three ran at the same
+      `qp` which does not mean equal quality, and Mote's figures are
+      dominated by a one-off dictionary. Real-content numbers still do not
+      exist in this repo.
+
+      The reported `frames` is decoded *pictures*, not packets — Mote
+      prefixes its first frame with a dictionary packet that carries none,
+      and because `frames` is the divisor in the bitrate/bpp maths, counting
+      packets understated Mote's rate by 25% (496 → 621 kbps on
+      talking-head). Pinned by `corpus_counts_decoded_pictures_not_packets`.
 * [ ] B-frames, bi-prediction, weighted prediction, long-term references and
       reference reordering
 * [ ] rate control (`qp` is a constant), scene-cut detection, per-block `qp`

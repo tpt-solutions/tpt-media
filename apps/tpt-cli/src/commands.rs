@@ -11,7 +11,9 @@ use tpt_media_core::{
 };
 use tpt_media_io::{decode_wav, write_wav};
 use tpt_media_probe::{sniff, ContainerKind, ProbeReport};
+use tpt_video_mote::{MoteConfig, MoteDecoder, MoteEncoder};
 use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+use tpt_video_vault::{VaultConfig, VaultDecoder, VaultEncoder};
 
 use crate::args::{Command, OpSpec, NATIVE_CODECS};
 use crate::json::J;
@@ -130,8 +132,10 @@ fn probe_registry() -> tpt_media_codec::Registry {
         r.register_encoder(enc);
     }
     // Vault: same placeholder-geometry rule as Thrum. Registered so a
-    // `.tpt` carrying a VAUL track probes as decodable; `encode`/`decode`
-    // do not drive it yet (no y4m bridge for Vault - see its README).
+    // `.tpt` carrying a VAUL track probes as decodable. `encode`/`decode`
+    // drive it through the y4m bridge; these factories are what `probe`
+    // consults, not what the encode path builds (that constructs a
+    // geometry-carrying config directly).
     if let (Ok(dec), Ok(enc)) = (
         tpt_video_vault::VaultDecoderFactory::new(tpt_video_vault::VaultConfig::default()),
         tpt_video_vault::VaultEncoderFactory::new(tpt_video_vault::VaultConfig::default()),
@@ -139,9 +143,9 @@ fn probe_registry() -> tpt_media_codec::Registry {
         r.register_decoder(dec);
         r.register_encoder(enc);
     }
-    // Mote: same placeholder-geometry rule as Thrum. Registered so a
-    // `.tpt` carrying a MOTE track probes as decodable; `encode`/`decode`
-    // do not drive it yet (no y4m bridge for Mote - see its README).
+    // Mote: same placeholder-geometry rule as Thrum, and the same split
+    // between the probe registry here and the y4m bridge in
+    // `VideoCodec::new_encoder`/`new_decoder`.
     if let (Ok(dec), Ok(enc)) = (
         tpt_video_mote::MoteDecoderFactory::new(tpt_video_mote::MoteConfig::default()),
         tpt_video_mote::MoteEncoderFactory::new(tpt_video_mote::MoteConfig::default()),
@@ -525,14 +529,28 @@ impl AudioCodec {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum VideoCodec {
     Thrum,
+    Vault,
+    Mote,
 }
 
 impl VideoCodec {
     fn from_id(id: CodecId) -> Option<VideoCodec> {
         if id == CodecId::new(*b"THRM") {
             Some(VideoCodec::Thrum)
+        } else if id == CodecId::new(*b"VAUL") {
+            Some(VideoCodec::Vault)
+        } else if id == CodecId::new(*b"MOTE") {
+            Some(VideoCodec::Mote)
         } else {
             None
+        }
+    }
+
+    fn codec_id(self) -> CodecId {
+        match self {
+            VideoCodec::Thrum => CodecId::new(*b"THRM"),
+            VideoCodec::Vault => CodecId::new(*b"VAUL"),
+            VideoCodec::Mote => CodecId::new(*b"MOTE"),
         }
     }
 
@@ -540,6 +558,142 @@ impl VideoCodec {
     fn name(self) -> &'static str {
         match self {
             VideoCodec::Thrum => "thrum",
+            VideoCodec::Vault => "vault",
+            VideoCodec::Mote => "mote",
+        }
+    }
+
+    /// Build an encoder for `geometry` at quantiser index `qp`, together
+    /// with the codec-private bytes that describe it in a track header.
+    ///
+    /// Returned as a pair because the two must agree: the track records the
+    /// configuration the encoder was actually built with, and a decoder
+    /// reconstructs from those bytes alone. Building both here is what keeps
+    /// a `.tpt` self-describing.
+    ///
+    /// This erases at `Frame = VideoFrame` and deliberately does *not* use
+    /// the type-erased `DynEncoder` the FFI and the web player drive.
+    /// `DynFrame` carries no PTS and the `Dyn*` wrappers substitute
+    /// `Timestamp::zero` for it, so a stream muxed through them would lose
+    /// every frame timestamp — which the y4m bridge sets and the container
+    /// needs. Erasing at the concrete frame type keeps PTS intact and is
+    /// still enough to drop the per-codec types from these call sites.
+    fn new_encoder(
+        self,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        qp: u8,
+    ) -> Result<(VideoEncoderBox, Vec<u8>), String> {
+        let fw = FrameworkCodecConfig::default();
+        match self {
+            VideoCodec::Thrum => {
+                let cfg = ThrumConfig {
+                    width,
+                    height,
+                    format,
+                    qp,
+                    ..ThrumConfig::default()
+                };
+                let enc = ThrumEncoder::new(fw, cfg.clone())
+                    .map_err(|e| format!("thrum encoder: {e}"))?;
+                Ok((Box::new(enc), cfg.to_codec_private()))
+            }
+            VideoCodec::Vault => {
+                let cfg = VaultConfig {
+                    width,
+                    height,
+                    format,
+                    qp,
+                    ..VaultConfig::default()
+                };
+                let enc = VaultEncoder::new(fw, cfg.clone())
+                    .map_err(|e| format!("vault encoder: {e}"))?;
+                Ok((Box::new(enc), cfg.to_codec_private()))
+            }
+            VideoCodec::Mote => {
+                let cfg = MoteConfig {
+                    width,
+                    height,
+                    format,
+                    ..MoteConfig::default()
+                };
+                let enc =
+                    MoteEncoder::new(fw, cfg.clone()).map_err(|e| format!("mote encoder: {e}"))?;
+                Ok((Box::new(enc), cfg.to_codec_private()))
+            }
+        }
+    }
+
+    /// Build a decoder for `geometry` from a track's header: the
+    /// codec-private `bytes` and the `version` the track declared.
+    ///
+    /// A track whose codec-private data is absent or too short falls back to
+    /// the default configuration for that geometry, which is what the y4m
+    /// bridge relies on for a file it has just written and what keeps a
+    /// hand-built `.tpt` decodable.
+    fn new_decoder(
+        self,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        bytes: &[u8],
+        version: u16,
+    ) -> Result<VideoDecoderBox, String> {
+        let fw = FrameworkCodecConfig {
+            version,
+            extra: bytes.to_vec(),
+            limits: ResourceLimits::default(),
+        };
+        match self {
+            VideoCodec::Thrum => {
+                let cfg = if bytes.len() >= ThrumConfig::CODEC_PRIVATE_LEN {
+                    ThrumConfig::from_codec_private(width, height, bytes)
+                        .map_err(|e| format!("bad thrum codec-private data: {e}"))?
+                } else {
+                    ThrumConfig {
+                        width,
+                        height,
+                        format,
+                        ..ThrumConfig::default()
+                    }
+                };
+                ThrumDecoder::new(fw, cfg)
+                    .map(|d| Box::new(d) as VideoDecoderBox)
+                    .map_err(|e| format!("thrum decoder: {e}"))
+            }
+            VideoCodec::Vault => {
+                let cfg = if bytes.len() >= VaultConfig::CODEC_PRIVATE_LEN {
+                    VaultConfig::from_codec_private(width, height, bytes)
+                        .map_err(|e| format!("bad vault codec-private data: {e}"))?
+                } else {
+                    VaultConfig {
+                        width,
+                        height,
+                        format,
+                        ..VaultConfig::default()
+                    }
+                };
+                VaultDecoder::new(fw, cfg)
+                    .map(|d| Box::new(d) as VideoDecoderBox)
+                    .map_err(|e| format!("vault decoder: {e}"))
+            }
+            VideoCodec::Mote => {
+                let cfg = if bytes.len() >= MoteConfig::CODEC_PRIVATE_LEN {
+                    MoteConfig::from_codec_private(width, height, bytes)
+                        .map_err(|e| format!("bad mote codec-private data: {e}"))?
+                } else {
+                    MoteConfig {
+                        width,
+                        height,
+                        format,
+                        ..MoteConfig::default()
+                    }
+                };
+                MoteDecoder::new(fw, cfg)
+                    .map(|d| Box::new(d) as VideoDecoderBox)
+                    .map_err(|e| format!("mote decoder: {e}"))
+            }
         }
     }
 }
@@ -565,6 +719,14 @@ const TRACK_SAMPLE_COUNT_KEY: &str = "tpt.io.sample_count";
 type EncoderBox = Box<dyn Encoder<Frame = tpt_media_core::AudioFrame>>;
 /// Boxed native decoder.
 type DecoderBox = Box<dyn Decoder<Frame = tpt_media_core::AudioFrame>>;
+/// Boxed video encoder.
+///
+/// Erased at `Frame = VideoFrame` rather than at `tpt_media_codec::DynFrame`
+/// on purpose: `DynFrame` carries no PTS, and the video path has to keep the
+/// y4m bridge's frame timestamps. See [`VideoCodec::new_encoder`].
+type VideoEncoderBox = Box<dyn Encoder<Frame = VideoFrame>>;
+/// Boxed video decoder. See [`VideoEncoderBox`] for why not `DynFrame`.
+type VideoDecoderBox = Box<dyn Decoder<Frame = VideoFrame>>;
 
 /// The unit of work shared by `tpt encode` and `tpt transcode`: mono S16
 /// samples plus everything needed to mux them into a `.tpt` container.
@@ -707,6 +869,7 @@ fn quality_to_qp(quality: Option<u8>) -> u8 {
 /// carry their PTS already (the y4m bridge assigns frame `i` tick `i`
 /// on the `fps_den/fps_num` timebase).
 struct VideoEncodeJob {
+    codec: VideoCodec,
     fps_num: u32,
     fps_den: u32,
     qp: u8,
@@ -715,29 +878,23 @@ struct VideoEncodeJob {
 }
 
 /// Encode a video job into a finished `.tpt`: a video `Track` carrying
-/// the geometry in `TrackMedia` and Thrum's codec-private bytes, one
-/// packet per frame.
+/// the geometry in `TrackMedia` and the codec's private bytes, one packet
+/// per frame.
 fn run_video_encode_job(job: &VideoEncodeJob) -> Result<(Vec<u8>, usize), String> {
     let first = job.frames.first().ok_or("no frames to encode")?;
-    let cfg = ThrumConfig {
-        width: first.width,
-        height: first.height,
-        format: first.format,
-        qp: job.qp,
-        ..ThrumConfig::default()
-    };
-    let fw = FrameworkCodecConfig::default();
-    let mut encoder =
-        ThrumEncoder::new(fw.clone(), cfg.clone()).map_err(|e| format!("thrum encoder: {e}"))?;
+    let (mut encoder, private) =
+        job.codec
+            .new_encoder(first.width, first.height, first.format, job.qp)?;
+    let version = encoder.info().version;
     let tb = Timebase::new(job.fps_den, job.fps_num);
     let mut muxer = tpt_container::TptMuxer::new(tb);
-    let mut track = Track::new(0, MediaType::Video, CodecId::new(*b"THRM"), tb);
-    track.codec_config.version = encoder.info().version;
-    track.codec_config.data = cfg.to_codec_private();
+    let mut track = Track::new(0, MediaType::Video, job.codec.codec_id(), tb);
+    track.codec_config.version = version;
+    track.codec_config.data = private;
     track.media = TrackMedia {
-        width: Some(cfg.width),
-        height: Some(cfg.height),
-        pixel_format: Some(cfg.format),
+        width: Some(first.width),
+        height: Some(first.height),
+        pixel_format: Some(first.format),
         ..TrackMedia::default()
     };
     track.metadata = job.extra_meta.clone();
@@ -817,55 +974,47 @@ fn demux_and_decode_any(
             Ok(DemuxedMedia::Audio(track, frames))
         }
         MediaType::Video => {
-            if AudioCodec::from_id(codec_id).is_some() {
-                return Err((1, "video track carries an audio codec id".into()));
-            }
-            if VideoCodec::from_id(codec_id).is_none() {
-                return Err((1, "no decoder registered for this video codec".into()));
-            }
-            let width = track
-                .media
-                .width
-                .ok_or((1, "video track is missing its width".to_string()))?;
-            let height = track
-                .media
-                .height
-                .ok_or((1, "video track is missing its height".to_string()))?;
-            let format = track.media.pixel_format.unwrap_or(PixelFormat::Yuv420);
-            let cfg = if track.codec_config.data.len() >= ThrumConfig::CODEC_PRIVATE_LEN {
-                ThrumConfig::from_codec_private(width, height, &track.codec_config.data)
-                    .map_err(|e| (1, format!("bad thrum codec-private data: {e}")))?
+            if let (Some(codec), true) = (
+                VideoCodec::from_id(codec_id),
+                AudioCodec::from_id(codec_id).is_none(),
+            ) {
+                let width = track
+                    .media
+                    .width
+                    .ok_or((1, "video track is missing its width".to_string()))?;
+                let height = track
+                    .media
+                    .height
+                    .ok_or((1, "video track is missing its height".to_string()))?;
+                let format = track.media.pixel_format.unwrap_or(PixelFormat::Yuv420);
+                let mut decoder = codec
+                    .new_decoder(
+                        width,
+                        height,
+                        format,
+                        &track.codec_config.data,
+                        track.codec_config.version,
+                    )
+                    .map_err(|e| (1, e))?;
+                let mut frames: Vec<VideoFrame> = Vec::new();
+                loop {
+                    match demux.next_packet() {
+                        Ok(pkt) => frames.extend(
+                            decoder
+                                .decode(&pkt)
+                                .map_err(|e| (1, format!("decode failed: {e}")))?,
+                        ),
+                        Err(tpt_media_container::ContainerError::Truncated) => break,
+                        Err(e) => return Err((1, format!("malformed container: {e:?}"))),
+                    }
+                }
+                if frames.is_empty() {
+                    return Err((1, "no decodable packets found".into()));
+                }
+                Ok(DemuxedMedia::Video(track, frames))
             } else {
-                ThrumConfig {
-                    width,
-                    height,
-                    format,
-                    ..ThrumConfig::default()
-                }
-            };
-            let fw = FrameworkCodecConfig {
-                version: track.codec_config.version,
-                extra: track.codec_config.data.clone(),
-                limits: ResourceLimits::default(),
-            };
-            let mut decoder =
-                ThrumDecoder::new(fw, cfg).map_err(|e| (1, format!("thrum decoder: {e}")))?;
-            let mut frames: Vec<VideoFrame> = Vec::new();
-            loop {
-                match demux.next_packet() {
-                    Ok(pkt) => frames.extend(
-                        decoder
-                            .decode(&pkt)
-                            .map_err(|e| (1, format!("decode failed: {e}")))?,
-                    ),
-                    Err(tpt_media_container::ContainerError::Truncated) => break,
-                    Err(e) => return Err((1, format!("malformed container: {e:?}"))),
-                }
+                Err((1, "no decoder registered for this video codec".into()))
             }
-            if frames.is_empty() {
-                return Err((1, "no decodable packets found".into()));
-            }
-            Ok(DemuxedMedia::Video(track, frames))
         }
         other => Err((1, format!("first track is {other:?}, which has no decoder"))),
     }
@@ -886,23 +1035,21 @@ fn y4m_params_for_track(track: &Track, frames: &[VideoFrame]) -> Option<y4m::Y4m
     })
 }
 
-/// Encode y4m-parsed frames with `thrum` (the `encode` video path).
-fn encode_video(spec: &OpSpec, input: &[u8], ctx: &Ctx<'_>) -> Outcome {
+/// Encode y4m-parsed frames with `codec` (the `encode` video path).
+///
+/// Geometry is *not* validated here: each codec's own `validate()` already
+/// rejects a geometry it cannot code, and its message names the real
+/// constraint (Thrum and Mote want multiples of 16, Mote also caps the long
+/// edge at 848 and the short at 480, Vault works in 8x8 units). Checking
+/// here instead would mean keeping a second, drifting copy of three codecs'
+/// rules in the CLI.
+fn encode_video(spec: &OpSpec, input: &[u8], ctx: &Ctx<'_>, codec: VideoCodec) -> Outcome {
     let (params, frames) = match y4m::parse(input) {
         Ok(r) => r,
         Err(e) => return Outcome::fail(1, format!("input is not a readable y4m: {e}")),
     };
-    if params.width % 16 != 0 || params.height % 16 != 0 {
-        return Outcome::fail(
-            1,
-            format!(
-                "thrum requires frame dimensions that are non-zero multiples \
-                 of 16 (got {}x{})",
-                params.width, params.height
-            ),
-        );
-    }
     let job = VideoEncodeJob {
+        codec,
         fps_num: params.fps_num,
         fps_den: params.fps_den,
         qp: quality_to_qp(spec.quality),
@@ -968,13 +1115,17 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                 .unwrap_or("this codec");
             return Outcome::fail(
                 1,
-                format!("{name} is an audio codec; y4m input needs a video codec (--codec thrum)"),
+                format!(
+                    "{name} is an audio codec; y4m input needs a video codec \
+                     (--codec thrum, vault or mote)"
+                ),
             );
         }
-        if VideoCodec::from_id(codec).is_none() {
-            return Outcome::fail(1, "no encoder registered for this codec");
-        }
-        return encode_video(spec, &input, ctx);
+        let video = match VideoCodec::from_id(codec) {
+            Some(v) => v,
+            None => return Outcome::fail(1, "no encoder registered for this codec"),
+        };
+        return encode_video(spec, &input, ctx, video);
     }
     let codec = match AudioCodec::from_id(codec) {
         Some(c) => c,
@@ -1438,7 +1589,14 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                 None => return Outcome::fail(1, "video track decoded no frames"),
             };
             let count = frames.len();
+            // Name the source codec from the track rather than assuming
+            // thrum: a transcoded input may itself be VAUL or MOTE.
+            let source = match VideoCodec::from_id(track.codec_config.codec_id) {
+                Some(c) => c.name().to_string(),
+                None => format!("{:?}", track.codec_config.codec_id),
+            };
             let job = VideoEncodeJob {
+                codec: target,
                 fps_num: params.fps_num,
                 fps_den: params.fps_den,
                 qp: quality_to_qp(spec.quality),
@@ -1454,7 +1612,7 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                 bytes,
                 format!(
                     "transcoded {written} packets ({count} frames, {}x{}, \
-                     thrum -> {} at --quality {})",
+                     {source} -> {} at --quality {})",
                     params.width,
                     params.height,
                     target.name(),
@@ -1544,37 +1702,27 @@ fn bench_pass(
 /// final pass and per-frame latency reported against the clip's own
 /// frame rate. One P-frame's encode+decode is the one-way latency
 /// contribution — Thrum never holds a frame back.
-fn benchmark_video(spec: &OpSpec, input: &[u8]) -> Outcome {
+fn benchmark_video(spec: &OpSpec, input: &[u8], codec: VideoCodec) -> Outcome {
     let (params, frames) = match y4m::parse(input) {
         Ok(r) => r,
         Err(e) => return Outcome::fail(1, format!("input is not a readable y4m: {e}")),
     };
-    if params.width % 16 != 0 || params.height % 16 != 0 {
-        return Outcome::fail(
-            1,
-            format!(
-                "thrum requires frame dimensions that are non-zero multiples \
-                 of 16 (got {}x{})",
-                params.width, params.height
-            ),
-        );
-    }
     let qp = quality_to_qp(spec.quality);
-    let cfg = ThrumConfig {
-        width: params.width,
-        height: params.height,
-        format: params.format,
-        qp,
-        ..ThrumConfig::default()
-    };
-    let fw = FrameworkCodecConfig::default();
-    let mut encoder = match ThrumEncoder::new(fw.clone(), cfg.clone()) {
-        Ok(e) => e,
-        Err(e) => return Outcome::fail(1, format!("thrum encoder: {e}")),
-    };
-    let mut decoder = match ThrumDecoder::new(fw, cfg) {
+    let (mut encoder, private) =
+        match codec.new_encoder(params.width, params.height, params.format, qp) {
+            Ok(v) => v,
+            Err(e) => return Outcome::fail(1, e),
+        };
+    let version = encoder.info().version;
+    let mut decoder = match codec.new_decoder(
+        params.width,
+        params.height,
+        params.format,
+        &private,
+        version,
+    ) {
         Ok(d) => d,
-        Err(e) => return Outcome::fail(1, format!("thrum decoder: {e}")),
+        Err(e) => return Outcome::fail(1, e),
     };
     let runs = spec.runs.unwrap_or(5);
 
@@ -1661,7 +1809,7 @@ fn benchmark_video(spec: &OpSpec, input: &[u8]) -> Outcome {
         let mut j = crate::json::J::new();
         j.object();
         j.field("codec");
-        j.value_str("thrum");
+        j.value_str(codec.name());
         j.field("quality");
         match spec.quality {
             Some(q) => j.value_u64(u64::from(q)),
@@ -1724,9 +1872,12 @@ fn benchmark_video(spec: &OpSpec, input: &[u8]) -> Outcome {
     } else {
         let mut out = String::new();
         out.push_str(&format!(
-            "benchmark: thrum, {}x{} @ {:.3} fps, {count} frames ({duration_s:.3} s), \
+            "benchmark: {}, {}x{} @ {:.3} fps, {count} frames ({duration_s:.3} s), \
              {packet_count} packets, qp {qp}\n",
-            params.width, params.height, fps,
+            codec.name(),
+            params.width,
+            params.height,
+            fps,
         ));
         out.push_str(&format!(
             "encode:   median {enc_med:.3} ms, min {enc_min:.3} ms  ({enc_factor:.0}x realtime)\n"
@@ -1769,7 +1920,7 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     };
     if input.starts_with(b"YUV4MPEG2") {
         match VideoCodec::from_id(codec) {
-            Some(VideoCodec::Thrum) => return benchmark_video(spec, &input),
+            Some(v) => return benchmark_video(spec, &input, v),
             None => {
                 let name = NATIVE_CODECS
                     .iter()
@@ -1778,7 +1929,10 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                     .unwrap_or("this codec");
                 return Outcome::fail(
                     1,
-                    format!("{name} is an audio codec; y4m benchmarking needs --codec thrum"),
+                    format!(
+                        "{name} is an audio codec; y4m benchmarking needs \
+                         --codec thrum, vault or mote"
+                    ),
                 );
             }
         }
@@ -2024,34 +2178,52 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
 /// Output is a table by default and JSON with `--json`, matching `probe`.
 /// Bitrate is reported next to quality on purpose: a PSNR with no bitrate
 /// hides the cost that bought it.
-pub fn video_corpus_cmd(json: bool, fps: u32, frames: usize) -> Outcome {
+pub fn video_corpus_cmd(json: bool, codec_id: CodecId, fps: u32, frames: usize) -> Outcome {
     use crate::quality::{psnr_db, ssim, Timing, VideoReport};
     use crate::video::corpus;
-    use tpt_media_codec::{CodecConfig, Decoder, Encoder};
     use tpt_media_core::PixelFormat;
-    use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+
+    let codec = match VideoCodec::from_id(codec_id) {
+        Some(c) => c,
+        None => {
+            return Outcome::fail(
+                1,
+                format!(
+                    "{codec_id} is not a video codec; video-corpus measures thrum, vault or mote"
+                ),
+            )
+        }
+    };
 
     // QCIF: the smallest resolution at which the macroblock structure and
     // the motion search are meaningfully exercised, and small enough
-    // that a full corpus sweep stays interactive.
+    // that a full corpus sweep stays interactive. 176x144 is a multiple of
+    // 16 and inside every codec's limits, so one geometry serves all three.
     let (w, h) = (176u32, 144u32);
     let format = PixelFormat::Yuv420;
-    let cfg = ThrumConfig {
-        width: w,
-        height: h,
-        format,
-        ..ThrumConfig::default()
-    };
 
     let mut rows: Vec<(&'static str, VideoReport)> = Vec::new();
     for scene in corpus(w, h, format, frames, fps, 0x5EED_A11A) {
-        let fw = CodecConfig::default();
-        let enc = ThrumEncoder::new(fw.clone(), cfg.clone());
-        let dec = ThrumDecoder::new(fw, cfg.clone());
-        let (mut enc, mut dec) = match (enc, dec) {
-            (Ok(e), Ok(d)) => (e, d),
-            _ => return Outcome::fail(1, "thrum encoder/decoder unavailable"),
+        let (mut enc, private) = match codec.new_encoder(w, h, format, 30) {
+            Ok(v) => v,
+            Err(e) => return Outcome::fail(1, e),
         };
+        let version = enc.info().version;
+        let mut dec = match codec.new_decoder(w, h, format, &private, version) {
+            Ok(d) => d,
+            Err(e) => return Outcome::fail(1, e),
+        };
+
+        // Index the source frames by PTS so a decoded picture is compared
+        // against the frame it actually came from. Zipping packets against
+        // frames in order would assume one packet per frame, which Mote
+        // breaks: it prefixes the first frame with a dictionary packet that
+        // decodes to nothing, shifting every later frame by one.
+        let by_pts: std::collections::HashMap<i64, &VideoFrame> = scene
+            .frames
+            .iter()
+            .map(|f| (f.frame.pts.ticks, f))
+            .collect();
 
         let t0 = std::time::Instant::now();
         let mut packets = Vec::new();
@@ -2066,12 +2238,22 @@ pub fn video_corpus_cmd(json: bool, fps: u32, frames: usize) -> Outcome {
         let t1 = std::time::Instant::now();
         let (mut psnr_sum, mut psnr_n) = (0f64, 0usize);
         let (mut ssim_sum, mut ssim_n) = (0f64, 0usize);
-        for (pkt, src) in packets.iter().zip(scene.frames.iter()) {
+        // Decoded *pictures*, not packets: Mote sends a dictionary packet
+        // that carries none, so `packets.len()` would be one too high and
+        // would understate the rate and bpp derived from it.
+        let mut decoded = 0usize;
+        for pkt in &packets {
             let out = match dec.decode(pkt) {
                 Ok(o) => o,
                 Err(e) => return Outcome::fail(1, format!("{}: decode failed: {e}", scene.name)),
             };
             for got in &out {
+                // A packet carrying no picture (Mote's dictionary packet)
+                // has nothing to score.
+                let Some(src) = by_pts.get(&got.frame.pts.ticks) else {
+                    continue;
+                };
+                decoded += 1;
                 // A bit-exact frame has no finite PSNR, so it is left out
                 // of the mean rather than poisoning it with infinity.
                 if let Some(p) = psnr_db(src, got) {
@@ -2091,7 +2273,7 @@ pub fn video_corpus_cmd(json: bool, fps: u32, frames: usize) -> Outcome {
         rows.push((
             scene.name,
             VideoReport {
-                frames: packets.len(),
+                frames: decoded,
                 encoded_bytes: packets.iter().map(|p| p.data.len() as u64).sum(),
                 psnr_db: (psnr_n > 0).then(|| psnr_sum / psnr_n as f64),
                 ssim: (ssim_n > 0).then(|| ssim_sum / ssim_n as f64),
@@ -2109,9 +2291,9 @@ pub fn video_corpus_cmd(json: bool, fps: u32, frames: usize) -> Outcome {
     }
     let pixels = u64::from(w) * u64::from(h);
     if json {
-        render_corpus_json(&rows, pixels, w, h, fps)
+        render_corpus_json(&rows, pixels, w, h, fps, codec)
     } else {
-        render_corpus_table(&rows, pixels, w, h, fps)
+        render_corpus_table(&rows, pixels, w, h, fps, codec)
     }
 }
 
@@ -2122,12 +2304,13 @@ fn render_corpus_json(
     w: u32,
     h: u32,
     fps: u32,
+    codec: VideoCodec,
 ) -> Outcome {
     use crate::json::J;
     let mut j = J::new();
     j.object();
     j.field("codec");
-    j.value_str("thrum");
+    j.value_str(codec.name());
     j.field("width");
     j.value_u64(u64::from(w));
     j.field("height");
@@ -2175,11 +2358,13 @@ fn render_corpus_table(
     w: u32,
     h: u32,
     fps: u32,
+    codec: VideoCodec,
 ) -> Outcome {
     use crate::quality::Timing;
     let mut out = String::new();
     out.push_str(&format!(
-        "video corpus: thrum {w}x{h} 4:2:0, {fps} fps, {} frames/scene\n\n",
+        "video corpus: {} {w}x{h} 4:2:0, {fps} fps, {} frames/scene\n\n",
+        codec.name(),
         rows.first().map_or(0, |(_, r)| r.frames)
     ));
     out.push_str(&format!(
@@ -2221,7 +2406,12 @@ pub fn execute(cmd: &Command, ctx: &Ctx<'_>) -> Outcome {
         Command::Decode(spec) => decode_cmd(spec, ctx),
         Command::Transcode(spec) => transcode_cmd(spec, ctx),
         Command::Benchmark(spec) => benchmark_cmd(spec, ctx),
-        Command::VideoCorpus { json, fps, frames } => video_corpus_cmd(*json, *fps, *frames),
+        Command::VideoCorpus {
+            json,
+            codec,
+            fps,
+            frames,
+        } => video_corpus_cmd(*json, *codec, *fps, *frames),
         Command::Help => Outcome::ok(crate::args::USAGE.into()),
     }
 }

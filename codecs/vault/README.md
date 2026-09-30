@@ -19,7 +19,7 @@ workspace — [workspace changelog](../../CHANGELOG.md) ·
 |---|---|
 | Role | Native high-compression video codec (todo.md §33) |
 | Codec ID | `VAUL` · bitstream `VERSION = 1` |
-| Status | Implemented (v0.1); not yet wired into the CLI or the web player |
+| Status | Implemented (v0.1); driven by `tpt-cli` (not yet the web player) |
 | Version | `0.1.0`, lockstep with the workspace |
 | MSRV | 1.86 |
 | License | MIT OR Apache-2.0 |
@@ -171,8 +171,13 @@ memory test (peak independent of stream length).
 - The closed loop has no drift when encoder and decoder run the same build on
   the same target; the transform is `f32` and the workspace makes no
   cross-target bit-exactness claim (todo.md §39).
-- Not wired into `tpt-cli`, the `tpt-web` player or the probe capability
-  table, and its quality has not been measured over the §36 video corpus.
+- Not wired into the `tpt-web` player. It *is* driven by `tpt-cli`:
+  `--codec vault` works for `encode`, `decode`, `transcode` and `benchmark`
+  through the y4m bridge, it is in the probe capability table, and
+  `tpt video-corpus --codec vault` measures it over the §36 corpus. The
+  cross-codec table is in `todo.md` §33 — measured on synthetic clips at a
+  shared `qp`, so it is a quality/speed/bytes comparison, **not** a
+  compression-ratio claim against another codec.
 
 ## License
 

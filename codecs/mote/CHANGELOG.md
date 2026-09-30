@@ -36,5 +36,6 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
   memory test; measured tables in `docs/performance.md`, design and the
   temporal-prediction investigation in `docs/codec-design.md`, algorithm
   sources in `docs/provenance.md`.
-- Registered in `tpt-cli`'s `probe` registry. Not yet driven by `encode` /
-  `decode` (no y4m bridge).
+- Registered in `tpt-cli`'s `probe` registry, and (2026-10-01) driven by
+  `encode` / `decode` / `transcode` / `benchmark` through the y4m bridge as
+  `--codec mote`.
