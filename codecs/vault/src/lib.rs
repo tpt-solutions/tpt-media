@@ -288,16 +288,19 @@ impl VaultConfig {
     /// The encoder checks the finished packet against this and returns
     /// [`CodecError::Internal`] rather than emit an over-bound packet.
     pub fn max_packet_bits(&self) -> usize {
-        let header = 16 + 1 + QP_BITS as usize + 5 + 1;
-        let mvd = bits::rice_len_signed(2 * MV_LIMIT, syntax::MVD_K) as usize;
+        let header = 16 + 1 + u64::from(QP_BITS) + 5 + 1;
+        let mvd = u64::from(bits::rice_len_signed(2 * MV_LIMIT, syntax::MVD_K));
         let per_unit_syntax = 2 + 2 + 4 + 2 * mvd + 2;
-        let token = 2 * transform::MAX_RICE_BITS as usize;
+        let token = 2 * u64::from(transform::MAX_RICE_BITS);
         let (tile_hdr, samples) = if self.format == PixelFormat::Yuv420 {
             (10 + 2 * 8, 64 + 32)
         } else {
             (10, 64)
         };
-        header + self.unit_count() * (per_unit_syntax + tile_hdr + samples * token)
+        let total =
+            header + self.unit_count() as u64 * (per_unit_syntax + tile_hdr + samples * token);
+        // 64-bit arithmetic, saturating on a 32-bit `usize`.
+        usize::try_from(total).unwrap_or(usize::MAX)
     }
 
     pub(crate) fn validate(&self) -> CodecResult<()> {

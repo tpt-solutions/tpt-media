@@ -111,10 +111,15 @@ pub fn for_each_chunk(bytes: &[u8], mut cb: impl FnMut(&[u8; 4], &[u8])) -> Resu
 mod tests {
     use super::*;
     use alloc::collections::BTreeMap;
+    use tpt_media_codec::ResourceLimits;
     use tpt_media_core::{
         ChannelLayout, CodecConfig, CodecId, MediaType, MetadataValue, PacketFlags, PixelFormat,
         Timestamp,
     };
+
+    /// `RESERVED_CHUNK_PREFIX` is not re-exported from the crate root, and a
+    /// test for the reserved range has no business hard-coding `0x1F`.
+    use crate::format::RESERVED_CHUNK_PREFIX;
 
     fn packet(track_id: u8, pts: i64, data: &[u8], flags: PacketFlags) -> Packet {
         let mut p = Packet::empty(
@@ -705,6 +710,266 @@ mod tests {
         d.seek_to_keyframe(25).unwrap();
         let p = d.next_packet().unwrap();
         assert_eq!(p.data, vec![4]);
+    }
+
+    // ---- §38 unit-test gate: the public items with no coverage ------------
+
+    #[test]
+    fn header_rejects_a_zero_timebase_component() {
+        // A crafted header used to hand these straight to `Timebase::new`,
+        // whose contract is "panics in debug, 1/1 in release" — so the same
+        // file aborted a debug build and was silently re-interpreted as a
+        // different timebase in a release one. Found by patching the four
+        // header bytes of a real `.tpt` and running `tpt probe` on it.
+        for (num, den) in [(0u32, 0u32), (0, 1), (1, 0)] {
+            let mut b = FileHeader::new(Timebase::MILLISECONDS).to_bytes().to_vec();
+            b[8..12].copy_from_slice(&num.to_le_bytes());
+            b[12..16].copy_from_slice(&den.to_le_bytes());
+            // `TptError` deliberately derives only `Debug`, so the variant
+            // is matched rather than compared.
+            assert!(
+                matches!(
+                    FileHeader::from_bytes(&b).err(),
+                    Some(TptError::BadHeader)
+                ),
+                "num={num} den={den} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rejected_timebase_is_rejected_by_every_entry_point() {
+        // The header check has to reach each entry point, or `probe` still
+        // panics on a file `FileHeader::from_bytes` refuses.
+        let mut b = FileHeader::new(Timebase::MILLISECONDS).to_bytes().to_vec();
+        b[12..16].copy_from_slice(&0u32.to_le_bytes());
+        // `.err()` rather than `unwrap_err()`: `TptDemuxer` has no `Debug`.
+        assert!(matches!(
+            TptDemuxer::new(&b).err(),
+            Some(TptError::BadHeader)
+        ));
+        assert!(matches!(parse_tpt(&b).err(), Some(TptError::BadHeader)));
+        assert!(matches!(
+            TptDemuxer::new_streaming(&b).err(),
+            Some(TptError::BadHeader)
+        ));
+        assert!(for_each_chunk(&b, |_, _| {}).is_err());
+    }
+
+    #[test]
+    fn a_track_timebase_falls_back_to_the_header_rather_than_panicking() {
+        // `decode_trak` validates its own timebase and falls back; pinned so
+        // the two levels of validation cannot drift apart.
+        let mut t = Track::new(0, MediaType::Audio, CodecId::new(*b"CIND"), Timebase::MILLISECONDS);
+        t.timebase = Timebase { num: 0, den: 0 };
+        let decoded = decode_trak(&encode_trak(&t), Timebase::MILLISECONDS).expect("trak decodes");
+        assert_eq!(decoded.timebase, Timebase::MILLISECONDS);
+    }
+
+    #[test]
+    fn read_chunk_header_reports_none_rather_than_overflowing() {
+        // `pos` is caller-supplied and this is a `pub` primitive, so a
+        // hostile offset must be refused, not overflowed into a slice panic.
+        let bytes = encode_chunk(b"ABCD", &[1, 2, 3]);
+        for pos in [
+            bytes.len(),
+            bytes.len() + 1,
+            usize::MAX,
+            usize::MAX - 3,
+            bytes.len() - 7,
+        ] {
+            assert_eq!(
+                read_chunk_header(&bytes, pos),
+                None,
+                "pos={pos} must not be read"
+            );
+        }
+    }
+
+    #[test]
+    fn read_chunk_header_is_inclusive_at_eight_remaining_bytes() {
+        // 4 bytes of padding, then a chunk header, then nothing: exactly 8
+        // bytes remain, which is enough to read the header. The body is not
+        // required to be present — bounding it is the caller's job, which is
+        // why `read_chunk_header` is not the thing that truncates.
+        let mut bytes = vec![0xEEu8; 4];
+        bytes.extend_from_slice(b"IDX ");
+        bytes.extend_from_slice(&12345u32.to_le_bytes());
+        assert_eq!(bytes.len(), 12);
+        let (id, size, body_start) = read_chunk_header(&bytes, 4).expect("header present");
+        assert_eq!(id, *b"IDX ");
+        assert_eq!(size, 12345);
+        assert_eq!(body_start, 12);
+        // Seven remaining is one short.
+        assert_eq!(read_chunk_header(&bytes[..11], 4), None);
+    }
+
+    #[test]
+    fn encode_chunk_round_trips_through_read_chunk_header() {
+        for body in [
+            Vec::new(),
+            vec![0u8],
+            vec![0xABu8; 255],
+            (0..=255u8).collect::<Vec<_>>(),
+        ] {
+            let bytes = encode_chunk(b"CLUS", &body);
+            let (id, size, body_start) = read_chunk_header(&bytes, 0).expect("header");
+            assert_eq!(id, *b"CLUS");
+            assert_eq!(size, body.len());
+            assert_eq!(&bytes[body_start..], &body[..]);
+        }
+    }
+
+    #[test]
+    fn reserved_chunk_ids_are_decided_by_their_first_byte_alone() {
+        // The boundary is inclusive at 0x1F; getting it wrong by one would
+        // make a future writer's chunk either skipped or misparsed.
+        for first in 0u8..=RESERVED_CHUNK_PREFIX {
+            assert!(
+                chunk_id_is_reserved(&[first, b'X', b'X', b'X']),
+                "0x{first:02X} should be reserved"
+            );
+        }
+        for first in (RESERVED_CHUNK_PREFIX + 1)..=255u8 {
+            assert!(
+                !chunk_id_is_reserved(&[first, b'X', b'X', b'X']),
+                "0x{first:02X} should not be reserved"
+            );
+        }
+        // The five defined chunk IDs are all outside the reserved range.
+        for id in [
+            CHUNK_TRAK,
+            CHUNK_TMTA,
+            CHUNK_CLUS,
+            CHUNK_IDX,
+            CHUNK_CRC1,
+        ] {
+            assert!(!chunk_id_is_reserved(&id), "{id:?} must not be reserved");
+        }
+    }
+
+    #[test]
+    fn parse_tpt_returns_the_tracks_and_packets_it_was_given() {
+        let bytes = build_tpt(
+            Timebase::MILLISECONDS,
+            &[(1, b"CIND", &[][..])],
+            &[
+                packet(1, 0, &[1, 2, 3], PacketFlags::KEYFRAME),
+                packet(1, 40, &[4, 5], PacketFlags::empty()),
+            ],
+        );
+        let (header, tracks, packets) = parse_tpt(&bytes).expect("parse");
+        assert_eq!(header, FileHeader::new(Timebase::MILLISECONDS));
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].id, 1);
+        assert_eq!(packets.len(), 2);
+        assert_eq!(packets[0].data, alloc::vec![1, 2, 3]);
+        assert_eq!(packets[0].pts.ticks, 0);
+        assert_eq!(packets[1].pts.ticks, 40);
+        assert_eq!(packets[1].data, alloc::vec![4, 5]);
+    }
+
+    #[test]
+    fn parse_tpt_rejects_a_buffer_that_is_not_a_container() {
+        assert!(parse_tpt(&[]).is_err());
+        assert!(parse_tpt(b"not a tpt file at all").is_err());
+        assert!(parse_tpt(b"TPTM").is_err());
+    }
+
+    #[test]
+    fn seek_to_offset_lands_on_the_first_cluster_at_or_after_it() {
+        let bytes = build_tpt(
+            Timebase::MILLISECONDS,
+            &[(1, b"CIND", &[][..])],
+            &[
+                packet(1, 0, &[1], PacketFlags::KEYFRAME),
+                packet(1, 40, &[2], PacketFlags::empty()),
+                packet(1, 80, &[3], PacketFlags::empty()),
+            ],
+        );
+        let mut d = TptDemuxer::new(&bytes).expect("demux");
+        d.seek_to_offset(0).expect("seek");
+        assert_eq!(d.next_packet().unwrap().pts.ticks, 0);
+
+        // Past the end: the stream is exhausted, which is an error to read
+        // but not a failure to seek.
+        d.seek_to_offset(usize::MAX).expect("seek past end");
+        assert!(d.next_packet().is_err());
+    }
+
+    #[test]
+    fn the_per_track_index_is_empty_until_rebuild_index_is_called() {
+        // `per_track` is derived state: `scan()` only fills the flat `index`,
+        // and `rebuild_index()` groups it. A freshly parsed demuxer therefore
+        // reports no per-track index, which is a real difference a caller
+        // has to know about — pinned so it cannot change silently.
+        let bytes = build_tpt(
+            Timebase::MILLISECONDS,
+            &[(1, b"CIND", &[][..])],
+            &[
+                packet(1, 0, &[1], PacketFlags::KEYFRAME),
+                packet(1, 40, &[2], PacketFlags::empty()),
+            ],
+        );
+        let mut d = TptDemuxer::new(&bytes).expect("demux");
+        assert!(d.track_index(1).is_none(), "not populated by scan()");
+        d.rebuild_index();
+        let entries = d.track_index(1).expect("populated after rebuild");
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].keyframe);
+        assert!(!entries[1].keyframe);
+        // A track with no clusters has no index, rather than an empty one.
+        assert!(d.track_index(99).is_none());
+    }
+
+    #[test]
+    fn verify_cluster_checksums_is_ok_for_a_file_written_without_them() {
+        // Clusters with no checksum field are skipped, not reported bad.
+        let bytes = build_tpt(
+            Timebase::MILLISECONDS,
+            &[(1, b"CIND", &[][..])],
+            &[packet(1, 0, &[1, 2], PacketFlags::empty())],
+        );
+        let d = TptDemuxer::new(&bytes).expect("demux");
+        assert!(d.verify_cluster_checksums().is_ok());
+    }
+
+    #[test]
+    fn with_limits_bounds_metadata_only_not_packet_size() {
+        // `ContainerError` has no `ResourceLimit` variant, and that is
+        // correct rather than a gap: the demuxer reads chunk *headers* and
+        // never copies a payload, so bounding a payload is §19's job and
+        // belongs to the codec (`ResourceLimits::check_packet`). What the
+        // container does bound is the `TMTA` block, which it parses. Pinned
+        // so widening `with_limits` to payloads is a deliberate change.
+        let mut m = TptMuxer::new(Timebase::MILLISECONDS);
+        let mut track = Track::new(
+            0,
+            MediaType::Audio,
+            CodecId::new(*b"CIND"),
+            Timebase::new(1, 48_000),
+        );
+        track.metadata = vec![(
+            "blob".to_string(),
+            MetadataValue::Bytes(alloc::vec![0xAB; 100_000]),
+        )];
+        m.register_track(&track);
+        let bytes = m.finish();
+
+        // A budget that leaves no room for the metadata block rejects it
+        // before the block is parsed.
+        let mut tight = ResourceLimits::permissive();
+        tight.max_metadata_bytes = 16;
+        assert!(matches!(
+            TptDemuxer::with_limits(&bytes, tight).err(),
+            Some(TptError::ResourceExceeded)
+        ));
+
+        // The same bytes are accepted once the budget allows them, with the
+        // metadata recovered intact.
+        let d = TptDemuxer::with_limits(&bytes, ResourceLimits::permissive()).expect("accepts");
+        assert_eq!(d.stream().tracks.len(), 1);
+        assert_eq!(d.stream().tracks[0].metadata.len(), 1);
     }
 
     #[test]

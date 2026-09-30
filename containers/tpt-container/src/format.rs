@@ -175,8 +175,19 @@ impl FileHeader {
     /// Version checking is performed here:
     /// - version must be non-zero and no greater than [`VERSION`];
     /// - `header_size` must be at least the private `MIN_HEADER_SIZE` constant;
+    /// - the timebase numerator and denominator must both be non-zero;
     /// - reserved bytes are read if present (16-byte v0.1 headers parse as
     ///   `reserved == 0`) and otherwise ignored (forward compatibility).
+    ///
+    /// The timebase check is not cosmetic. `Timebase::new` — the constructor
+    /// this used to hand the parsed values straight to — documents that a
+    /// zero component "panics in debug; in release it is treated as 1/1",
+    /// which meant a crafted file either aborted the process (debug) or was
+    /// silently re-interpreted as a *different* timebase (release), depending
+    /// on the build profile. `decode_trak` already validates its own timebase
+    /// and falls back to the header's; the header must be trustworthy for
+    /// that fallback to be one. A malformed header is an error, not a panic
+    /// three crates downstream.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, TptError> {
         if bytes.len() < MIN_HEADER_SIZE {
             return Err(TptError::BadHeader);
@@ -194,6 +205,12 @@ impl FileHeader {
         }
         let timebase_num = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
         let timebase_den = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+        // See the doc comment: a zero component is rejected here rather than
+        // reaching `Timebase::new`, whose contract is to panic (debug) or
+        // substitute `1/1` (release) depending on the build profile.
+        if timebase_num == 0 || timebase_den == 0 {
+            return Err(TptError::BadHeader);
+        }
         let reserved = if bytes.len() >= 20 {
             u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]])
         } else {
@@ -212,8 +229,15 @@ impl FileHeader {
 /// Read the next chunk header at `pos`.
 ///
 /// Returns `(id, size, body_start)`; `None` if fewer than 8 bytes remain.
+///
+/// `pos` is a caller-supplied offset, and this is a `pub` primitive, so an
+/// offset near `usize::MAX` must return `None` rather than overflow. The
+/// check is written as a subtraction so it cannot itself overflow: `pos + 8`
+/// wraps in release (turning a hostile offset into an in-bounds one that then
+/// panics on the slice) and aborts in debug.
 pub fn read_chunk_header(bytes: &[u8], pos: usize) -> Option<([u8; 4], usize, usize)> {
-    if pos + 8 > bytes.len() {
+    let remaining = bytes.len().checked_sub(pos)?;
+    if remaining < 8 {
         return None;
     }
     let mut id = [0u8; 4];

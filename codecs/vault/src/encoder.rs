@@ -194,7 +194,7 @@ impl Encoder for VaultEncoder {
         self.cfg.limits.check_frame_bytes(frame_bytes)?;
         self.cfg
             .limits
-            .check_allocation(frame_bytes * (usize::from(self.enc.max_refs) + 2))?;
+            .check_allocation(frame_bytes.saturating_mul(usize::from(self.enc.max_refs) + 2))?;
         let src = picture_from_frame(frame)?;
 
         let intra = self.next_is_keyframe() || self.refs.is_empty();

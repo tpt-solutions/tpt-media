@@ -2992,7 +2992,7 @@ it isn't a speculative abstraction with nothing validating it.
 
 ## Compatibility with Vault/Mote (§33-34)
 
-* [x] no code changes to Vault/Mote needed yet — neither has any implementation on disk. Recorded intent only: Vault's eventual prediction → partition → transform → quantisation → entropy pipeline and Mote's eventual patches → dictionary → VQ → temporal-prediction pipeline should each become expressible as one `Representation` impl, without forcing either codec's internals to look identical to the other
+* [x] no code changes to Vault/Mote needed yet — both now have implementations on disk (`codecs/vault`, `codecs/mote`), but neither has been expressed as a `Representation` yet. Recorded intent only: Vault's eventual prediction → partition → transform → quantisation → entropy pipeline and Mote's eventual patches → dictionary → VQ → temporal-prediction pipeline should each become expressible as one `Representation` impl, without forcing either codec's internals to look identical to the other
 
 One thing I particularly like about this arrangement is that if you later decide to build something like RF codecs, scientific signal codecs, telemetry compression, or robotics signal processing, the DSP work we've done for media isn't trapped inside tpt-media; it becomes part of the reusable TPT foundation.
 

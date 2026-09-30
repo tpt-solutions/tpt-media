@@ -9,6 +9,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`tpt-video-vault`: the Vault high-compression video codec (todo.md §33)**
+  (2026-09-30): new workspace member `codecs/vault`, codec id `VAUL`. An I/P
+  codec (no B-frames) with 64×64 superblocks recursively partitioned to 8×8,
+  half-pel motion vectors (pattern search, 2-tap bilinear interpolation),
+  up to 16 reference frames, four intra modes, 4×4–32×32 DCT from
+  `tpt-dsp-core`, static Rice coding, an H.263 Annex J loop filter, a
+  versioned bitstream with a CRC-32 trailer and a derived packet-size bound.
+  The RDO compares `J = D + λR` per partition node (`R` is the real writer's
+  exact bit count) and is a greedy search over a pruned candidate set —
+  **no global optimum is claimed**. 38 tests, including a corruption sweep
+  that repairs the CRC so the parser itself is exercised, resource-limit
+  tests (the first codec to exercise `max_recursion_depth`, so §19/§47's
+  recursion items are now checked), and a census test that proves
+  partitioning, half-pel motion and multiple references are actually used.
+  Measured (release, 176×144 4:2:0 synthetic clips): about 45–55 ms/frame to
+  encode, 1.9 ms to decode; forbidding partitions above 8×8 costs 63% more
+  bytes at equal quality; the loop filter helped a textured clip and hurt a
+  smooth one. Registered in the CLI's probe registry only — **not** wired
+  into `encode`/`decode` (see `todo.md` §33 for what is left open). Design
+  notes in `docs/codec-design.md`, measurements in `docs/performance.md`,
+  sources in `docs/provenance.md` (every row `under-review`: no maintainer
+  patent review yet).
 - **`tpt-web`: the WASM browser player (todo.md §45)** (2026-09-30): new
   workspace member `apps/tpt-web`. A bounded incremental `.tpt` parser
   (`StreamParser`, reusing `tpt-container`'s chunk decoders), a `DecoderTable`

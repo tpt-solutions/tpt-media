@@ -34,8 +34,7 @@ crate. The intended stack is:
 
 ## Ecosystem
 
-Only the crates implemented so far are workspace members; Vault
-lands in its `todo.md` order and is marked *(planned)* below.
+Every crate listed below is a workspace member.
 
 | Crate                  | Purpose                                                 |
 | ---------------------- | ------------------------------------------------------- |
@@ -54,7 +53,7 @@ lands in its `todo.md` order and is marked *(planned)* below.
 | [`tpt-audio-reed`](codecs/reed)        | Extremely low-bandwidth speech codec (`no_std` LPC vocoder) |
 | [`tpt-video-thrum`](codecs/thrum)   | Real-time video communication (I/P, intra refresh, 8x8 DCT)  |
 | [`tpt-cli`](apps/tpt-cli)              | Command-line encoder/decoder/probe                      |
-| `tpt-video-vault`      | *(planned)* High-compression archival video             |
+| [`tpt-video-vault`](codecs/vault)     | High-compression video (64x64 superblocks, recursive partitioning, half-pel, multi-reference, RDO) |
 | [`tpt-video-mote`](codecs/mote)       | Extreme-edge video (8x8 patch dictionary VQ, 12-bit index, temporal skip) |
 | [`tpt-web`](apps/tpt-web)              | WASM browser player (streaming decode, WebAudio + canvas demo) |
 | [`tpt-media-sys`](ffi/tpt-media-sys)       | Stable C ABI (§46: opaque handles, error codes, C header)  |

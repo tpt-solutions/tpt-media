@@ -46,8 +46,8 @@ codecs/    ← native TPT codecs, each implementing tpt-media-codec
   aura     ← high-fidelity / archival audio
   reed      ← edge / IoT speech (no_std)
   thrum ← real-time video            (implemented, todo.md §32)
-  vault    ← archival video             (planned, todo.md §33)
-  mote  ← extreme-edge video         (planned, todo.md §34)
+  vault    ← high-compression video    (implemented, todo.md §33)
+  mote  ← extreme-edge video         (implemented, todo.md §34)
 
 containers/
   tpt-container — the native .tpt format (implements tpt-media-container)

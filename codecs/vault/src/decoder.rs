@@ -243,7 +243,7 @@ impl Decoder for VaultDecoder {
         limits.check_recursion_depth(MAX_PARTITION_DEPTH + 1)?;
         let frame_bytes = self.enc.frame_bytes();
         limits.check_frame_bytes(frame_bytes)?;
-        limits.check_allocation(frame_bytes * (usize::from(self.enc.max_refs) + 2))?;
+        limits.check_allocation(frame_bytes.saturating_mul(usize::from(self.enc.max_refs) + 2))?;
 
         if packet.data.len() < CRC_TRAILER_BYTES {
             return Err(CodecError::MalformedPacket);
