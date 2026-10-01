@@ -104,10 +104,16 @@ Full design: [`docs/media-io-design.md`](../../docs/media-io-design.md).
 cargo test -p tpt-media-io
 ```
 
-32 unit tests: PCM round trips and chunked PTS, WAV byte-exactness and
-header rejection, raster round trips and the whitespace-ambiguity case,
-source/sink contracts including a stream that ends mid-sample-frame, and the
-blocking adapter.
+44 unit tests: PCM round trips and chunked PTS, WAV byte-exactness and header
+rejection, raster round trips and the whitespace-ambiguity case, the blocking
+adapter, and the sink contracts. The sink tests (2026-10-01) are the notable
+addition: `sink.rs` previously had **none**, despite holding the one piece of
+genuinely non-obvious logic in this crate — the 64 KiB auto-flush threshold that
+keeps a long stream's memory flat. They now pin that a flush happens *without*
+`finish` and lands on a frame boundary, that a rejected video item names the
+PCM/video mismatch and leaves the sink usable, that a failing writer becomes an
+`IoError` carrying the cause rather than a panic, and the empty/zero-length
+edges.
 
 ## Known limitations
 

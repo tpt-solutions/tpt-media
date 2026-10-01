@@ -13,10 +13,10 @@ readme = "README.md"
 description = "Container and codec introspection for the tpt-media stack."
 
 [dependencies]
-tpt-media-core = { workspace = true, features = ["std"] }
-tpt-media-codec = { workspace = true, features = ["std"] }
-tpt-media-container = { workspace = true, features = ["std"] }
-tpt-container = { workspace = true }
+tpt-media-core = { workspace = true, default-features = false }
+tpt-media-codec = { workspace = true, default-features = false }
+tpt-media-container = { workspace = true, default-features = false }
+tpt-container = { workspace = true, default-features = false }
 
 [features]
 default = ["std"]

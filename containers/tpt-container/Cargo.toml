@@ -13,10 +13,10 @@ readme = "README.md"
 description = "The native .tpt container format: TLV chunks, header, TRAK, CLUS, seeking, streaming."
 
 [dependencies]
-tpt-media-core = { workspace = true, features = ["std"] }
-tpt-media-bitstream = { workspace = true, features = ["std"] }
-tpt-media-codec = { workspace = true, features = ["std"] }
-tpt-media-container = { workspace = true, features = ["std"] }
+tpt-media-core = { workspace = true, default-features = false }
+tpt-media-bitstream = { workspace = true, default-features = false }
+tpt-media-codec = { workspace = true, default-features = false }
+tpt-media-container = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 
 [features]

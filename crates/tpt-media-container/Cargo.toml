@@ -13,8 +13,8 @@ readme = "README.md"
 description = "Generic container abstraction (Demuxer/Muxer traits)."
 
 [dependencies]
-tpt-media-core = { workspace = true, features = ["std"] }
-tpt-media-bitstream = { workspace = true, features = ["std"] }
+tpt-media-core = { workspace = true, default-features = false }
+tpt-media-bitstream = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 
 [features]

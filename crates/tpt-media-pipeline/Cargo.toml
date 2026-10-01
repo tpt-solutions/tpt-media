@@ -13,9 +13,9 @@ readme = "README.md"
 description = "Node-based media pipeline (Source -> Demux -> Decode -> Filter -> Encode -> Mux -> Sink)."
 
 [dependencies]
-tpt-media-core = { workspace = true, features = ["std"] }
-tpt-media-codec = { workspace = true, features = ["std"] }
-tpt-media-container = { workspace = true, features = ["std"] }
+tpt-media-core = { workspace = true, default-features = false }
+tpt-media-codec = { workspace = true, default-features = false }
+tpt-media-container = { workspace = true, default-features = false }
 
 [dev-dependencies]
 criterion = "0.8"

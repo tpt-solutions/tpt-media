@@ -13,7 +13,7 @@ readme = "README.md"
 description = "PCM/WAV/raw audio and image frame I/O plus streaming sources/sinks for the tpt-media stack (reuses tpt-dsp-io for WAV/DSP)."
 
 [dependencies]
-tpt-media-core = { workspace = true, features = ["std"] }
+tpt-media-core = { workspace = true, default-features = false }
 tpt-dsp-io = { workspace = true, optional = true }
 
 [features]

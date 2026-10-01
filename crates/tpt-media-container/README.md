@@ -91,14 +91,23 @@ unused dependency on probe.
 ## Testing
 
 ```bash
-cargo test -p tpt-media-container
+cargo test -p tpt-media-container                           # 16 tests
+cargo check -p tpt-media-container --no-default-features --target wasm32-unknown-unknown
 ```
 
-The interesting tests live in the format crate, which runs corruption and
-truncation sweeps over every byte-level parser (todo.md §24, §38). Two real
-allocation/overflow bugs were found that way (`IDX ` entry count passed
-straight to `Vec::with_capacity`; a `TMTA` length checked with wrapping
-`usize` addition on 32-bit targets).
+This crate holds the abstraction, so its tests implement a small in-crate
+`Fake` that satisfies `Container` and drive the trait's contract through it —
+a round trip, end-of-stream behaviour (`Truncated`, never a panic), empty
+inputs, and `seek_to_keyframe` at `i64::MIN`/`i64::MAX`. The `no_std` claim in
+the table above is *checked* by the second command rather than asserted, and
+that command is in CI's `wasm` job. (Both were previously untrue: the crate
+carried no `#![no_std]` attribute and was absent from that job.)
+
+The interesting byte-level tests live in the format crate, which runs
+corruption and truncation sweeps over every parser (todo.md §24, §38). Two
+real allocation/overflow bugs were found that way (`IDX ` entry count passed
+straight to `Vec::with_capacity`; a `TMTA` length checked with wrapping `usize`
+addition on 32-bit targets).
 
 ## Known limitations
 

@@ -97,7 +97,7 @@ jobs:
       # no_std foundation crates must keep compiling for wasm32 with
       # std off (todo.md §45's decoder sits on exactly these).
       - name: cargo check foundation crates for wasm32
-        run: cargo check -p tpt-media-core -p tpt-media-bitstream -p tpt-media-codec -p tpt-media-pipeline -p tpt-media-io -p tpt-media-probe --target wasm32-unknown-unknown --no-default-features --locked
+        run: cargo check -p tpt-media-core -p tpt-media-bitstream -p tpt-media-codec -p tpt-media-pipeline -p tpt-media-io -p tpt-media-probe -p tpt-media-container --target wasm32-unknown-unknown --no-default-features --locked
       # todo.md §45: the player itself as a real wasm module (cdylib), then the
       # Node smoke tests against that binary. Node exercises the wasm and the JS
       # glue; it is not a browser, so this step alone covers neither audible
