@@ -103,10 +103,14 @@ code path produces it.
   deliberately narrow: progressive only (`Ip`), `C420*`/`Cmono` only, and
   aspect ratio is parsed then discarded because the `.tpt` track model has
   no aspect field. It lives in `tpt-cli`, not in `tpt-media-io`.
-- `video-corpus` is live (2026-09-28): measures `thrum` over the §36
-  synthetic video corpus — PSNR, SSIM, bitrate, bits-per-pixel, and
-  encode/decode CPU and frame latency per scene — generating its own
-  content so it reads no files (`--fps`, `--frames`, `--json`).
+- `video-corpus` is live (2026-09-28; generalised to all three video codecs
+  2026-10-01): measures `thrum`, `vault` or `mote` (`--codec`, default
+  `thrum`) over the §36 synthetic video corpus — PSNR, SSIM, bitrate,
+  bits-per-pixel, and encode/decode CPU and frame latency per scene —
+  generating its own content so it reads no files (`--fps`, `--frames`,
+  `--json`). It reports the codec it actually measured, and counts *decoded
+  pictures* rather than packets in the frame totals, because Mote prefixes
+  its first frame with a dictionary packet that carries none.
 
 ## Testability
 

@@ -15,6 +15,21 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Added
 
+- **§38 unit-test sweep over `sink.rs`, which had none at all** (2026-10-01):
+  the crate's own README claimed its tests covered "source/sink contracts",
+  but `sink.rs` had **zero** `#[test]` functions — the claim was half true,
+  and the source half was the one with none. It also holds the only genuinely
+  non-obvious logic in the crate, so 12 tests now cover it (32 → 44 crate-wide):
+  - `VecMediaSink`: empty at construction, order-preserving collection, `len`
+    agreeing with `items()` rather than being a counter that can drift,
+    `finish()` on an empty sink, and `items()` being a snapshot;
+  - `FilePcmSink`: **the 64 KiB auto-flush threshold** — that crossing it
+    writes out *without* `finish` and lands on a frame boundary, which is the
+    property that keeps memory flat over a long stream; buffering until
+    `finish`; `finish` idempotence; empty sink and zero-length frame; a video
+    item rejected with an error that names the PCM/video mismatch **and** leaves
+    the sink usable; and a failing writer surfacing as an `IoError` carrying the
+    cause rather than a panic.
 - **Per-crate README, changelog, keywords and categories** (2026-09-30):
   crate-specific `README.md` and manifest `keywords`/`categories`.
 - `examples/io_tour.rs`: a runnable tour of the byte-exact WAV and PPM round
@@ -24,6 +39,16 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Fixed
 
+- **The crate could not actually be built without `std`** (2026-10-01, found
+  while auditing every crate's `no_std` claim). The `std` feature, the
+  `#![cfg_attr(not(feature = "std"), no_std)]` attribute, the README's
+  `no_std: Yes` row and CI's `wasm` job all said the crate builds without std
+  — but `tpt-media-core` was pinned in `[dependencies]` with
+  `features = ["std"]`, which turns `std` on for the whole graph no matter what
+  the consumer asks for. So `--no-default-features` could not switch it off and
+  the CI check could not have caught a real `std` leak. Now
+  `default-features = false`, with `std` still forwarded through this crate's
+  own `std` feature. Verified with the exact CI command.
 - The tests' hand-rolled no-op waker was replaced with `Waker::noop()`, which
   has been stable since the declared MSRV (surfaced 2026-09-29 when a
   `wasm32` check cache invalidated and clippy re-ran).

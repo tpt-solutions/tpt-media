@@ -18,6 +18,17 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Fixed
 
+- **The crate forced `std` onto everything that depends on it** (2026-10-01,
+  found while auditing every crate's `no_std` claim). This crate is std-only
+  by design and its README says so, but all four of its dependencies were
+  pinned with `features = ["std"]` in `[dependencies]`, which enables `std`
+  for the whole resolved graph no matter what a consumer selects. That made
+  `--no-default-features` a no-op for downstream `no_std` crates
+  (`tpt-media-probe` in particular), and meant the CI `wasm` job — which checks
+  the foundation crates with `std` off — could not have failed on a genuine
+  `std` leak. Now `default-features = false`, with `std` still forwarded
+  through this crate's own `std` feature. The crate's own build is unchanged.
+- **A `.tpt` with a zero timebase component aborted the process.**
 - **A `.tpt` with a zero timebase component aborted the process.**
   `FileHeader::from_bytes` handed the file's own numerator and denominator
   straight to `Timebase::new`, whose documented contract is "a zero component

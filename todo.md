@@ -1971,6 +1971,23 @@ scene through real Thrum round trips):
 * [ ] empty input
 * [ ] maximum values
 
+Audited crate by crate against the categories above, since the umbrella items
+can only be checked when every crate has been swept. **Every foundation crate
+has now been swept** (2026-09-30 → 2026-10-01):
+`tpt-media-bitstream`, `tpt-container`, `tpt-media-codec`,
+`tpt-media-pipeline`, `tpt-media-representation`, `tpt-media-research`,
+`tpt-media-container` (1 → 16 tests; its single previous test asserted nothing
+that could fail), `tpt-media-io` (`sink.rs` 0 → 12 tests; it held the 64 KiB
+auto-flush logic and nothing tested it) and `apps/tpt-web`.
+
+The umbrella items stay `[ ]` deliberately: "every public primitive" is a
+stronger claim than "every crate has been swept", and a sweep is a point-in-time
+audit that new public items immediately invalidate. Each one so far has found
+real defects — two profile-dependent answers in `tpt-media-representation` and
+`tpt-media-pipeline`, two division-by-zero paths in the research crate, and one
+documented-but-unimplemented `no_std` claim in `tpt-media-container` — which is
+the reason for doing them one crate at a time.
+
 ## Property tests
 
 All five, 2026-09-14, following the project's dependency-free seeded
@@ -2309,17 +2326,34 @@ Create `tpt-web`.
       (Aura lossless round-trips bit-exactly), graceful end on a truncated
       stream. Tested natively and as wasm under Node. The *browser* playback
       scheduler is under the two items below
-* [ ] browser audio output — `web/tpt-web.js` schedules planar `f32` chunks
+* [x] browser audio output — `web/tpt-web.js` schedules planar `f32` chunks
       ahead of the `AudioContext` clock (underrun re-anchoring, pause via
       `suspend`). Its control flow is executed against a **fake**
       `AudioContext` (`web/mock-browser.mjs`: 375 buffers back to back, 4.0000
-      s total); it has **not been run in a real browser**, so no sound has
-      actually been heard. Check this when it has
-* [ ] browser video output — `putImageData` of RGBA8 pictures paced from
+      s total) **and against a real one** (2026-10-01,
+      `web/browser-check.mjs` + `serve.mjs`; headless Chrome, unmodified
+      player): a real `AudioContext` created and released by the player
+      (`state` back to `closed` at end of stream, `baseLatency` 0.01 s),
+      375 real `AudioBufferSourceNode`s handed 4.0000 s of mono 48 kHz PCM
+      that the browser accepted, scheduled back to back against the real
+      clock with no gap, every buffer non-silent. **What this does not
+      establish: that a human has heard anything.** It proves the browser
+      took the audio and the clock advanced (4.141 s of context time for
+      4.0 s of media); it cannot prove the result is *audible*, only
+      correct. On a machine with no audio output device the clock never
+      moves, so the check reports these items as "not verifiable here"
+      rather than passing.
+* [x] browser video output — `putImageData` of RGBA8 pictures paced from
       `requestAnimationFrame` against the audio clock (stale pictures
-      dropped). Exercised only against a fake canvas; **not run in a real
-      browser**. RGBA conversion itself (full-range BT.601, NV12, gray, RGB)
-      is unit-tested natively
+      dropped). Exercised against a fake canvas, and against a **real** one
+      (2026-10-01, `web/browser-check.mjs`): a real 160x96 canvas read back
+      through the browser's own `getImageData` — 2834 distinct colours,
+      every one of 15 360 pixels opaque, full 0-255 contrast, 60 pictures
+      presented and 0 dropped over the 4 s demo, 0 decode errors. RGBA
+      conversion itself (full-range BT.601, NV12, gray, RGB) is unit-tested
+      natively. The check deliberately asserts *that a real rasterisation
+      of a real decoded picture happened*, not that the picture is the
+      right one.
 * [x] JavaScript bindings — 18 `extern "C"` exports over integer handles
       (no pointer flows JS to Rust; `unsafe` confined to `abi.rs`) plus
       `web/tpt-decoder.js`. **Deliberately not `wasm-bindgen`**, justified in
@@ -2334,12 +2368,18 @@ Create `tpt-web`.
       (`web/build.mjs`, default 512 MiB). `docs/security.md`,
       `docs/web-design.md` §7. `max_decode_micros`/cancellation remain
       unused (§19 open items)
-* [ ] browser demo — `web/index.html` + `tpt-web.js` + `tpt-decoder.js` +
+* [x] browser demo — `web/index.html` + `tpt-web.js` + `tpt-decoder.js` +
       `demo.tpt`; static, no bundler, plays the demo, a local file or a URL.
-      Written and logic-tested against fakes, **never opened in a real
-      browser** (none was available), so it is not claimed to work there.
-      Check this once it has been loaded, seen and heard in at least one
-      browser
+      Logic-tested against fakes, **and loaded in a real browser**
+      (2026-10-01, `web/browser-check.mjs`): the shipped `index.html` is
+      loaded same-origin in an iframe and its own "Play demo.tpt" button
+      clicked, with nothing in the page patched or stubbed — the
+      assertions read the text the page writes into its own `#stats`
+      and `#error` boxes. It reached end of stream in 4.2 s, its media
+      clock advanced to 4 s, it presented 60 pictures with 0 decode
+      errors, and its canvas ended up 160x96. Opening the same page by
+      hand in Chrome is still worth doing: the check reads the page's
+      counters, it cannot see the page.
 * [x] performance benchmark — `cargo bench -p tpt-web` (native) and
       `web/bench.mjs` (the same byte-identical inputs as wasm under
       Node/V8). Real numbers in `docs/performance.md`: e.g. Cinder 30 s
@@ -2851,8 +2891,23 @@ Before 0.3:
       reference loop; 45 unit + 6 property + §41/§42 tests, CLI codec
       table wiring, measured latency/rate/memory in
       `docs/performance.md`, design + provenance records (2026-09-28)
-* [ ] WASM decoder
-* [ ] stable container specification
+* [x] WASM decoder — `apps/tpt-web` (todo.md §45, 2026-09-30; browser-verified
+      2026-10-01): builds for `wasm32-unknown-unknown` (328 KiB), 18
+      `extern "C"` exports over integer handles, a bounded incremental `.tpt`
+      parser, hard memory limits, and a WebAudio/canvas player. 49 native
+      tests, 11 Node checks against the built wasm, and 29 checks in a real
+      headless browser. Audited 2026-10-01: this line was last touched
+      2026-09-07, before any of it existed
+* [ ] stable container specification — **deliberately left unchecked, and the
+      distinction is the point.** The specification *exists* and is verified
+      against the implementation: `docs/container-design.md` is field-by-field
+      for the header, `TRAK`/`TMTA`/`CLUS`/`IDX `/`CRC1`, seek and streaming
+      behaviour (todo.md §49's item is checked), and the header already carries
+      a major/minor version with unknown chunks skipped by design. What is
+      *not* done is the commitment: CONTRIBUTING §9-§11 gives no pre-1.0
+      stability guarantee, so the format may still break. Audited 2026-10-01 —
+      this line and its neighbours are all from 2026-09-07 and were never
+      revisited after the spec landed.
 * [ ] benchmark suite — the workspace now has one (§41), including
       Thrum-era benches recorded 2026-09-28; what remains ahead of
       this gate's original intent is Vault/Mote-era benches and
@@ -2862,7 +2917,13 @@ Before 0.3:
 
 Before 0.4:
 
-* [ ] Vault prototype
+* [x] Vault prototype — `codecs/vault` v0.1, 2026-09-30 (§33): 64×64
+      superblocks partitioned to 8×8, half-pel motion, up to 16 references,
+      2D DCT 4×4–32×32, static Rice, an H.263 Annex J loop filter, RDO on
+      `J = D + λR`, versioned bitstream with a CRC-32 trailer. Driven by
+      `tpt-cli` (`--codec vault`) and measured over the §36 corpus. Audited
+      2026-10-01: this line was last touched 2026-09-07, before the crate
+      existed
 * [x] Mote prototype — `codecs/mote` v0.1, 2026-09-30 (§34)
 * [ ] advanced quality testing
 * [ ] security hardening

@@ -286,9 +286,16 @@ Known sharp edges, stated plainly:
   dictionary size, not by a target.
 - **The encoder is not real-time** (`real_time_encoder` is false): a key
   frame is one accelerated 4096-entry search per patch.
-- **Not wired into `tpt encode`/`decode`.** Mote is registered in the
-  CLI's probe registry only; a y4m bridge would touch five command
-  paths in `tpt-cli`.
+- **Not wired into the `tpt-web` player.** It *is* driven by `tpt-cli`:
+  `--codec mote` works for `encode`, `decode`, `transcode` and `benchmark`
+  through the y4m bridge, it is in the probe capability table, and
+  `tpt video-corpus --codec mote` measures it over the §36 corpus.
+  `tpt-web`'s `DecoderTable` has no Mote entry yet (it takes a
+  `DecoderBuilder`; see `docs/web-design.md` §8). The measured cross-codec
+  figures are in `todo.md` §33 — on a static-camera codec like this the
+  honest summary is that its rate is dominated by the one-off dictionary
+  packet and its quality collapses on high motion, which is what it was
+  built for.
 - Tree/product quantisation for larger dictionaries (todo.md §8) is not
   implemented; the search is the accelerated linear scan.
 
@@ -431,10 +438,16 @@ Known sharp edges, stated plainly:
 - **Closed-loop exactness assumes the same build and target on both sides**;
   the transform is `f32` and the workspace makes no cross-target bit-exactness
   claim (todo.md §39).
-- **Not wired into `tpt encode`/`decode`.** Vault is registered in the CLI's
-  probe registry only (like Mote); a y4m bridge would need the video command
-  paths generalised beyond Thrum. Its quality has not been measured over the
-  §36 video corpus.
+- **Not wired into the `tpt-web` player.** It *is* driven by `tpt-cli`:
+  `--codec vault` works for `encode`, `decode`, `transcode` and `benchmark`
+  through the y4m bridge, it is in the probe capability table, and
+  `tpt video-corpus --codec vault` measures it over the §36 corpus. Its
+  quality over that corpus is now measured (`todo.md` §33): uniformly higher
+  PSNR than Thrum at the same `qp`, and on the three predictable scenes also
+  *smaller* (87 B vs 312 B at camera-motion), but it pays in encode CPU —
+  17-104 ms/frame against Thrum's 4-7, so it misses the 33.3 ms frame budget
+  on every scene except the two easiest. Those are synthetic clips at a
+  shared `qp`, so they support no cross-codec compression claim.
 
 ## Common Patterns
 

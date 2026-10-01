@@ -24,6 +24,17 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Fixed
 
+- **The crate could not actually be built without `std`** (2026-10-01, found
+  by auditing every crate's `no_std` claim). The `std` feature, the
+  `#![cfg_attr(not(feature = "std"), no_std)]` attribute, the README's
+  `no_std: Yes` row and CI's `wasm` job all said the crate builds without std
+  — but every dependency was pinned in `[dependencies]` with
+  `features = ["std"]`, which turns `std` on for the whole graph whatever a
+  consumer asks for. `--no-default-features` therefore could not switch it off,
+  and the CI check could not have failed on a real `std` leak. Now
+  `default-features = false`, with `std` still forwarded through this crate's
+  own `std` feature. Verified with the exact CI command.
+- The crate did not compile for `wasm32-unknown-unknown` with `std` off
 - The crate did not compile for `wasm32-unknown-unknown` with `std` off
   despite carrying the `no_std` switch — `format!`/`ToString` came from the
   std prelude and the `alloc` imports were missing. Every std build masked it;

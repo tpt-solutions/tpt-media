@@ -15,6 +15,17 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Fixed
 
+- **The crate could not actually be built without `std`** (2026-10-01, found
+  by auditing every crate's `no_std` claim). The `std` feature, the
+  `#![cfg_attr(not(feature = "std"), no_std)]` attribute, the README's
+  `no_std: Yes` row and CI's `wasm` job all said the crate builds without std
+  — but all three dependencies were pinned in `[dependencies]` with
+  `features = ["std"]`, which turns `std` on for the whole graph whatever a
+  consumer asks for. `--no-default-features` therefore could not switch it off,
+  and the CI check could not have failed on a real `std` leak. Now
+  `default-features = false`, with `std` still forwarded through this crate's
+  own `std` feature. Verified with the exact CI command.
+- **`Source::from_range` answered differently depending on the build
 - **`Source::from_range` answered differently depending on the build
   profile.** Converting an exclusive end bound to an inclusive one formed
   `hi - 1`, which underflows at the ends of the type: `from_range(..0u8)` was

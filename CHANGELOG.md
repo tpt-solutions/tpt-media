@@ -26,11 +26,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Measured (release, 176×144 4:2:0 synthetic clips): about 45–55 ms/frame to
   encode, 1.9 ms to decode; forbidding partitions above 8×8 costs 63% more
   bytes at equal quality; the loop filter helped a textured clip and hurt a
-   smooth one. Registered in the CLI's probe registry only � **not** wired
-   into `encode`/`decode` (see `todo.md` �33 for what is left open). Design
-  notes in `docs/codec-design.md`, measurements in `docs/performance.md`,
-  sources in `docs/provenance.md` (every row `under-review`: no maintainer
-  patent review yet).
+  smooth one. **Wired into the CLI** (2026-10-01): `--codec vault` drives
+  `encode`, `decode`, `transcode` and `benchmark` through the y4m bridge, and
+  `tpt video-corpus --codec vault` measures it over the §36 corpus
+  (cross-codec figures in `todo.md` §33). Not yet a `tpt-web` dependency.
+  Design notes in `docs/codec-design.md`, measurements in
+  `docs/performance.md`, sources in `docs/provenance.md` (every row
+  `under-review`: no maintainer patent review yet).
 - **`tpt-web`: the WASM browser player (todo.md §45)** (2026-09-30): new
   workspace member `apps/tpt-web`. A bounded incremental `.tpt` parser
   (`StreamParser`, reusing `tpt-container`'s chunk decoders), a `DecoderTable`
@@ -50,13 +52,157 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Verified: 49 native tests; `web/check.mjs` runs the built wasm under Node
   (exact 192 000-sample / 60-frame decode, 300 hostile files with zero traps);
   `web/mock-browser.mjs` runs the playback JS against *fake* WebAudio/canvas.
-  **Not verified: real browser audio/video output** (no browser was
-  available). Benchmarks (`cargo bench -p tpt-web`, `web/bench.mjs`) and their
+  **Real browser audio/video output was not verified when this was written
+  (no browser was available) and is verified by the next entry.**
+  Benchmarks (`cargo bench -p tpt-web`, `web/bench.mjs`) and their
   measured, noise-caveated numbers are in `docs/performance.md`; memory limits
   are in `docs/security.md`. CI's `wasm` job now builds the module and runs
   the Node scripts. Also fixed stale "planned" statements in `README.md` and
   `ARCHITECTURE.md`. Per-crate README, CHANGELOG, keywords and categories per
   CONTRIBUTING §9.4.
+- **`tpt-media-io`, `tpt-media-pipeline` and `tpt-media-probe` could not
+  actually be built without `std`** (2026-10-01, found by auditing every
+  crate's `no_std` claim after finding the same defect in
+  `tpt-media-container`). All three carry a `std` feature, a
+  `#![cfg_attr(not(feature = "std"), no_std)]` attribute, a README claiming
+  `no_std` with a CI `wasm` job backing it — and all three *also* pinned their
+  own dependencies with `features = ["std"]` in `[dependencies]`. That
+  unconditionally enables `std` across the dependency graph, so
+  `--no-default-features` on the crate under test could never turn `std` off:
+  **CI's own wasm check was not testing what it claimed to**, and could not
+  have failed on a genuine `std` leak. The build still compiled because the
+  leaked `std` was there, so the defect was invisible to any check that did
+  not inspect the resolved graph. Dependencies now use
+  `default-features = false`, matching `tpt-media-codec`/`-container`, with
+  `std` still forwarded through each crate's own `std` feature. Verified by
+  re-running the exact CI command: it now passes with `std` genuinely off,
+  and the default builds and tests are unchanged.
+- **`tpt-container` was why three of those crates still could not drop `std`,
+  not just itself** (2026-10-01, found by tracing the resolved graph instead
+  of stopping at the first fix that made the build pass). It is std-only by
+  design and its README says so — but it pinned all four of its dependencies
+  with `features = ["std"]`, forcing `std` into every graph that depends on it,
+  `tpt-media-probe` included. Fixing the three leaf crates alone still left
+  `std` resolved (confirmed with `cargo tree -e features`); only this manifest
+  cleared it. Its own build is unaffected: it is std-only now because it
+  *declares* that, rather than because it leaks it into its dependents.
+- **The `no_std` CI gate was never capable of failing** (same audit; the part
+  that matters). Injecting a real `std::` use into a
+  `#![cfg(not(feature = "std"))]` item in `tpt-media-probe` and re-running the
+  exact `wasm` job command now **fails** (exit 101), and passes again once
+  removed — so the gate tests what it claims to. Before these fixes it would
+  have passed either way, because the manifests force-enabled `std`: a genuine
+  leak could not have been caught by the check written to catch it. The codec
+  crates, `tpt-cli` and `tpt-web` still pin `features = ["std"]`; that is
+  correct for them (std-only, or wasm-with-std by design) and left alone.
+- **§38 unit-test sweep over `tpt-media-io`'s `sink.rs`, which had no tests
+  at all** (2026-10-01): the crate's README listed "source/sink contracts"
+  among its covered areas, and the source half had 5 tests — the sink half had
+  **zero**, while containing the crate's only non-obvious logic: the 64 KiB
+  auto-flush threshold that keeps a long stream's memory flat. 12 tests now
+  cover it (32 → 44 crate-wide), pinning that crossing the threshold flushes
+  *without* `finish` and on a frame boundary, that a video item is rejected
+  with an error naming the PCM/video mismatch and leaves the sink usable, and
+  that a failing writer becomes an `IoError` carrying the cause rather than a
+  panic. The README's "32 unit tests … source/sink contracts" is corrected to
+  44 and to say what the sink tests actually pin. This completes the §38
+  sweep: every foundation crate has now been audited.
+- **`tpt-media-container` claimed `no_std` in three places and was not
+  `no_std`** (2026-10-01, found while auditing crates against §38's unit-test
+  gate). The README's "At a glance" table said `no_std: Yes — builds for
+  wasm32-unknown-unknown (CI job wasm)`, and the manifest listed `no-std` in
+  both `keywords` and `categories` — but `src/lib.rs` had **no `#![no_std]`
+  attribute at all**, and the manifest pinned its dependencies with
+  `features = ["std"]` instead of `default-features = false`. So
+  `--no-default-features` could not turn `std` off, and a build with it
+  "passed" while still using `std` — the claim was untested rather than
+  false, which is the harder failure to notice. The crate was also simply
+  **absent from CI's `wasm` job**, so nothing had ever compiled it for
+  `wasm32` at all. Fixed to match the pattern its sibling
+  `tpt-media-codec` already uses (`#![cfg_attr(not(feature = "std"), no_std)]`
+  + `#![forbid(unsafe_code)]` + `extern crate alloc`), and added to the `wasm`
+  job's list so the claim is now enforced instead of asserted.
+- **§38 unit-test sweep over `tpt-media-container`'s public API** (2026-10-01):
+  the crate had **one** test, and it could not fail — it constructed a `Chunk`
+  and read back the two fields it had just assigned. 16 tests now (1 → 16),
+  driven through an in-crate `Fake` that actually implements `Container`, so
+  the trait's *contract* is exercised and not just its syntax: write/read
+  round trip, end of stream (`Truncated`, never a panic or a silent `Ok`),
+  empty container and zero-length body/payload, `seek_to_keyframe` at
+  `i64::MIN`/`i64::MAX`, `stream`/`tracks` on a shared borrow, and the derives
+  (`Clone` is a deep copy; `Eq` compares both fields; every `ContainerError`
+  variant is nameable with its payload).
+- **Two release-gate checklist items in `todo.md` §53 were stale, not
+  pending** (2026-10-01): `WASM decoder` and `Vault prototype` were both still
+  `[ ]` — last touched 2026-09-07, before either existed. The WASM decoder is
+  `apps/tpt-web` (§45, 49 native tests + 11 Node checks + 29 real-browser
+  checks) and Vault is `codecs/vault` v0.1 (§33, in `tpt-cli`, corpus
+  measured). Both verified against the built artifacts before ticking, not
+  against the claim. A neighbouring item, `stable container specification`,
+  is annotated rather than ticked, and the annotation is the point: the spec
+  exists and is field-by-field, but *stability* is a pre-1.0 commitment that
+  CONTRIBUTING §9-§11 explicitly does not make yet.
+- **Five stale "not wired into the CLI" claims, left behind by the commit that
+  wired them in** (2026-10-01): `b6cf60d` made `--codec vault` and
+  `--codec mote` drive `encode`, `decode`, `transcode`, `benchmark` and
+  `video-corpus`, and updated `todo.md`, the two codec READMEs and the
+  `tpt-cli` changelog — but not `docs/codec-design.md` or the root
+  `CHANGELOG.md`, which still told a reader the opposite. Fixed: the Mote and
+  Vault sections of `docs/codec-design.md` said "**Not wired into
+  `tpt encode`/`decode`** ... registered in the probe registry only; a y4m
+  bridge would touch five command paths", and Vault's added "Its quality has
+  not been measured over the §36 video corpus" — all untrue, and Vault's
+  corpus numbers have been measured and recorded in `todo.md` §33. Both now
+  say what is actually true: the CLI drives them, and what genuinely is *not*
+  wired is the `tpt-web` player, whose `DecoderTable` still has no Vault or
+  Mote entry. `docs/cli-design.md` also still described `video-corpus` as
+  measuring `thrum` alone. Re-verified against the built binary rather than
+  the source: `list-codecs` lists all three, and a 64x48 `C420jpeg` y4m
+  fixture encodes and decodes byte-exactly through both `--codec vault`
+  (3 632 B) and `--codec mote` (1 806 B), 27 725 B in and out.
+- **Two U+FFFD replacement characters in this file** (2026-10-01), in the Vault
+  entry: an em dash and a section sign that had been written as mojibake, so
+  `todo.md` §33 was cited as `todo.md` <FFFD>33. Both repaired. Found by
+  scanning the repository's markdown for U+FFFD, not by reading the file —
+  they render as a blank-ish glyph, and the paragraph around them reads
+  fluently enough to pass over.
+- **`tpt-web` now runs in a real browser** (2026-10-01, todo.md §45): the
+  last three open §45 items — browser audio output, browser video output and
+  the browser demo — were blocked on exactly one thing, *no browser existed in
+  the environment where the player was written*. One does now, so
+  `web/browser-check.mjs` + `web/serve.mjs` (zero-dependency, like the rest of
+  `web/`) serve the folder over http and drive the **unmodified** player in
+  headless Chrome/Edge: a real `AudioContext` observed by subclassing it (so
+  every call still reaches the genuine object), a real 2D canvas read back
+  through the browser's own `getImageData`, real `requestAnimationFrame`, the
+  real wasm. 29 checks, all passing, repeated 3x at ~8.8 s: the context is
+  created and released (`state` back to `closed`, `baseLatency` 0.01 s), 375
+  real `AudioBufferSourceNode`s are handed 4.0000 s of non-silent mono 48 kHz
+  PCM scheduled back to back against the real clock, the canvas holds a real
+  decoded picture (2834 distinct colours, 15 360/15 360 opaque, 0 frames
+  dropped, 0 decode errors), and the shipped `index.html` — loaded same-origin
+  in an iframe with nothing patched, its own button clicked — reaches end of
+  stream and presents 60 pictures. CI's `wasm` job now runs it too.
+  **What it still does not establish: that a human has heard anything.** It
+  shows the browser accepted the audio and its clock advanced, which is
+  correctness, not audibility. And the check is built not to fake that gap: on
+  a machine with no audio output device the clock cannot move, so the
+  playback-dependent checks print `SKIP` ("not verifiable here") rather than
+  passing, a missing browser exits non-zero instead of skipping, and the page
+  POSTs its report rather than being raced against `--dump-dom`.
+  `mock-browser.mjs` is kept alongside it — the fake run is the CI-portable
+  one, the real one answers a different question.
+- **`browser-check.html` had never run in any browser, because it was a
+  syntax error** (2026-10-01). Its `if (!played) ... else {` block was never
+  closed, so the inline module threw `SyntaxError: Unexpected end of input`
+  before executing one line; the page sat at "running…" and the driver
+  reported a bare 120 s timeout with no output at all. Found by loading the
+  page in Chrome and reading its console — a file that no linter, no parser
+  and no test had ever touched. The page is also now guarded against the
+  tempting CI misreading: "context released at end of stream" is asserted only
+  once playback has actually run, since a runner with no audio device never
+  reaches that point and would otherwise have reported a false failure for
+  the one machine the `SKIP` branch exists to accommodate.
 
 - **Mote implemented — `tpt-video-mote` (`codecs/mote`, todo.md §34)**
   (2026-09-30): the extreme edge/IoT video codec, now a workspace member.
@@ -93,6 +239,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `MOTE` track reports decoder/encoder support) but is **not** driven by
   `tpt encode`/`decode`/`benchmark`: that needs `VideoCodec` threaded through
   five command paths, left out to avoid colliding with concurrent CLI work.
+  **Superseded 2026-10-01:** that threading is done — `--codec mote` now
+  drives `encode`, `decode`, `transcode`, `benchmark` and `video-corpus` (see
+  the `tpt-cli` entry below).
 - **The y4m bridge could not parse any YUV4MPEG2 file** (2026-09-30): the
   header parser consumes `C` as the *tag* and stores only what follows
   (`"420jpeg"`), but the colorspace match compared the *full tag*
