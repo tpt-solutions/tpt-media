@@ -142,6 +142,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   is annotated rather than ticked, and the annotation is the point: the spec
   exists and is field-by-field, but *stability* is a pre-1.0 commitment that
   CONTRIBUTING §9-§11 explicitly does not make yet.
+- **`tpt-web`'s documented extension point is unreachable from a browser**
+  (2026-10-01, found by asking who can actually reach it). `DecoderTable` is
+  billed as "the extension point" for Vault and Mote, and `docs/web-design.md`
+  §8 is titled "Extension point for Vault and Mote" — but `tpt_web_open` builds
+  its player with `Player::new(limits)`, which is `DecoderTable::native()`
+  exactly, and none of the 18 ABI exports can accept a table. A
+  `DecoderBuilder` is a Rust `fn` pointer, so it could not cross the wasm
+  boundary in any case. **No amount of `register` makes a codec playable in a
+  browser**; the only route is for it to become a dependency of `tpt-web` and
+  get one line in `DecoderTable::native()`. That is why Vault and Mote are
+  reachable by the CLI and not by the web player, and it was stated nowhere, so
+  §8 read as though browser registration were available. Now recorded in
+  `docs/web-design.md` §8, the crate README, and on `tpt_web_open` itself. No
+  behaviour changed — an ABI function taking a table would mean shipping
+  function pointers across the boundary, which §4's "no pointer flows from JS
+  into Rust" rule rules out; per-codec feature flags or per-codec `open_*`
+  entry points are the alternatives, neither built nor claimed.
 - **Five stale "not wired into the CLI" claims, left behind by the commit that
   wired them in** (2026-10-01): `b6cf60d` made `--codec vault` and
   `--codec mote` drive `encode`, `decode`, `transcode`, `benchmark` and

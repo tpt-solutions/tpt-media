@@ -113,6 +113,16 @@ pub extern "C" fn tpt_web_abi_version() -> u32 {
 /// Open a player. Each argument overrides one default limit; `0` keeps the
 /// default. All are clamped to [`WebLimits::ceiling`]. Returns the handle,
 /// or `0` if [`MAX_PLAYERS`] are already open.
+///
+/// **The codec set is fixed at `DecoderTable::native()`** and cannot be
+/// changed from here. There is deliberately no ABI entry point that accepts a
+/// `DecoderTable`: a `DecoderBuilder` is a Rust `fn` pointer, and passing one
+/// across the wasm boundary would break the module's "no pointer flows from JS
+/// into Rust" rule (see `docs/web-design.md` §4). The practical consequence is
+/// that a codec only becomes playable in a browser by becoming a dependency of
+/// `tpt-web` and being added to `DecoderTable::native()`; `Player::with_table`
+/// is the route for Rust callers embedding the `rlib` natively. See
+/// `docs/web-design.md` §8.
 #[no_mangle]
 pub extern "C" fn tpt_web_open(
     max_input_bytes: u32,

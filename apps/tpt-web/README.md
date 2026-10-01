@@ -150,6 +150,15 @@ WebError>`) and either `table.register(...)` it on a table passed to
 `Player::with_table`, or add one line to `DecoderTable::native()`. Nothing
 else changes; see [`docs/web-design.md`](../../docs/web-design.md) section 8.
 
+> **The extension point is Rust-only.** `tpt_web_open` builds its player with
+> `DecoderTable::native()` and no ABI function accepts a table (a
+> `DecoderBuilder` is a Rust `fn` pointer, which cannot cross the wasm
+> boundary). So from a browser the only route is: add the codec as a dependency
+> of `tpt-web` and put one line in `DecoderTable::native()`. `register` is for
+> Rust callers embedding the `rlib`. This is a real limitation, not a design
+> intent — it is why the two video codecs play in the CLI and not in the web
+> player.
+
 ## Testing
 
 ```bash

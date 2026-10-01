@@ -201,6 +201,26 @@ player, parser and ABI know nothing about concrete codecs; they speak
    table given to `Player::with_table`, or add one line to
    `DecoderTable::native()` once the codec crate is a dependency of `tpt-web`.
 
+**The extension point is Rust-only, and that is a real limitation** (recorded
+2026-10-01, found by asking who can actually reach it). `tpt_web_open` builds
+its player with `Player::new(limits)`, which is `DecoderTable::native()`
+exactly; there is no ABI entry point that accepts a table, and a
+`DecoderBuilder` is a Rust `fn` pointer that cannot cross the boundary in any
+case. So a browser consumer cannot register Vault or Mote, and would not
+benefit from a table extension point if one existed: **the only way a codec
+becomes playable in a browser today is to become a dependency of `tpt-web` and
+be added to `DecoderTable::native()`.** The `register` route exists for Rust
+callers embedding the crate natively (`tpt-web` is also an `rlib`), and for
+the eventual case where the table could be selected through the ABI.
+
+That makes the two video codecs reachable by the CLI but not by the web
+player, and it is the honest current state rather than a design intent: adding
+an ABI function to select a table would mean shipping function pointers across
+the wasm boundary, which §4's "no pointer flows from JS into Rust" rule rules
+out. The alternatives are a per-codec feature flag on `tpt-web`, or a second
+`open_*` entry point per codec, both of which put concrete codec names back
+into the ABI. Neither is built; neither is claimed.
+
 `a_registered_codec_plays_without_touching_the_player` (a fake codec) proves
 step 2 needs no other change. Two constraints a new codec meets:
 

@@ -184,22 +184,21 @@ pub fn denormalize_from_f32(samples: &[f32], format: SampleFormat) -> Vec<u8> {
         };
         match format {
             SampleFormat::U8 => {
-                let v = (clamped * 128.0).round() as i32 + 128;
+                let v = libm::round(f64::from(clamped) * 128.0) as i32 + 128;
                 out.push(v.clamp(0, 255) as u8);
             }
             SampleFormat::S16 => {
-                let v = (clamped * 32_768.0).round().clamp(-32_768.0, 32_767.0) as i16;
+                let v =
+                    libm::round(f64::from(clamped) * 32_768.0).clamp(-32_768.0, 32_767.0) as i16;
                 out.extend_from_slice(&v.to_le_bytes());
             }
             SampleFormat::S24 => {
-                let v = (clamped * 8_388_608.0)
-                    .round()
+                let v = libm::round(f64::from(clamped) * 8_388_608.0)
                     .clamp(-8_388_608.0, 8_388_607.0) as i32;
                 out.extend_from_slice(&v.to_le_bytes()[..3]);
             }
             SampleFormat::S32 => {
-                let v = (clamped * 2_147_483_648.0)
-                    .round()
+                let v = libm::round(f64::from(clamped) * 2_147_483_648.0)
                     .clamp(-2_147_483_648.0, 2_147_483_647.0) as i32;
                 out.extend_from_slice(&v.to_le_bytes());
             }

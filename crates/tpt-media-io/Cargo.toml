@@ -15,6 +15,11 @@ description = "PCM/WAV/raw audio and image frame I/O plus streaming sources/sink
 [dependencies]
 tpt-media-core = { workspace = true, default-features = false }
 tpt-dsp-io = { workspace = true, optional = true }
+# `no_std` float methods (`f32::round`, `f64::sin`) are std-only. The
+# workspace convention is to call them through `libm` explicitly, as
+# `tpt-media-core` and `codecs/reed` already do — inherent methods are
+# ambiguous under `no_std` and resolve to the std ones when `std` is on.
+libm = "0.2"
 
 [features]
 default = ["std"]

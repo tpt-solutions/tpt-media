@@ -14,6 +14,25 @@ lockstep with the workspace.
 
 ### Added
 
+- **Recorded the `tpt-web` extension point's real reachability** (2026-10-01,
+  found by asking who can actually call it rather than re-reading the claim).
+  `DecoderTable` is described as "the extension point" for Vault and Mote, and
+  `docs/web-design.md` §8 is titled "Extension point for Vault and Mote" — but
+  `tpt_web_open` builds its player with `Player::new(limits)`, which is
+  `DecoderTable::native()` exactly. None of the 18 ABI exports can accept a
+  table, and a `DecoderBuilder` is a Rust `fn` pointer that could not cross the
+  boundary in any case. So **the extension point is unreachable from a
+  browser**: no amount of `register` makes Vault or Mote playable in one, and
+  the only route is for a codec to become a dependency of `tpt-web` and get one
+  line in `DecoderTable::native()`. That is the honest current state — the two
+  video codecs are reachable by the CLI and not by the web player — and it was
+  not stated anywhere, so the section read as though browser registration were
+  available. Documented in `docs/web-design.md` §8, the crate README, and on
+  `tpt_web_open` itself where a maintainer would look. No behaviour changed: an
+  ABI function taking a table would mean shipping function pointers across the
+  boundary, which §4's "no pointer flows from JS into Rust" rule rules out.
+  Per-codec feature flags and per-codec `open_*` entry points are the
+  alternatives; neither is built and neither is claimed.
 - **The crate** (2026-09-30, todo.md §45): a browser player core for `.tpt`
   media. Bounded incremental `.tpt` parser (`StreamParser`), a
   `DecoderTable` over Cinder, Aura, Reed and Thrum (the extension point for

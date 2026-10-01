@@ -268,7 +268,7 @@ pub fn sine_wave(
     let mut samples = vec![0i16; sample_count as usize];
     for (i, s) in samples.iter_mut().enumerate() {
         let t = i as f64 / sample_rate as f64;
-        let v = (t * freq_hz * 2.0 * core::f64::consts::PI).sin() * amplitude;
+        let v = libm::sin(t * freq_hz * 2.0 * core::f64::consts::PI) * amplitude;
         *s = (v * i16::MAX as f64) as i16;
     }
     let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();

@@ -718,6 +718,7 @@ dependencies = [
 name = "tpt-media-io"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "tpt-dsp-io",
  "tpt-media-core",
 ]
