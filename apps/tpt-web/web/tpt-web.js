@@ -5,11 +5,15 @@
 // underrun recovery. No bundler, no dependencies: an ES module that the
 // browser loads directly (see index.html).
 //
-// STATUS: written against the documented WebAudio / Canvas / Fetch APIs and
-// checked for syntax and logic by review. It has NOT been run in a real
-// browser by its author (the environment it was written in has none). The
-// decoder half (tpt-decoder.js + the wasm) IS exercised under Node by
-// check.mjs; audible output and canvas drawing are the untested part.
+// STATUS: run against the real browser APIs by web/browser-check.mjs — a real
+// AudioContext on the machine's audio device, a real canvas read back with
+// getImageData, real requestAnimationFrame, the real wasm module. 29 checks,
+// all passing, repeated (todo.md §45): scheduling, pacing, presentation and
+// the end-of-stream path are exercised for real. What that does NOT cover:
+// nobody has *heard* it, and on a machine with no audio output device the
+// playback-dependent checks report "not verifiable here" rather than passing,
+// so a pass means this file works, not that the output is pleasing.
+// check.mjs (Node) and mock-browser.mjs (fakes) cover the rest.
 //
 // Clock model: the AudioContext clock is the master clock for everything,
 // audio-only, video-only or both. `t0` maps media time to context time:

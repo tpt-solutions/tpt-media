@@ -41,11 +41,17 @@ cd apps/tpt-web/web && python -m http.server    # any static server works
 `cargo run -p tpt-web --example make_demo`). No bundler, no npm. The page can
 also play a local file (file picker) or stream a URL.
 
-> **Not browser-tested.** The decoder and JS glue are exercised end to end
-> under Node against the real wasm (`web/check.mjs`), and the playback logic
-> of `tpt-web.js` is run against fake `AudioContext`/canvas objects
-> (`web/mock-browser.mjs`). Nobody has yet run the demo in a real browser to
-> see it or hear it; expect to find something there.
+> **Browser-tested, with one stated limit.** The decoder and JS glue are
+> exercised end to end under Node against the real wasm (`web/check.mjs`), the
+> playback logic of `tpt-web.js` is run against fake `AudioContext`/canvas
+> objects (`web/mock-browser.mjs`), **and** the unmodified player is run in
+> headless Chrome against the real browser APIs
+> (`web/browser-check.mjs`): 29 checks covering a real `AudioContext`'s
+> lifecycle and scheduling, a real canvas read back with `getImageData`, and
+> the shipped `index.html` driven to end of stream.
+> The limit: that run proves the browser accepted the audio and advanced its
+> clock, not that a human heard it, and on a machine with no audio device the
+> playback checks report "not verifiable here" rather than passing.
 
 ## Using it from JavaScript
 
@@ -152,7 +158,13 @@ cargo clippy -p tpt-web --all-targets -- -D warnings
 node apps/tpt-web/web/build.mjs                          # wasm32 build
 node apps/tpt-web/web/check.mjs                          # built wasm + JS glue under Node (11 checks)
 node apps/tpt-web/web/mock-browser.mjs                   # tpt-web.js logic vs fake WebAudio/canvas
+node apps/tpt-web/web/browser-check.mjs                  # the real thing: 29 checks in headless Chrome
 ```
+
+The last one is the only check that needs a real browser and a real audio
+device; it finds Chrome or Edge itself (override with `TPT_BROWSER`), exits
+non-zero if it cannot find one, and prints `SKIP` rather than a pass for
+anything that needs an audio clock it cannot get.
 
 The test inputs are made by the real encoders (`synth`, enabled for this
 crate's own tests through a self dev-dependency): among them an Aura lossless

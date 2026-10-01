@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tpt-web real-browser check</title>
+<style>
+  body { font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; margin: 12px; }
+  canvas { image-rendering: pixelated; border: 1px solid #888; }
+  #result { white-space: pre-wrap; background: #eee; padding: 8px; }
+  .FAIL { color: #c00; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>tpt-web: real-browser check</h1>
+<p>Every object here is the browser's own: a real <code>AudioContext</code>, a real
+2D canvas, real <code>ImageData</code>, real <code>requestAnimationFrame</code>, and
+the real wasm module. The spies below only <em>observe</em> those objects &mdash;
+they replace no browser API.</p>
+<canvas id="screen" width="16" height="9"></canvas>
+<div id="result">running&hellip;</div>
+
+<script type="module">
+import { TptPlayer } from "./tpt-web.js";
+
+const checks = [];
+// A check is `ok`, `FAIL`, or `SKIP`. The third exists because some of what
+// this file checks needs an audio *output device* to exist at all: a CI runner
+// with no sound card has no clock to advance. Reporting that as a pass would be
+// a lie, and reporting it as a failure would be a false alarm, so it is
+// reported as neither and the reason is printed.
+const ok = (cond, msg) => checks.push({ state: cond ? "ok" : "FAIL", msg: String(msg) });
+const skip = (msg) => checks.push({ state: "SKIP", msg: String(msg) });
+const near = (a, b, tol) => Math.abs(a - b) <= tol;
+
+// Report in rather than relying on the page being dumped: the driver waits
+// for this POST, so there is no race with the `load` event.
+const finish = async (note) => {
+  const failed = checks.filter((c) => c.state === "FAIL");
+  const skipped = checks.filter((c) => c.state === "SKIP");
+  const report =
+    checks.map((c) => `${c.state === "ok" ? "ok   " : c.state === "FAIL" ? "FAIL " : "SKIP "}${c.msg}`).join("\n") +
+    `\n\n${checks.length - failed.length - skipped.length}/${checks.length} checks passed` +
+    (skipped.length ? `, ${skipped.length} not verifiable here` : "") +
+    (note ? `\n${note}` : "");
+  const el = document.getElementById("result");
+  el.className = failed.length ? "FAIL" : "ok";
+  el.textContent = report;
+  await fetch("/__done", { method: "POST", body: report });
+};
+
+// --- Observe the real WebAudio objects, without replacing them. ---------
+// Every call still reaches the genuine AudioContext; we only record the
+// arguments, so the assertions can inspect what the player handed to the
+// browser. Nothing here is a fake: `extends RealAC` *is* an AudioContext.
+const observed = { created: [], started: [] };
+const RealAC = window.AudioContext || window.webkitAudioContext;
+class ObservedAC extends RealAC {
+  constructor(...a) {
+    super(...a);
+    observed.created.push(this);
+    const realCreate = this.createBuffer.bind(this);
+    this.createBuffer = (ch, len, rate) => realCreate(ch, len, rate);
+    const realSrc = this.createBufferSource.bind(this);
+    this.createBufferSource = () => {
+      const s = realSrc();
+      const realStart = s.start.bind(s);
+      s.start = (when, ...rest) => {
+        const buf = s.buffer;
+        let peak = 0;
+        if (buf) {
+          const d = buf.getChannelData(0);
+          for (let i = 0; i < d.length; i++) { const v = Math.abs(d[i]); if (v > peak) peak = v; }
+        }
+        observed.started.push({ when, length: buf ? buf.length : 0,
+                                sampleRate: buf ? buf.sampleRate : 0,
+                                channels: buf ? buf.numberOfChannels : 0, peak });
+        return realStart(when, ...rest);
+      };
+      return s;
+    };
+  }
+}
+window.AudioContext = ObservedAC;
+
+const canvas = document.getElementById("screen");
+const ctx2d = canvas.getContext("2d");
+
+// Pixels are read back through the browser's own getImageData, so a pass here
+// means the browser really rasterised the decoded picture.
+const canvasStats = () => {
+  const { data } = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
+  const seen = new Set();
+  let min = 255, max = 0, opaque = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+    seen.add((r << 16) | (g << 8) | b);
+    if (a === 255) opaque++;
+    min = Math.min(min, r, g, b); max = Math.max(max, r, g, b);
+  }
+  return { distinct: seen.size, min, max, opaque, pixels: data.length / 4 };
+};
+
+const info = { value: null };
+let lastStats = null, ended = false, errored = null;
+const t0 = performance.now();
+const clocks = [];
+
+const player = new TptPlayer({
+  canvas,
+  onInfo: (i) => (info.value = i),
+  onStats: (s) => {
+    lastStats = s;
+    if (observed.created[0]) clocks.push(observed.created[0].currentTime);
+  },
+  onEnded: () => { ended = true; },
+  onError: (e) => { errored = e; },
+});
+
+const demo = new Uint8Array(await (await fetch("./demo.tpt")).arrayBuffer());
+
+// A throw anywhere in the module would otherwise leave the report at
+// "running…" and look like a hang, so every failure is reported in-band.
+try {
+  await player.play(demo);
+} catch (e) {
+  ok(false, `play() threw: ${e && e.message ? e.message : e}`);
+}
+
+// Playback is paced by the real audio clock, so wait in real time. `played`
+// records whether that clock ever moved, which is what makes the checks below
+// either meaningful or explicitly unverifiable.
+let played = false;
+const deadline = Date.now() + 30_000;
+while (!ended && !errored && Date.now() < deadline) {
+  await new Promise((r) => setTimeout(r, 100));
+  if (observed.created[0]) clocks.push(observed.created[0].currentTime);
+}
+
+// --- The AudioContext the player actually created. --------------------
+ok(observed.created.length === 1, `player created exactly one AudioContext (got ${observed.created.length})`);
+const actx = observed.created[0];
+if (actx) {
+  // Any of the three non-`closed` states is acceptable here: this check runs
+  // after the wait loop, and which one is correct depends on whether playback
+  // finished (below, `closed` is then required outright).
+  ok(actx.state === "closed" || actx.state === "running" || actx.state === "suspended",
+     `real AudioContext final state is ${actx.state}`);
+  ok(actx.sampleRate === 48000, `real AudioContext sample rate ${actx.sampleRate} Hz`);
+  ok(typeof actx.baseLatency === "number", `real AudioContext reports baseLatency ${actx.baseLatency} s`);
+  const advanced = Math.max(...clocks, 0) - Math.min(...clocks, 0);
+  // The clock only moves if the machine has an audio output device. Without
+  // one there is nothing to measure, and the player (correctly) never
+  // finishes - so everything below, which needs a completed playback, is
+  // reported as unverifiable rather than passed.
+  played = advanced > 0.1;
+  if (played) {
+    ok(true, `AudioContext clock advanced ${advanced.toFixed(3)} s in real time`);
+    // Only meaningful once playback ran: the player closes the context at end
+    // of stream, and with no clock to advance it never reaches that point, so
+    // asserting "closed" here would fail for the one machine this branch
+    // exists to accommodate.
+    ok(actx.state === "closed", `context released at end of stream (state ${actx.state})`);
+  } else {
+    skip(`AudioContext clock did not advance (advanced ${advanced.toFixed(3)} s) - ` +
+         `no audio output device on this machine, so real-time playback cannot be exercised here`);
+    skip(`context release at end of stream is not checkable - playback never ` +
+         `reached its end (state ${actx.state}, not a leak: the context is ` +
+         `garbage-collected with the page)`);
+  }
+}
+
+if (!played) {
+  skip("playback-dependent checks: stream, audio scheduling, canvas and the demo page all need a running audio clock");
+} else {
+// --- Stream, audio, video. -------------------------------------------
+ok(!errored, `playback finished without error${errored ? ": " + errored.message : ""}`);
+ok(ended, "onEnded fired");
+ok(!!info.value, "stream info announced");
+ok(info.value?.audio?.sampleRate === 48000, `audio ${info.value?.audio?.sampleRate} Hz`);
+ok(info.value?.video?.width === 160 && info.value?.video?.height === 96,
+   `video ${info.value?.video?.width}x${info.value?.video?.height}`);
+
+const total = observed.started.reduce((a, s) => a + s.length / s.sampleRate, 0);
+ok(observed.started.length > 0, `${observed.started.length} audio buffers handed to the browser`);
+ok(near(total, 4.0, 0.02), `scheduled audio totals ${total.toFixed(4)} s (expect 4.0)`);
+let contiguous = true;
+for (let i = 1; i < observed.started.length; i++) {
+  const prev = observed.started[i - 1];
+  const gap = observed.started[i].when - (prev.when + prev.length / prev.sampleRate);
+  if (gap < -0.05 || gap > 0.25) contiguous = false;
+}
+ok(contiguous, "audio buffers scheduled back to back against the real clock");
+ok(observed.started.every((s) => s.peak > 0), "every audio buffer carried non-silent PCM to the browser");
+ok(observed.started.every((s) => s.channels === 1 && s.sampleRate === 48000),
+   "audio buffers are mono at 48 kHz");
+
+ok(canvas.width === 160 && canvas.height === 96, `canvas sized ${canvas.width}x${canvas.height}`);
+const px = canvasStats();
+ok(px.distinct > 1, `canvas holds a real decoded picture (${px.distinct} distinct colours)`);
+ok(px.opaque === px.pixels, `every canvas pixel is opaque (${px.opaque}/${px.pixels})`);
+ok(px.max > px.min, `canvas has real contrast (min ${px.min}, max ${px.max})`);
+
+ok(lastStats && lastStats.decodeErrors === 0, `no decode errors (${lastStats?.decodeErrors})`);
+ok(lastStats && lastStats.shownFrames + lastStats.droppedFrames <= 60,
+   `shown ${lastStats?.shownFrames} + dropped ${lastStats?.droppedFrames} <= 60 frames`);
+
+// --- The shipped demo page, driven unmodified. -------------------------
+// `index.html` is loaded in a same-origin iframe and its own "Play demo.tpt"
+// button is clicked, exactly as a visitor would. Nothing in the page is
+// patched or stubbed: the assertions read the text the page writes into its
+// own #stats and #error boxes.
+{
+  const frame = document.createElement("iframe");
+  frame.src = "./index.html";
+  frame.width = "640";
+  frame.height = "400";
+  document.body.appendChild(frame);
+  await new Promise((r) => frame.addEventListener("load", r, { once: true }));
+
+  const doc = frame.contentDocument;
+  const win = frame.contentWindow;
+  const $ = (id) => doc.getElementById(id);
+  ok(!!$("demo") && !!$("screen") && !!$("stats"), "demo page exposes its controls");
+
+  const before = win.performance.now();
+  $("demo").click(); // a real click, which is what unlocks the AudioContext
+
+  // Wait for the page to report it has finished, the way a visitor would see
+  // "ended" appear in its stats box.
+  let ended = false;
+  const demoDeadline = Date.now() + 30_000;
+  while (Date.now() < demoDeadline) {
+    await new Promise((r) => setTimeout(r, 100));
+    if (/ended/.test($("stats").textContent ?? "")) { ended = true; break; }
+    if (($("error").textContent ?? "").trim()) break;
+  }
+  const statsText = $("stats").textContent ?? "";
+  const errText = ($("error").textContent ?? "").trim();
+  ok(!errText, `demo page reported no error${errText ? ": " + errText : ""}`);
+  ok(ended, `demo page reached end of stream after ${((win.performance.now() - before) / 1000).toFixed(1)} s`);
+  // The page's own #stats box is the only thing asserted against, and it
+  // deliberately shows a live counter rather than the one-off "stream:" line
+  // that `onInfo` writes (and `onStats` immediately overwrites). So the
+  // evidence is the counters themselves: the media clock advanced in real
+  // time, pictures were presented, and nothing failed to decode.
+  const mediaTime = Number(/media time\s+([\d.]+)\s*s/.exec(statsText)?.[1] ?? NaN);
+  ok(Number.isFinite(mediaTime) && mediaTime > 0,
+     `demo page's media clock advanced to ${mediaTime} s`);
+  const shown = Number(/shown\s+(\d+)/.exec(statsText)?.[1] ?? NaN);
+  ok(Number.isFinite(shown) && shown > 0, `demo page presented ${shown} pictures`);
+  const errs = Number(/decode errors\s+(\d+)/.exec(statsText)?.[1] ?? NaN);
+  ok(errs === 0, `demo page decoded with no errors (${errs})`);
+  const dc = doc.getElementById("screen");
+  ok(dc.width === 160 && dc.height === 96, `demo canvas sized ${dc.width}x${dc.height}`);
+  frame.remove();
+}
+// Closes the `else` of the `if (!played)` above. The checks between the two
+// branches need a completed playback; everything below is report-building and
+// has to run either way, so the block ends here rather than at `finish`.
+}
+
+finish(`elapsed ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+</script>
+
+<!-- Placed after the work: it holds the `load` event open long enough for the
+     checks above to finish, so `--dump-dom` (which waits for load) captures a
+     completed run rather than a half-written one. It has to outlast playback,
+     which is paced by the real audio clock and is ~4 s for the demo file. -->
+<script src="/__slow?ms=15000"></script>
+</body>
+</html>

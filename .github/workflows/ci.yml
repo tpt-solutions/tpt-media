@@ -99,10 +99,20 @@ jobs:
       - name: cargo check foundation crates for wasm32
         run: cargo check -p tpt-media-core -p tpt-media-bitstream -p tpt-media-codec -p tpt-media-pipeline -p tpt-media-io -p tpt-media-probe --target wasm32-unknown-unknown --no-default-features --locked
       # todo.md §45: the player itself as a real wasm module (cdylib), then the
-      # Node smoke tests against that binary. Node exercises the wasm and the
-      # JS glue; it is not a browser, so audible output / canvas drawing are
-      # not covered by CI.
+      # Node smoke tests against that binary. Node exercises the wasm and the JS
+      # glue; it is not a browser, so this step alone covers neither audible
+      # output nor canvas drawing. The step after it does, to the extent a
+      # runner without a sound card allows.
       - name: build tpt-web for wasm32
         run: node apps/tpt-web/web/build.mjs
       - name: tpt-web wasm smoke tests (Node)
         run: node apps/tpt-web/web/check.mjs && node apps/tpt-web/web/mock-browser.mjs
+      # todo.md §45: the real browser APIs, on the runner's preinstalled
+      # Chrome. This is not a claim that anyone heard the audio - a CI runner
+      # has no audio output device, so the page reports its playback-dependent
+      # checks as SKIP ("not verifiable here") and this step verifies only what
+      # it can: the page and the wasm load in a real engine, the canvas is
+      # real, and nothing regresses to FAIL. Locally, on a machine with a
+      # sound card, all 29 checks run (web/browser-check.mjs).
+      - name: tpt-web real-browser check (headless Chrome)
+        run: node apps/tpt-web/web/browser-check.mjs

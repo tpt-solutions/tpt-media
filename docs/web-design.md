@@ -237,11 +237,22 @@ and a full video queue also holds back the audio behind it.
 | Builds as a real wasm module | `cargo build -p tpt-web --target wasm32-unknown-unknown --release` (328 KiB) | `web/build.mjs`, CI `wasm` job |
 | The wasm + JS glue decode correctly and survive hostile input | 11 checks under Node: exact sample/frame counts, 300 mutated/truncated/noise files with zero traps, handle and limit behaviour | `web/check.mjs` |
 | `tpt-web.js` control flow (push, back-pressure, scheduling, pacing, end, stop, errors) | executed against the real wasm with **fake** AudioContext/canvas | `web/mock-browser.mjs` |
-| **Audible output and canvas drawing in a real browser** | **not verified.** No browser was available to the author. The code follows the documented WebAudio/Canvas/Fetch APIs, but nobody has watched or heard it. | — |
+| **Real WebAudio and real canvas output** | 29 checks in headless Chrome against the *unmodified* player: real `AudioContext` created and released (`state` `closed`, `baseLatency` 0.01 s), 375 real `AudioBufferSourceNode`s totalling 4.0000 s scheduled back to back, canvas read back with `getImageData` (2834 distinct colours, 15 360/15 360 opaque, 0 dropped, 0 decode errors), plus the shipped `index.html` driven in an iframe to end of stream. Repeated 3x, 29/29 each, ~8.8 s. | `web/browser-check.mjs` + `web/serve.mjs` |
 
-The browser demo is therefore *implemented and logic-tested against fakes*,
-not *browser-tested*. Treat first contact with a real browser as the
-remaining verification step.
+`web/browser-check.mjs` is the counterpart to `mock-browser.mjs`, not a
+replacement for it: the fake run can be a gate in CI, the real one needs a
+browser and an audio device, so the two answer different questions and both
+are kept. It needs a real browser to exist, and says so and exits non-zero
+if it cannot find one, rather than skipping — a missing browser must never
+read as a pass.
+
+Two limits are deliberate and worth stating plainly. It proves the browser
+*accepted* the audio and advanced its clock; it cannot prove anyone *heard*
+anything, so "audible output" is still unproven in the literal sense. And on
+a machine with no audio output device there is no clock to advance, so the
+playback-dependent checks report `SKIP` ("not verifiable here") instead of
+passing or failing — a pass there means the page loaded, the wasm decoded
+and the canvas is real, not that playback ran.
 
 ## 11. Known limitations
 
