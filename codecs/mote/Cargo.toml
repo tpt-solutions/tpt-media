@@ -13,10 +13,10 @@ readme = "README.md"
 description = "Mote: TPT extreme edge/IoT video codec (8x8 patch dictionary VQ, 4096 entries, 12-bit index, temporal skip)."
 
 [dependencies]
-tpt-media-core = { workspace = true, features = ["std"] }
-tpt-media-bitstream = { workspace = true, features = ["std"] }
-tpt-media-codec = { workspace = true, features = ["std"] }
-tpt-dsp-core = { workspace = true, features = ["std"] }
+tpt-media-core = { workspace = true, default-features = false }
+tpt-media-bitstream = { workspace = true, default-features = false }
+tpt-media-codec = { workspace = true, default-features = false }
+tpt-dsp-core = { workspace = true, features = ["alloc"] }
 
 [features]
 default = ["std"]

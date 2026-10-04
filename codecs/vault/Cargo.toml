@@ -13,10 +13,10 @@ readme = "README.md"
 description = "Vault: TPT high-compression video codec (64x64 superblocks, recursive partitioning, half-pel motion, multi-reference, RDO)."
 
 [dependencies]
-tpt-media-core = { workspace = true, features = ["std"] }
-tpt-media-bitstream = { workspace = true, features = ["std"] }
-tpt-media-codec = { workspace = true, features = ["std"] }
-tpt-dsp-core = { workspace = true, features = ["std"] }
+tpt-media-core = { workspace = true, default-features = false }
+tpt-media-bitstream = { workspace = true, default-features = false }
+tpt-media-codec = { workspace = true, default-features = false }
+tpt-dsp-core = { workspace = true, features = ["alloc"] }
 
 [features]
 default = ["std"]

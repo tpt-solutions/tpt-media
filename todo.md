@@ -1728,8 +1728,18 @@ Not done, and why (left honestly open):
 * [ ] a faster encoder — the direct `O(n³)` DCT evaluated at every partition
       level is the suspected dominant cost, not profiled (about 45-55 ms/frame at QCIF); the encoder is not
       real-time and the decoder is not claimed real-time either
-* [ ] bare-metal `no_std` verification — the crate carries the `no_std` +
-      `alloc` attribute like Thrum but is not built for a bare-metal target in CI
+* [x] bare-metal `no_std` verification — 2026-10-05, and the claim was
+      false until it was tested (the recurring pattern): `cargo build
+      -p tpt-video-vault --target thumbv7em-none-eabi
+      --no-default-features` failed inside `bitflags` because both
+      video codecs' dependency blocks forced `features = ["std"]` onto
+      `tpt-media-core`/`-bitstream`/`-codec`/`tpt-dsp-core`
+      *unconditionally*, so no-std resolution never happened. Fixed to
+      reed's shape (`default-features = false` + `alloc`-only
+      `tpt-dsp-core`, `std` opt-in through the crate's own feature);
+      no `libm` needed — the codecs' float math stays inside `core`.
+      Both vault and mote now build bare-metal locally and in the CI
+      `no_std` job alongside reed
 * [ ] a WASM build and the web player (§45) do not include Vault
 * [ ] maximum decode work (§19 `max_decode_micros`) — per-packet work is
       bounded structurally by the frame geometry, but no time budget is

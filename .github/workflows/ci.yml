@@ -73,15 +73,22 @@ jobs:
         run: cargo check --workspace --locked --all-targets
 
   no_std:
-    name: no_std build (tpt-audio-reed)
+    name: no_std builds (reed, vault, mote)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv7em-none-eabi
-      - name: cargo build no_std reed
-        run: cargo build -p tpt-audio-reed --target thumbv7em-none-eabi --no-default-features
+      # Every crate claiming the no_std attribute gets built bare-metal.
+      # Vault and Mote joined 2026-10-05: their dependency blocks had
+      # been forcing std features onto the foundation crates, which the
+      # claim-then-verify pass caught (§33).
+      - name: cargo build no_std codecs
+        run: |
+          cargo build -p tpt-audio-reed --target thumbv7em-none-eabi --no-default-features --locked
+          cargo build -p tpt-video-vault --target thumbv7em-none-eabi --no-default-features --locked
+          cargo build -p tpt-video-mote --target thumbv7em-none-eabi --no-default-features --locked
 
   wasm:
     name: wasm32 build (foundation crates + tpt-web)

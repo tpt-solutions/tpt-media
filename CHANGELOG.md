@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Vault and Mote now build bare-metal; the CI `no_std` job covers
+  every codec that claims it** (2026-10-05): §33's "bare-metal `no_std`
+  verification" item was the claim-then-verify pattern again — the
+  first `--target thumbv7em-none-eabi --no-default-features` build of
+  `tpt-video-vault` failed inside `bitflags`, because both video
+  codecs' dependency blocks forced `features = ["std"]` onto
+  `tpt-media-core`/`-bitstream`/`-codec`/`tpt-dsp-core` unconditionally
+  (reed, the one previously verified codec, correctly used
+  `default-features = false`). Both manifests now follow reed's shape;
+  no `libm` was needed — the codecs' float math stays inside `core` —
+  so no new dependencies. Vault and Mote build bare-metal locally and
+  in CI next to reed.
 - **§5.3 (2D transforms) audited and closed; AArch64 cross-check in CI**
   (2026-10-05):
   - `tpt-dsp` shipped the separable 2D DCT-II/III pair
