@@ -613,17 +613,44 @@ Current DCT-IV implementation is suitable as a correctness reference but must be
 
 Required primarily by video codecs.
 
-_Confirmed 2026-09-07: no 2D transform code exists anywhere in `tpt-dsp-core` (no `dct_2d`, `Dct2d`, or separable-transform helpers) — expected, since this is only needed once Thrum/Vault/Mote exist. All items below remain correctly unchecked._
+_Implemented 2026-09-30+ in the `tpt-dsp` repository (this section
+always allowed that — see §4's preamble), audited here 2026-10-05
+against `tpt-dsp-core/src/dct.rs` at its current HEAD and against the
+`thrum`/`vault` crates that consume it. A 2026-09-07 note here said no
+2D transform code existed anywhere; that was true then and is obsolete
+now — kept for the audit trail rather than deleted._
 
-* [ ] Define 2D DCT API
-* [ ] Implement separable 2D DCT
-* [ ] Implement inverse 2D DCT
-* [ ] Support 4×4
-* [ ] Support 8×8
-* [ ] Support 16×16
-* [ ] Benchmark
-* [ ] SIMD optimize common block sizes
-* [ ] Verify against 1D decomposition
+* [x] Define 2D DCT API — `tpt-dsp-core::dct::dct_2d`/`idct_2d`:
+      explicit transform formula in the doc comment, in-place over a
+      row-major block with caller-owned scratch (`2·max(rows, cols)`),
+      length-generic over any `rows, cols ≥ 1`, `# Panics` sections in
+      the §12 contract style
+* [x] Implement separable 2D DCT — `dct_2d`: rows through 1D
+      `dct_ii`, then columns (JPEG-style composition)
+* [x] Implement inverse 2D DCT — `idct_2d`: columns through `dct_iii`
+      then rows; the pair is unnormalized — round trip recovers
+      `(rows·cols/4)·x`, documented and pinned by
+      `dct_2d_round_trips_up_to_scale`
+* [x] Support 4×4 — the kernels are length-generic, and 4×4 is a real
+      consumer size: Vault's partitioner codes 4×4 chroma tiles up to
+      32×32 luma (`codecs/vault/src/transform.rs`), so every size in
+      this list is exercised by a running codec, not just tests
+* [x] Support 8×8 — tested (8×8 in both `dct_2d` tests), benched
+      (`bench_dct_2d::forward_f32/8x8`), and Thrum's coded block size
+* [x] Support 16×16 — tested and benched at 16×16
+* [x] Benchmark — `tpt-dsp-core/benches/dsp_bench.rs::bench_dct_2d`,
+      forward + inverse at 8×8 and 16×16 with element throughput;
+      results in `tpt-dsp`'s `BENCHMARKS.md`
+* [ ] SIMD optimize common block sizes — deliberately not done: the 1D
+      kernels are direct scalar O(N²) sums, which is already cheap at
+      these sizes (an 8×8 block is 64 coefficients), and the codecs'
+      encode cost is dominated by motion search and RDO rather than
+      the transform. Revisit only if a profile says otherwise
+* [x] Verify against 1D decomposition —
+      `dct_2d_matches_naive_double_sum`: the separable implementation
+      agrees with an independently written double-sum reference at
+      8×8, 16×16, and a non-square 4×16 (proving row/column
+      genericity), with relative tolerances
 
 ---
 
@@ -2124,8 +2151,14 @@ work — this section was silently re-asking for it; reconciled
 * [ ] randomized testing — the equivalence tests use fixed vectors;
       seeded-random scalar-vs-SIMD sweeps are the remaining gap
       (recorded in `docs/performance.md` §SIMD Equivalence)
-* [ ] architecture-specific CI — today's CI is x86_64-only; an
-      AArch64 (and cross-`target-feature`) matrix is still open
+* [ ] architecture-specific CI — 2026-10-05: no longer x86_64-only —
+      CI cross-checks every Rust crate for `aarch64-unknown-linux-gnu`
+      (`cargo check`, no linker needed; `tpt-media-sys` excluded
+      because its build script compiles the C integration test with a
+      target-unknown compiler, and criterion's `alloca` keeps
+      `--all-targets` off). Still open: *executing* the test suite on
+      AArch64 (QEMU or a runner) and cross-`target-feature` builds,
+      which is what the SIMD-equivalence story really wants
 
 ---
 
@@ -2908,12 +2941,13 @@ Before 0.3:
       stability guarantee, so the format may still break. Audited 2026-10-01 —
       this line and its neighbours are all from 2026-09-07 and were never
       revisited after the spec landed.
-* [ ] benchmark suite — the workspace now has one (§41), including
-      Thrum-era benches recorded 2026-09-28; what remains ahead of
-      this gate's original intent is Vault/Mote-era benches and
-      CI-side recording (CONTRIBUTING §11 keeps benches out of CI by
-      policy, so "CI-recording" means a release-time refresh ritual,
-      not a workflow job)
+* [x] benchmark suite — every implemented codec has a criterion bench
+      with its numbers recorded in `docs/performance.md`: the audio
+      pair (2026-09-14), Reed and Thrum (2026-09-28), and the
+      Vault/Mote-era benches (2026-09-30, own sections) that this gate
+      was waiting on. CI-side recording stays deliberately out —
+      CONTRIBUTING §11 keeps benches off CI (shared runners are too
+      noisy) and names the release-time refresh as the ritual instead
 
 Before 0.4:
 

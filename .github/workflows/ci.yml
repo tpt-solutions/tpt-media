@@ -116,3 +116,23 @@ jobs:
       # sound card, all 29 checks run (web/browser-check.mjs).
       - name: tpt-web real-browser check (headless Chrome)
         run: node apps/tpt-web/web/browser-check.mjs
+
+  aarch64:
+    name: AArch64 cross-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      # todo.md §40: prove every Rust crate builds for a second
+      # architecture. `cargo check` needs no linker/sysroot, so this
+      # runs on a stock runner; tpt-media-sys is excluded because its
+      # build script compiles the C integration test with a
+      # target-unknown compiler. Test *execution* on AArch64 (QEMU)
+      # and cross-target-feature builds remain the open part of this
+      # item.
+      - name: cargo check (aarch64)
+        run: cargo check --workspace --exclude tpt-media-sys --locked --target aarch64-unknown-linux-gnu

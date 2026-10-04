@@ -9,6 +9,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **§5.3 (2D transforms) audited and closed; AArch64 cross-check in CI**
+  (2026-10-05):
+  - `tpt-dsp` shipped the separable 2D DCT-II/III pair
+    (`dct_2d`/`idct_2d`) and Thrum and Vault consume it — 8 of §5.3's
+    nine items are now checked against the actual code (API, both
+    directions, 4×4/8×8/16×16 with Vault coding 4×4–32×32 and Thrum
+    8×8 as live consumers, the `bench_dct_2d` benchmarks, and the
+    naive-double-sum verification). The one deliberately-open item is
+    SIMD-optimising the block sizes: the scalar transform is already
+    cheap at 64-coefficient blocks and encode cost is dominated by
+    motion search and RDO.
+  - CI gained an `aarch64` job: `cargo check` of every Rust crate for
+    `aarch64-unknown-linux-gnu` (no linker needed; `tpt-media-sys`
+    excluded — its build script compiles the C integration test with a
+    target-unknown compiler — and `--all-targets` off because
+    criterion's `alloca` build script wants a cross C compiler). §40's
+    architecture-CI item narrows accordingly; test *execution* on
+    AArch64 and cross-`target-feature` builds remain its open part.
+  - §53's "benchmark suite" gate flips: the Vault/Mote-era benches it
+    waited on landed 2026-09-30 with recorded numbers; CI-side
+    recording stays deliberately a release-time ritual per CONTRIBUTING
+    §11.
 - **`tpt-video-vault`: the Vault high-compression video codec (todo.md §33)**
   (2026-09-30): new workspace member `codecs/vault`, codec id `VAUL`. An I/P
   codec (no B-frames) with 64×64 superblocks recursively partitioned to 8×8,
