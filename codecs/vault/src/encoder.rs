@@ -27,7 +27,10 @@
 //! **None of this finds the global minimum of `J`.** It is a greedy
 //! per-node comparison over a heuristically pruned candidate set:
 //! candidate generation is not exhaustive, the motion search is a pattern
-//! search, quantisation is not rate-distortion optimised per coefficient,
+//! search, quantisation is not rate-distortion optimised per coefficient by
+//! default (an exact-rate RDOQ zeroing pass exists behind `rdoq: true`; it
+//! measured byte-identical output at every available operating point, so it
+//! is off pending a lambda tuned on real content),
 //! decisions ignore their effect on later blocks' predictors and
 //! neighbours, and `lambda` is not tuned. The claim is only that each
 //! decision was the cheapest *among the alternatives that were priced*.
@@ -48,8 +51,8 @@ use crate::filter::{loop_filter, Field, Unit};
 use crate::picture::{picture_from_frame, picture_to_frame, Picture, Plane};
 use crate::pred::{intra_mode_available, intra_predict, mc_block, sad, ssd, IntraMode};
 use crate::syntax::{
-    build_pred, quantise_leaf, reconstruct_leaf, ref_index_bits, write_leaf, Blk, Leaf, LeafCtx,
-    LeafKind, MVD_K,
+    build_pred, quantise_leaf, rdoq_leaf, reconstruct_leaf, ref_index_bits, write_leaf, Blk, Leaf,
+    LeafCtx, LeafKind, MVD_K,
 };
 use crate::transform::{Scans, Xform};
 use crate::{
@@ -218,6 +221,7 @@ impl Encoder for VaultEncoder {
             syms: Vec::new(),
             step,
             lambda: LAMBDA_SCALE * f64::from(step) * f64::from(step),
+            rdoq: self.enc.rdoq,
             lambda_sad: LAMBDA_SAD_SCALE * step,
             max_block: self.enc.max_block_size,
             search_range: i32::from(self.enc.search_range),
@@ -302,6 +306,7 @@ struct FrameEnc<'a> {
     syms: Vec<Sym>,
     step: f32,
     lambda: f64,
+    rdoq: bool,
     lambda_sad: f32,
     max_block: usize,
     search_range: i32,
@@ -402,6 +407,16 @@ impl FrameEnc<'_> {
             pred
         } else {
             leaf.coefs = quantise_leaf(&mut self.xf, src, &pred, leaf.size, np, self.step);
+            if self.rdoq {
+                rdoq_leaf(
+                    &mut leaf.coefs,
+                    leaf.size,
+                    np,
+                    self.step,
+                    LAMBDA_SCALE,
+                    self.scans,
+                );
+            }
             reconstruct_leaf(&mut self.xf, &pred, &leaf.coefs, leaf.size, np, self.step)
         };
         let d: u64 = (0..np).map(|pl| ssd(&src.p[pl], &recon.p[pl])).sum();

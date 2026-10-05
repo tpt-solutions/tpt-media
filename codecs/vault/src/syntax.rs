@@ -25,6 +25,7 @@ use tpt_media_bitstream::rice::{decode_riced, encode_riced, WriteLike};
 use tpt_media_bitstream::{BitReader, WriteError};
 use tpt_media_codec::{CodecError, CodecResult};
 
+use crate::bits::{rice_len_signed, rice_len_unsigned, RICE_K_MAX};
 use crate::picture::Picture;
 use crate::pred::{chroma_mv, intra_predict, mc_block, IntraMode};
 use crate::transform::{read_coefs, tile_size, write_coefs, Scans, Xform};
@@ -294,6 +295,141 @@ pub(crate) fn build_pred(
         }
     }
     out
+}
+
+/// Rate-distortion optimised quantisation over one tile's levels: for
+/// every non-zero level, in scan order from the block's last down,
+/// decide between keeping it and zeroing it by comparing what the
+/// Rice-coded syntax *actually saves* against the distortion zeroing
+/// would add.
+///
+/// By Parseval on the orthonormal coefficient scaling, zeroing a level
+/// adds distortion `(level·step)²` to the pixel-domain SSE the leaf RDO
+/// measures, which against `J = D + λ·R` (`λ = LAMBDA_SCALE·step²`)
+/// makes the quantiser step cancel: a level is dropped when its rate
+/// saving in bits exceeds `level² / LAMBDA_SCALE`. The saving is exact
+/// for the block's *current* shape — the level's own code, the run it
+/// merges away, and, when the coefficient is the block's last, every
+/// code that disappears with the shortened span. The Rice parameter the
+/// model uses is the block's cheapest at sweep start; `write_coefs`
+/// re-derives the real `k` at write time, so this pass is a heuristic
+/// on top of an exact writer, never a contract.
+///
+/// Single backward sweep, O(tile²) worst case: zeroing the current last
+/// shortens the coded span (possibly exposing a new last, which the
+/// sweep then visits), and zeroing an interior level merges its two
+/// flanking runs.
+pub(crate) fn rdoq_tile(levels: &mut [i32], scan: &[u16], step: f32, lambda_scale: f64) {
+    let t2 = scan.len();
+    let mut last = match (0..t2).rev().find(|&p| levels[scan[p] as usize] != 0) {
+        Some(p) => p,
+        None => return,
+    };
+    if lambda_scale <= 0.0 {
+        return;
+    }
+    // The block's cheapest Rice parameter over its current shape — the
+    // same criterion `write_coefs` applies at write time.
+    let mut best_k = 0u32;
+    let mut best_cost = u64::MAX;
+    for k in 0..=RICE_K_MAX {
+        let mut cost = 0u64;
+        let mut run = 0u32;
+        for p in 0..=last {
+            let v = levels[scan[p] as usize];
+            if v == 0 {
+                run += 1;
+            } else {
+                cost += u64::from(rice_len_unsigned(run, k) + rice_len_signed(v, k));
+                run = 0;
+            }
+        }
+        if cost < best_cost {
+            best_cost = cost;
+            best_k = k;
+        }
+    }
+
+    let mut p = last;
+    loop {
+        let r = scan[p] as usize;
+        let level = levels[r];
+        let is_last = p == last;
+        if level != 0 {
+            // Previous non-zero position (or "before the block").
+            let prev = (0..p).rev().find(|&q| levels[scan[q] as usize] != 0);
+            let run_before = match prev {
+                Some(q) => (p - q) as u32,
+                None => (p + 1) as u32,
+            };
+            let saved = if is_last {
+                // The whole last symbol disappears with the span.
+                u64::from(rice_len_signed(level, best_k) + rice_len_unsigned(run_before, best_k))
+            } else {
+                // Interior: the level goes and its flanking runs merge.
+                let next = (p + 1..=last).find(|&q| levels[scan[q] as usize] != 0);
+                let run_after = match next {
+                    Some(q) => (q - p) as u32,
+                    None => 0,
+                };
+                let merged = run_before + 1 + run_after;
+                u64::from(rice_len_signed(level, best_k) + rice_len_unsigned(run_before, best_k))
+                    + u64::from(rice_len_unsigned(run_after, best_k))
+                    - u64::from(rice_len_unsigned(merged, best_k))
+            };
+            let distortion = f64::from(level) * f64::from(step);
+            if lambda_scale * saved as f64 > distortion * distortion {
+                levels[r] = 0;
+                if is_last {
+                    // Shorten the coded span; the sweep visits whatever
+                    // last it exposes.
+                    match (0..p).rev().find(|&q| levels[scan[q] as usize] != 0) {
+                        Some(q) => last = q,
+                        None => {
+                            // The block just went all-zero: its `coded`
+                            // flag drops at write time.
+                            levels[..t2].fill(0);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if p == 0 {
+            break;
+        }
+        p -= 1;
+    }
+}
+
+/// RDOQ over a whole leaf: every plane, every tile.
+pub(crate) fn rdoq_leaf(
+    coefs: &mut [i32],
+    size: usize,
+    nplanes: usize,
+    step: f32,
+    lambda_scale: f64,
+    scans: &Scans,
+) {
+    // The sweep is O(tile²) per tile, and on the measured corpus it only
+    // ever fires at the sizes where cheap levels live; 32×32 tiles are
+    // skipped both because their sweep dominates the cost (the high-motion
+    // scene paid +8 ms/frame for zero decisions) and because a 32×32
+    // transform's energy concentrates where zeroing never pays.
+    const MAX_RDOQ_TILE: usize = 16;
+    let mut off = 0usize;
+    for pl in 0..nplanes {
+        let m = plane_edge(size, pl);
+        let t = tile_size(m);
+        let scan = scans.get(t);
+        let pass = t <= MAX_RDOQ_TILE;
+        for _ in 0..(m / t) * (m / t) {
+            if pass {
+                rdoq_tile(&mut coefs[off..off + t * t], scan, step, lambda_scale);
+            }
+            off += t * t;
+        }
+    }
 }
 
 /// Quantise the residual `src - pred` of every plane and tile; returns the

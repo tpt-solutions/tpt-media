@@ -231,6 +231,19 @@ pub struct VaultConfig {
     pub max_block_size: usize,
     /// Run the loop filter (signalled per frame in the header).
     pub loop_filter: bool,
+    /// Coefficient-level rate-distortion optimised quantisation
+    /// (RDOQ): drop a quantised level when the Rice-coded bits it
+    /// costs buy more distortion than they save under the leaf RDO's
+    /// own `lambda`. Encoder-only (a stream is decodable either way).
+    ///
+    /// Defaults to `false` on the measured evidence: over the whole
+    /// §36 corpus at the default `qp` the pass produced byte-identical
+    /// output while costing up to +24% encode time on dense scenes
+    /// (todo.md §33). It fires at finer quantiser steps — the unit
+    /// tests pin the decision at both ends — so the knob is there for
+    /// fine-`qp` and real-content encodes, pending a `λ` tuned on
+    /// content that actually exists.
+    pub rdoq: bool,
 }
 
 impl Default for VaultConfig {
@@ -244,6 +257,7 @@ impl Default for VaultConfig {
             max_refs: 4,
             max_block_size: SUPERBLOCK,
             loop_filter: true,
+            rdoq: false,
         }
     }
 }

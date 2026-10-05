@@ -406,3 +406,41 @@ fn the_writer_and_counter_agree_on_length() {
     assert_eq!(w.bits(), c.bits);
     assert!(w.write_bits(33, 0).is_err());
 }
+
+/// RDOQ drops a cheap level whose rate saving buys more than the
+/// distortion it adds, keeps an expensive one, and (checked implicitly by
+/// the second half) never touches the block's largest level.
+#[test]
+fn rdoq_zeroes_a_cheap_level_and_keeps_an_expensive_one() {
+    use crate::syntax::rdoq_tile;
+    let scan = build_scan(4);
+    let mut levels = vec![0i32; 16];
+    levels[scan[5] as usize] = 1; // interior: merging its runs saves real bits
+    levels[scan[15] as usize] = 40; // the block's last, and far too big to drop
+
+    // Small step: the level-1 distortion is negligible, the run merge is
+    // not \u2192 dropped.
+    let mut small = levels.clone();
+    rdoq_tile(&mut small, &scan, 0.3, crate::LAMBDA_SCALE);
+    assert_eq!(small[scan[5] as usize], 0, "cheap level must be dropped");
+    assert_eq!(small[scan[15] as usize], 40, "expensive level must survive");
+
+    // Large step: the same level now carries distortion worth keeping.
+    let mut large = levels.clone();
+    rdoq_tile(&mut large, &scan, 3.0, crate::LAMBDA_SCALE);
+    assert_eq!(large[scan[5] as usize], 1, "the level earns its rate back");
+    assert_eq!(large[scan[15] as usize], 40);
+}
+
+/// RDOQ can zero a block entirely, which must leave all levels zero so
+/// the writer emits the no-coded-bit path.
+#[test]
+fn rdoq_can_zero_a_whole_block() {
+    use crate::syntax::rdoq_tile;
+    let scan = build_scan(4);
+    let mut levels = vec![0i32; 16];
+    levels[scan[2] as usize] = 1;
+    levels[scan[9] as usize] = 1;
+    rdoq_tile(&mut levels, &scan, 0.1, crate::LAMBDA_SCALE);
+    assert!(levels.iter().all(|&l| l == 0), "tiny levels at a tiny step");
+}

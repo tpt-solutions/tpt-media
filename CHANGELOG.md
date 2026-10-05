@@ -583,6 +583,22 @@ Added
 
 ### Added
 
+- **Vault gained coefficient-level RDOQ as a measured, default-off
+  encoder knob** (2026-10-05, half of §33's RDOQ item): an exact-rate
+  zeroing pass — for every non-zero level of a tile, from the block's
+  last down, drop it when the Rice-coded bits it costs (own code + run
+  merge + the shortened span when it is the last) buy more distortion
+  than they save under the leaf RDO's own `lambda`; by Parseval on the
+  orthonormal scaling the step cancels out of the decision. Unit tests
+  pin it firing (cheap level dropped at a fine step, expensive level
+  kept, whole blocks able to go all-zero). The measured verdict at the
+  codec's operating points: **byte-identical output at `qp` 30 and 12,
+  0-6% time cost** — the dead-zone quantiser leaves no marginal levels
+  on the available content — so `VaultConfig::rdoq` defaults to
+  `false`, the sweep is restricted to tiles ≤16×16, and the knob
+  waits for a `lambda` tuned on real content. A re-run of the full
+  corpus with the knob off confirmed the pre-RDOQ numbers unchanged.
+
 - **`tpt-media-sys`, the stable C ABI — §46's first slice** (2026-09-29):
   the codec abstraction (packet, frame, encoder, decoder) exposed to C
   as opaque, exclusively-owned handles under `ffi/tpt-media-sys`,

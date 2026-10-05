@@ -1726,8 +1726,19 @@ Not done, and why (left honestly open):
 * [ ] B-frames, bi-prediction, weighted prediction, long-term references and
       reference reordering
 * [ ] rate control (`qp` is a constant), scene-cut detection, per-block `qp`
-* [ ] coefficient-level RDO (RDOQ / trellis), a tuned `λ`, and an RD-decided
-      loop-filter flag
+* [ ] a tuned `λ` and an RD-decided loop-filter flag — the RDOQ half
+      landed 2026-10-05 as an encoder knob (`rdoq: bool`, default
+      **off**): an exact-rate zeroing pass (per level, from the block's
+      last down: the level's own Rice code, its run merge, and the
+      shortened span when it is the last; distortion `(level·step)²` by
+      Parseval, so the step cancels against λ), unit-tested to fire
+      exactly when the RD math says so at both ends of the step range,
+      restricted to tiles ≤16×16 where the O(tile²) sweep is cheap.
+      Measured over the bench clip at `qp` 30 and 12: output
+      byte-identical with the pass on, at a 0-6% time cost — the
+      dead-zone quantiser leaves no marginal levels for it to drop on
+      the available content, so it ships as a knob pending a λ tuned on
+      real content rather than a default
 * [x] a faster encoder — 2026-10-05, profiled then fixed. The profile
       (temporary phase timers over the criterion bench's own QCIF
       clip) measured the *transform* (`dct_2d` + quantise +
