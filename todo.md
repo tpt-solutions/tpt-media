@@ -1725,8 +1725,19 @@ Not done, and why (left honestly open):
 * [ ] rate control (`qp` is a constant), scene-cut detection, per-block `qp`
 * [ ] coefficient-level RDO (RDOQ / trellis), a tuned `λ`, and an RD-decided
       loop-filter flag
-* [ ] a faster encoder — the direct `O(n³)` DCT evaluated at every partition
-      level is the suspected dominant cost, not profiled (about 45-55 ms/frame at QCIF); the encoder is not
+* [ ] a faster encoder — **profiled 2026-10-05, and the suspicion is
+      confirmed with numbers**: temporary phase timers over the
+      criterion bench's own QCIF clip measured the *transform*
+      (`dct_2d` + quantise + `idct_2d` reconstruction, per candidate)
+      at **97.2%** of intra-frame encode time (9 024 transform calls
+      over a 4-frame intra stream, 44.2 ms/frame) and **88.2%** of a
+      P-frame stream, with the motion search's 89 627 SAD evaluations
+      costing **8.6%** and candidate pricing at 89.2% (nested — it is
+      where the transforms are paid). So the direct `O(n³)` DCT
+      evaluated at every partition level really is the dominant cost;
+      the levers are a fast transform path (FFT-backed DCT-II, §5.2's
+      `FastDctIvPlan` shape) and fewer priced candidates per leaf, in
+      that order. The encoder is not
       real-time and the decoder is not claimed real-time either
 * [x] bare-metal `no_std` verification — 2026-10-05, and the claim was
       false until it was tested (the recurring pattern): `cargo build

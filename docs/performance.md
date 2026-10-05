@@ -275,6 +275,18 @@ out about twice as slow (QCIF `encode_i_frame` 285 ms, `decode` 14.4 ms);
 the table above is the quieter run. The rates and PSNRs do not change between
 runs (the codec is a pure function of its input); only the timings do.
 
+**Where the encoder time goes** (profiled 2026-10-05, temporary phase
+timers around the transform and motion-search entry points, run over
+the same QCIF criterion clip): the transform (`dct_2d` + quantise +
+`idct_2d` reconstruction, priced per candidate) is **97.2%** of
+intra-frame encode time — 9 024 transform calls across a 4-frame
+intra stream, 44.2 ms/frame — and **88.2%** of a P-frame stream,
+where the motion search's 89 627 SAD evaluations cost **8.6%** and
+candidate pricing sits at 89.2% (nested with the transform: pricing
+is where the transforms are paid). This is the measured basis for
+§33's "faster encoder" item: a fast transform path and fewer priced
+candidates per leaf are the levers, in that order.
+
 Everything below comes from `codecs/vault/tests/measure.rs`
 (`cargo test --release -p tpt-video-vault --test measure -- --ignored
 --nocapture --test-threads=1`): 8-frame 176×144 4:2:0 clips, one I-frame

@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Vault's encoder cost is now profiled, not suspected** (2026-10-05,
+  §33's "faster encoder" item): temporary phase timers over the
+  criterion bench's own QCIF clip measured the transform (`dct_2d` +
+  quantise + `idct_2d` reconstruction, priced per RDO candidate) at
+  **97.2%** of intra-frame encode time (9 024 transform calls, 44.2
+  ms/frame) and **88.2%** of a P-frame stream, with the motion
+  search's 89 627 SAD evaluations at **8.6%**. The suspicion written
+  into the item is confirmed with numbers, the instrumentation is
+  reverted, and the levers are recorded where the work will happen: a
+  fast transform path (the `FastDctIvPlan` shape from §5.2) first,
+  fewer priced candidates per leaf second. Method and numbers in
+  `docs/performance.md`'s Vault section.
 - **The two 0.4 release gates assessed and closed** (2026-10-05):
   "advanced quality testing" and "security hardening" were bare lines
   from the original plan. Assessed against what exists, both are
