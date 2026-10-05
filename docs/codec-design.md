@@ -399,7 +399,24 @@ holds, and is tested, is narrower: each decision is the cheapest among the
 alternatives that were priced, and freeing the partition never does worse
 on `J` than forcing 8×8 on the test frames.
 
-**Wire format (version 1).**
+**Wire format (version 2).** v2 (2026-10-05) replaces v1's 1-bit
+`intra` flag with a 2-bit frame type and adds a 16-bit per-frame
+`poc` — the groundwork for B-frames ("Vault B-frames — design for
+v0.2" below); v1 streams are rejected fail-fast. The v2 layout:
+
+| field | bits | meaning |
+| ----- | ---- | ------- |
+| `version` | 16 | bitstream version, `2`; rejected up front if not |
+| `ftype` | 2 | `0` = intra, `1` = predictive, `2` = bi-predictive (reserved for v0.2; `3` rejected as malformed) |
+| `qp` | 6 | `1..=51` |
+| `num_refs` | 5 | 0 iff intra; else `1..=16`, at most the decoder's `max_refs` and the references it holds |
+| `loop_filter` | 1 | run the loop filter |
+| `poc` | 16 | display position within the current GOP (sequential today; the B-frame reordering key in v0.2) |
+| payload | — | superblock partition tree + per-leaf syntax |
+| `crc32` | 32 | IEEE 802.3 CRC-32 (little-endian) over all preceding bytes, verified before parsing |
+
+The v1 layout differed only in the 1-bit `intra` flag and the absent
+`poc`.
 
 | field | bits | meaning |
 | ----- | ---- | ------- |
@@ -564,7 +581,7 @@ The current versions, and where each layout is specified:
 | Aura | `tpt-audio-aura` | 1 | above, "Aura v1 — wire format" | CRC-32 trailer |
 | Reed | `tpt-audio-reed` | 1 | above, "Reed v0.1 — implemented design" | CRC-32 trailer |
 | Thrum | `tpt-video-thrum` | 1 | above, "Thrum v0.1 — implemented design" | CRC-32 trailer |
-| Vault | `tpt-video-vault` | 1 | above, "Vault v0.1 — implemented design" | CRC-32 trailer |
+| Vault | `tpt-video-vault` | 2 | above, "Vault v0.1 — implemented design" (v2: 2-bit frame type + 16-bit poc, the B-frames groundwork) | CRC-32 trailer |
 | Mote | `tpt-video-mote` | 1 | above, "Mote v0.1 — implemented design" (frame packets + provable bound) | CRC-32 trailer |
 
 A wire-format change bumps `VERSION`, fails fast against every older

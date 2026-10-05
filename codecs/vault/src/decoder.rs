@@ -261,13 +261,21 @@ impl Decoder for VaultDecoder {
         if version != VERSION {
             return Err(CodecError::Unsupported("unsupported Vault packet version"));
         }
-        let intra = r.read(1).map_err(bad)? == 1;
+        let ftype = r.read(2).map_err(bad)? as u8;
+        if ftype == crate::ftype::RSV {
+            return Err(CodecError::MalformedPacket);
+        }
         let qp = r.read(QP_BITS).map_err(bad)? as u8;
         if !(MIN_QP..=MAX_QP).contains(&qp) {
             return Err(CodecError::MalformedPacket);
         }
         let num_refs = r.read(5).map_err(bad)? as usize;
         let lf = r.read(1).map_err(bad)? == 1;
+        // Display position within the GOP. With b-frames not yet coded
+        // by the encoder, decode order == display order and the value is
+        // sequential; the reorder buffer lands with the B-coding stage.
+        let _poc = r.read(16).map_err(bad)? as u16;
+        let intra = ftype == crate::ftype::I;
         if intra != (num_refs == 0) {
             return Err(CodecError::MalformedPacket);
         }

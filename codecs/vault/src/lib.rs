@@ -102,7 +102,7 @@ pub use transform::ROUND_OFFSET;
 pub const CODEC_ID: [u8; 4] = *b"VAUL";
 
 /// Bitstream version.
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 
 /// Size in bytes of the per-packet CRC-32 trailer.
 pub const CRC_TRAILER_BYTES: usize = 4;
@@ -131,6 +131,20 @@ pub const KEYFRAME_INTERVAL: u64 = 60;
 pub const MIN_QP: u8 = 1;
 /// Largest legal quantiser index (6 bits on the wire).
 pub const MAX_QP: u8 = 51;
+
+/// Frame types on the v2 wire: the header's 2-bit `ftype` field. `Rsv`
+/// (3) is rejected as malformed so the encoding has room to grow.
+pub mod ftype {
+    /// Intra: coded without references; resets the display sequence.
+    pub const I: u8 = 0;
+    /// Predictive: references earlier display frames.
+    pub const P: u8 = 1;
+    /// Bi-predictive: references frames on both sides of its display
+    /// position; never becomes a reference itself.
+    pub const B: u8 = 2;
+    /// Reserved; rejected by decoders.
+    pub const RSV: u8 = 3;
+}
 /// Bits used for the `qp` header field.
 pub const QP_BITS: u32 = 6;
 

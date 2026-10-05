@@ -123,6 +123,10 @@ pub struct VaultEncoder {
     rc_debt: f64,
     /// The previous frame's chosen qp (the search's starting point).
     rc_qp: i32,
+    /// This frame's display position within the current GOP, written on
+    /// the wire (v2) so the decoder can reorder B-frames. Increments per
+    /// frame; resets on an intra.
+    gop_poc: u16,
 }
 
 impl VaultEncoder {
@@ -164,6 +168,7 @@ impl VaultEncoder {
             keyframe_interval,
             rc_debt: 0.0,
             rc_qp: 0,
+            gop_poc: 0,
         })
     }
 
@@ -295,6 +300,11 @@ impl Encoder for VaultEncoder {
         self.refs.insert(0, recon);
         self.refs.truncate(usize::from(self.enc.max_refs));
         self.frames += 1;
+        self.gop_poc = if intra {
+            0
+        } else {
+            self.gop_poc.wrapping_add(1)
+        };
 
         let flags = PacketFlags::END_OF_FRAME
             | if intra {
@@ -350,12 +360,18 @@ impl VaultEncoder {
 
         let mut w = PacketBits::new();
         let werr = |_: WriteError| CodecError::Internal;
+        let ftype = if intra {
+            crate::ftype::I
+        } else {
+            crate::ftype::P
+        };
         w.write_bits(16, u64::from(VERSION)).map_err(werr)?;
-        w.write_bits(1, u64::from(intra)).map_err(werr)?;
+        w.write_bits(2, u64::from(ftype)).map_err(werr)?;
         w.write_bits(QP_BITS, u64::from(qp)).map_err(werr)?;
         w.write_bits(5, num_refs as u64).map_err(werr)?;
         w.write_bits(1, u64::from(self.enc.loop_filter))
             .map_err(werr)?;
+        w.write_bits(16, u64::from(self.gop_poc)).map_err(werr)?;
 
         for sy in (0..src.height).step_by(SUPERBLOCK) {
             for sx in (0..src.width).step_by(SUPERBLOCK) {
