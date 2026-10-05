@@ -583,6 +583,23 @@ Added
 
 ### Added
 
+- **Vault gained frame-level rate control — `--bitrate` now means
+  something on the video path** (2026-10-05, half of §33's
+  rate-control item): `VaultConfig::target_bits_per_frame` drives a
+  bounded per-frame `qp` search (at most three encodes per frame) with
+  a budget bucket that lets the first intra frame spend 4× and banks
+  what earlier frames saved, spending that credit to converge onto the
+  target instead of stalling one quantiser step short of it. The frame
+  header already carried a per-frame `qp`, so there is no wire change
+  and the decoder is untouched. Deterministic (byte-identical
+  re-encodes, pinned) and measured end-to-end through
+  `tpt encode --codec vault --bitrate`: a 60 kbit/s target decodes to
+  61.7 kbit/s measured, 180 kbit/s → 143 (the bounded search stops
+  short on the textured first I-frame), 24 kbit/s → 28.6 (the
+  `qp = MAX_QP` floor is the codec's lowest rate). Encode cost when
+  enabled: up to 3× on adapting frames. Still open in the item:
+  scene-cut detection and per-block `qp`.
+
 - **Vault gained coefficient-level RDOQ as a measured, default-off
   encoder knob** (2026-10-05, half of §33's RDOQ item): an exact-rate
   zeroing pass — for every non-zero level of a tile, from the block's

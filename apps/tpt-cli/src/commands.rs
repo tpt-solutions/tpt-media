@@ -584,6 +584,7 @@ impl VideoCodec {
         height: u32,
         format: PixelFormat,
         qp: u8,
+        bits_per_frame: Option<u32>,
     ) -> Result<(VideoEncoderBox, Vec<u8>), String> {
         let fw = FrameworkCodecConfig::default();
         match self {
@@ -605,6 +606,9 @@ impl VideoCodec {
                     height,
                     format,
                     qp,
+                    // `--bitrate` / fps: Vault's frame-level rate control
+                    // (todo.md §33). Thrum has no rate control yet.
+                    target_bits_per_frame: bits_per_frame,
                     ..VaultConfig::default()
                 };
                 let enc = VaultEncoder::new(fw, cfg.clone())
@@ -873,6 +877,9 @@ struct VideoEncodeJob {
     fps_num: u32,
     fps_den: u32,
     qp: u8,
+    /// `--bitrate` / fps: the per-frame budget Vault's rate control
+    /// encodes toward (`None` = the configured constant `qp`).
+    bits_per_frame: Option<u32>,
     frames: Vec<VideoFrame>,
     extra_meta: Vec<(String, MetadataValue)>,
 }
@@ -882,9 +889,14 @@ struct VideoEncodeJob {
 /// per frame.
 fn run_video_encode_job(job: &VideoEncodeJob) -> Result<(Vec<u8>, usize), String> {
     let first = job.frames.first().ok_or("no frames to encode")?;
-    let (mut encoder, private) =
-        job.codec
-            .new_encoder(first.width, first.height, first.format, job.qp)?;
+    let bits_per_frame = job.bits_per_frame;
+    let (mut encoder, private) = job.codec.new_encoder(
+        first.width,
+        first.height,
+        first.format,
+        job.qp,
+        bits_per_frame,
+    )?;
     let version = encoder.info().version;
     let tb = Timebase::new(job.fps_den, job.fps_num);
     let mut muxer = tpt_container::TptMuxer::new(tb);
@@ -1048,11 +1060,18 @@ fn encode_video(spec: &OpSpec, input: &[u8], ctx: &Ctx<'_>, codec: VideoCodec) -
         Ok(r) => r,
         Err(e) => return Outcome::fail(1, format!("input is not a readable y4m: {e}")),
     };
+    // `--bitrate` / fps = the per-frame budget Vault's rate control
+    // encodes toward; other video codecs ignore it.
+    let bits_per_frame = spec
+        .bitrate_bits_per_second
+        .map(|b| b.div_ceil(u64::from(params.fps_num)) * u64::from(params.fps_den))
+        .and_then(|v| u32::try_from(v).ok());
     let job = VideoEncodeJob {
         codec,
         fps_num: params.fps_num,
         fps_den: params.fps_den,
         qp: quality_to_qp(spec.quality),
+        bits_per_frame,
         frames,
         extra_meta: spec
             .meta
@@ -1595,11 +1614,16 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                 Some(c) => c.name().to_string(),
                 None => format!("{:?}", track.codec_config.codec_id),
             };
+            let bits_per_frame = spec
+                .bitrate_bits_per_second
+                .map(|b| b.div_ceil(u64::from(params.fps_num)) * u64::from(params.fps_den))
+                .and_then(|v| u32::try_from(v).ok());
             let job = VideoEncodeJob {
                 codec: target,
                 fps_num: params.fps_num,
                 fps_den: params.fps_den,
                 qp: quality_to_qp(spec.quality),
+                bits_per_frame,
                 frames,
                 extra_meta: carry_meta(&track),
             };
@@ -1709,7 +1733,7 @@ fn benchmark_video(spec: &OpSpec, input: &[u8], codec: VideoCodec) -> Outcome {
     };
     let qp = quality_to_qp(spec.quality);
     let (mut encoder, private) =
-        match codec.new_encoder(params.width, params.height, params.format, qp) {
+        match codec.new_encoder(params.width, params.height, params.format, qp, None) {
             Ok(v) => v,
             Err(e) => return Outcome::fail(1, e),
         };
@@ -2204,7 +2228,7 @@ pub fn video_corpus_cmd(json: bool, codec_id: CodecId, fps: u32, frames: usize) 
 
     let mut rows: Vec<(&'static str, VideoReport)> = Vec::new();
     for scene in corpus(w, h, format, frames, fps, 0x5EED_A11A) {
-        let (mut enc, private) = match codec.new_encoder(w, h, format, 30) {
+        let (mut enc, private) = match codec.new_encoder(w, h, format, 30, None) {
             Ok(v) => v,
             Err(e) => return Outcome::fail(1, e),
         };

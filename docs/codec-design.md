@@ -449,7 +449,11 @@ Known sharp edges, stated plainly:
   frame budget on every scene but two; since 2026-10-05 the tile transform
   runs on `tpt-dsp-core`'s FFT-backed `FastDct2dPlan` and every scene fits
   the budget (2.9-22.2 ms/frame). Those are synthetic clips at a shared
-  `qp`, so they support no cross-codec compression claim.
+  `qp`, so they support no cross-codec compression claim. Rate is no
+  longer fixed either: `target_bits_per_frame` drives a bounded
+  per-frame `qp` search against a budget bucket
+  (`tpt encode --codec vault --bitrate`), measured at a 60 kbit/s
+  target decoding to 61.7 kbit/s measured.
 
 ## Common Patterns
 

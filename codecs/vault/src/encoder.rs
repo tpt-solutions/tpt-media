@@ -55,6 +55,7 @@ use crate::syntax::{
     LeafCtx, LeafKind, MVD_K,
 };
 use crate::transform::{Scans, Xform};
+use crate::MAX_QP;
 use crate::{
     crc32, quant_step, static_info, VaultConfig, CODEC_ID, CRC_TRAILER_BYTES, KEYFRAME_INTERVAL,
     MAX_PARTITION_DEPTH, MIN_BLOCK, MV_LIMIT, QP_BITS, SUPERBLOCK, VERSION,
@@ -116,6 +117,12 @@ pub struct VaultEncoder {
     scans: Scans,
     frames: u64,
     keyframe_interval: u64,
+    /// Rate-control bucket: cumulative bits spent minus the per-frame
+    /// targets, clamped below so one early overspend cannot starve the
+    /// stream forever. Negative = the stream owes quality.
+    rc_debt: f64,
+    /// The previous frame's chosen qp (the search's starting point).
+    rc_qp: i32,
 }
 
 impl VaultEncoder {
@@ -155,6 +162,8 @@ impl VaultEncoder {
             scans: Scans::new(),
             frames: 0,
             keyframe_interval,
+            rc_debt: 0.0,
+            rc_qp: 0,
         })
     }
 
@@ -210,9 +219,115 @@ impl Encoder for VaultEncoder {
             self.refs.len().min(usize::from(self.enc.max_refs))
         };
 
-        let step = quant_step(self.enc.qp);
+        // Rate control: when a per-frame target is configured, the frame
+        // is coded at the smallest qp (bounded re-encodes, at most three)
+        // whose packet fits the budget bucket; otherwise the configured
+        // constant qp applies.
+        let rc = self.enc.target_bits_per_frame.is_some();
+        let target = self.enc.target_bits_per_frame.unwrap_or(0) as u64;
+        let mut qp = self.rc_qp.clamp(1, i32::from(MAX_QP)) as u8;
+        if !rc {
+            qp = self.enc.qp;
+        } else if self.frames == 0 {
+            // No history: start from the configured quality intent and let
+            // the search move it.
+            qp = self.enc.qp;
+        }
+        // The first frame is intra and typically costs several P-frames;
+        // the bucket absorbs it over the frames that follow.
+        let frame_target = if rc && self.frames == 0 {
+            target.saturating_mul(4)
+        } else {
+            target
+        };
+
+        let mut out = self.encode_at_qp(&src, qp, intra, num_refs)?;
+        let mut bits = out.bits;
+        let mut attempts = 1usize;
+        if rc {
+            while bits > frame_target && qp < MAX_QP && attempts < 3 {
+                let jump = if bits > frame_target.saturating_mul(2) {
+                    2
+                } else {
+                    1
+                };
+                qp = (qp + jump).min(MAX_QP);
+                out = self.encode_at_qp(&src, qp, intra, num_refs)?;
+                bits = out.bits;
+                attempts += 1;
+            }
+            // Under budget while the bucket owes quality: step finer,
+            // aggressively when far under. The finer attempt may spend
+            // what the bucket owes (up to 2x the frame target) — that is
+            // the credit the earlier frames banked, and spending it is
+            // what lets the quantiser converge onto the target instead
+            // of stalling one step short of it.
+            if bits < frame_target * 7 / 8 && self.rc_debt <= 0.0 && qp > 1 && attempts < 3 {
+                let jump = if bits < frame_target / 4 { 2 } else { 1 };
+                let finer_qp = qp.saturating_sub(jump).max(1);
+                let finer = self.encode_at_qp(&src, finer_qp, intra, num_refs)?;
+                let credit = (-self.rc_debt) as u64;
+                if finer.bits <= frame_target + credit.min(frame_target.saturating_mul(2)) {
+                    out = finer;
+                    qp = finer_qp;
+                }
+            }
+            self.rc_debt = (self.rc_debt + bits as f64 - frame_target as f64).max(-(target as f64));
+            self.rc_qp = i32::from(qp);
+        }
+
+        let mut recon = out.recon;
+        let field = out.field;
+        if self.enc.loop_filter {
+            loop_filter(&mut recon, &field, qp);
+        }
+
+        // The proof of the packet-size bound is `VaultConfig::max_packet_bits`;
+        // this is the runtime check that the encoder honours it.
+        if out.bits > self.enc.max_packet_bits() as u64 {
+            return Err(CodecError::Internal);
+        }
+        let mut data = out.data;
+        let crc = crc32(&data);
+        data.extend_from_slice(&crc.to_le_bytes());
+        debug_assert!(data.len() <= self.enc.max_packet_bits().div_ceil(8) + CRC_TRAILER_BYTES);
+
+        self.refs.insert(0, recon);
+        self.refs.truncate(usize::from(self.enc.max_refs));
+        self.frames += 1;
+
+        let flags = PacketFlags::END_OF_FRAME
+            | if intra {
+                PacketFlags::KEYFRAME
+            } else {
+                PacketFlags::empty()
+            };
+        Ok(alloc::vec![Packet {
+            data,
+            pts: frame.frame.pts,
+            dts: frame.frame.pts,
+            flags,
+            track_id: 0,
+            duration: None,
+        }])
+    }
+}
+
+impl VaultEncoder {
+    /// One full encode of `src` at a fixed quantiser: the header, the
+    /// superblock RDO stream, and the (unfiltered) reconstruction. The
+    /// rate-control loop in [`VaultEncoder::encode`] calls this up to
+    /// three times per frame.
+    fn encode_at_qp(
+        &mut self,
+        src: &Picture,
+        qp: u8,
+        intra: bool,
+        num_refs: usize,
+    ) -> CodecResult<EncodedFrame> {
+        let step = quant_step(qp);
         let mut fe = FrameEnc {
-            src: &src,
+            src,
             refs: &self.refs[..num_refs],
             scans: &self.scans,
             xf: Xform::new(),
@@ -237,8 +352,7 @@ impl Encoder for VaultEncoder {
         let werr = |_: WriteError| CodecError::Internal;
         w.write_bits(16, u64::from(VERSION)).map_err(werr)?;
         w.write_bits(1, u64::from(intra)).map_err(werr)?;
-        w.write_bits(QP_BITS, u64::from(self.enc.qp))
-            .map_err(werr)?;
+        w.write_bits(QP_BITS, u64::from(qp)).map_err(werr)?;
         w.write_bits(5, num_refs as u64).map_err(werr)?;
         w.write_bits(1, u64::from(self.enc.loop_filter))
             .map_err(werr)?;
@@ -257,41 +371,27 @@ impl Encoder for VaultEncoder {
             }
         }
 
-        let mut recon = fe.recon;
+        let recon = fe.recon;
         let field = fe.field;
-        if self.enc.loop_filter {
-            loop_filter(&mut recon, &field, self.enc.qp);
-        }
-
-        // The proof of the packet-size bound is `VaultConfig::max_packet_bits`;
-        // this is the runtime check that the encoder honours it.
-        if w.bits() > self.enc.max_packet_bits() as u64 {
-            return Err(CodecError::Internal);
-        }
-        let mut data = w.finish();
-        let crc = crc32(&data);
-        data.extend_from_slice(&crc.to_le_bytes());
-        debug_assert!(data.len() <= self.enc.max_packet_bits().div_ceil(8) + CRC_TRAILER_BYTES);
-
-        self.refs.insert(0, recon);
-        self.refs.truncate(usize::from(self.enc.max_refs));
-        self.frames += 1;
-
-        let flags = PacketFlags::END_OF_FRAME
-            | if intra {
-                PacketFlags::KEYFRAME
-            } else {
-                PacketFlags::empty()
-            };
-        Ok(alloc::vec![Packet {
-            data,
-            pts: frame.frame.pts,
-            dts: frame.frame.pts,
-            flags,
-            track_id: 0,
-            duration: None,
-        }])
+        let bits = w.bits();
+        Ok(EncodedFrame {
+            recon,
+            field,
+            data: w.finish(),
+            bits,
+        })
     }
+}
+
+/// The output of one [`VaultEncoder::encode_at_qp`] pass: the
+/// reconstruction (which becomes the next reference), its motion field
+/// (for the loop filter), the packet payload without its CRC, and the
+/// payload's bit count (what the rate controller budgets against).
+struct EncodedFrame {
+    recon: Picture,
+    field: Field,
+    data: Vec<u8>,
+    bits: u64,
 }
 
 /// Per-frame encoder state. Borrows the source and the references so the

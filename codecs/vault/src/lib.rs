@@ -244,6 +244,15 @@ pub struct VaultConfig {
     /// fine-`qp` and real-content encodes, pending a `λ` tuned on
     /// content that actually exists.
     pub rdoq: bool,
+    /// Frame-level rate control: when set, each frame is coded at the
+    /// quantiser that keeps the stream near this many **bits per
+    /// frame** — a bounded search around the previous frame's choice
+    /// (at most three encodes), with a 4× allowance on the first
+    /// (intra) frame while the budget bucket recovers. The frame
+    /// header already carries a per-frame `qp`, so this is
+    /// encoder-only: no wire change, and `qp` is ignored while this is
+    /// `Some`.
+    pub target_bits_per_frame: Option<u32>,
 }
 
 impl Default for VaultConfig {
@@ -257,6 +266,7 @@ impl Default for VaultConfig {
             max_refs: 4,
             max_block_size: SUPERBLOCK,
             loop_filter: true,
+            target_bits_per_frame: None,
             rdoq: false,
         }
     }

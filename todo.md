@@ -1725,7 +1725,18 @@ Not done, and why (left honestly open):
       talking-head). Pinned by `corpus_counts_decoded_pictures_not_packets`.
 * [ ] B-frames, bi-prediction, weighted prediction, long-term references and
       reference reordering
-* [ ] rate control (`qp` is a constant), scene-cut detection, per-block `qp`
+* [x] frame-level rate control (2026-10-05): `VaultConfig::
+      target_bits_per_frame` — a bounded search (at most three encodes
+      per frame) around the previous frame's choice, driven by a
+      budget bucket that lets the first intra frame spend 4× and
+      credits what earlier frames banked; the frame header already
+      carried a per-frame `qp`, so there is no wire change. Measured
+      end-to-end through `tpt encode --codec vault --bitrate`: 60 kbit/s
+      target → 61.7 measured, 180 kbit/s → 143 (the bounded search
+      stops short on the textured first I-frame), 24 kbit/s → 28.6 (the
+      `qp = MAX_QP` floor is the lowest the codec can go). Deterministic
+      (pinned by test), decodes with the unchanged decoder. Still open:
+      scene-cut detection, per-block `qp`
 * [ ] a tuned `λ` and an RD-decided loop-filter flag — the RDOQ half
       landed 2026-10-05 as an encoder knob (`rdoq: bool`, default
       **off**): an exact-rate zeroing pass (per level, from the block's
