@@ -440,10 +440,11 @@ stands rather than duplicating it:
 - Tolerances are documented per kernel family in each module's
   `# Numerical contract` section (`tpt-dsp` §12), e.g. ~1e-3/1e-4 in
   `f32` for the FFT-backed transforms.
-- Randomized testing beyond the fixed equivalence vectors is the main
-  remaining gap (the §40 item stays honest); `tpt-media`'s own
-  seeded-random property tests (§38) exercise the *composed* scalar
-  paths end-to-end.
+- Randomized testing: closed 2026-10-05 — five SplitMix64-seeded
+  scalar-vs-SIMD sweeps (mul/add/magnitude/butterfly/full FFT,
+  lengths 4..1024) run on every nightly `simd` build of `tpt-dsp-core`
+  (`tpt-media`'s own §38 seeded-random property tests exercise the
+  *composed* scalar paths end-to-end).
 - Architecture-specific CI (x86_64 + AArch64 matrix) is likewise still
   open; today's CI runs x86_64 Linux/Windows only.
 

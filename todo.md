@@ -2182,9 +2182,15 @@ work — this section was silently re-asking for it; reconciled
 * [x] tolerance definition — per-kernel-family tolerances stated in
       each module's `# Numerical contract` section (§12 there: ~1e-3/
       1e-4 `f32`, ~1e-9/1e-10 `f64` for the FFT-backed transforms)
-* [ ] randomized testing — the equivalence tests use fixed vectors;
-      seeded-random scalar-vs-SIMD sweeps are the remaining gap
-      (recorded in `docs/performance.md` §SIMD Equivalence)
+* [x] randomized testing — 2026-10-05 (in `tpt-dsp`, where the SIMD
+      machinery lives): five SplitMix64-seeded sweeps drive the SIMD
+      and scalar paths with random values on every nightly `simd` run
+      — `complex_mul`/`complex_add`/`magnitude` element-wise, the
+      `fft_butterfly` stage bit-exactly against the hand expansion, and
+      full `fft_inplace_f32` against the scalar FFT at lengths
+      4..1024. The sweep caught its own harness bug first (the
+      butterfly consumes `lower`'s old value for both outputs), which
+      is the usual value of writing the property down
 * [ ] architecture-specific CI — 2026-10-05: no longer x86_64-only —
       CI cross-checks every Rust crate for `aarch64-unknown-linux-gnu`
       (`cargo check`, no linker needed; `tpt-media-sys` excluded

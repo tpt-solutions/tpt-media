@@ -7,7 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Added
+Added
+
+- **§40's randomized SIMD-equivalence sweeps landed in `tpt-dsp`**
+  (2026-10-05, upstream): five SplitMix64-seeded sweeps drive the SIMD
+  and scalar paths with random values on every nightly `simd` build —
+  element-wise mul/add/magnitude, the FFT butterfly bit-exactly against
+  the hand expansion, and the full `fft_inplace_f32` against the
+  scalar FFT at lengths 4..1024 — closing the "fixed vectors only"
+  gap that §40 recorded. Also upstream: the `tpt-dsp-io` `audio_check`
+  example, which had failed to compile for every workspace build
+  (it imports `AudioError`, an `audio`-feature-only export), is now
+  declared with `required-features` and the full `tpt-dsp` workspace
+  test suite is green for the first time in this clone.
 
 - **The fast transform: Vault's encoder is 11-26× faster and every
   corpus scene now fits the frame budget** (2026-10-05, §33's "faster
