@@ -14,6 +14,17 @@ lockstep with the workspace.
 
 ### Added
 
+- **Vault and Mote are playable in the browser** (2026-10-05, closing the
+  route the 2026-10-01 entry documented): both codecs became dependencies of
+  the crate and joined `DecoderTable::native()` with builders mirroring how
+  `tpt-cli` reconstructs a video decoder from a track (geometry from
+  `TrackMedia`, per-codec parameters from the codec-private bytes, the
+  codec's own factory doing the validation). The rebuilt `tpt_web.wasm` is
+  ~368 KB (from 328), and the Node checks (`check.mjs`, `mock-browser.mjs`)
+  pass against it. The extension point itself is unchanged and remains
+  Rust-only — this entry is the "one line in `native()`" route in action,
+  including the honest footnote that the wasm binary is fixed at build time,
+  so a browser gets exactly the codecs compiled in.
 - **Recorded the `tpt-web` extension point's real reachability** (2026-10-01,
   found by asking who can actually call it rather than re-reading the claim).
   `DecoderTable` is described as "the extension point" for Vault and Mote, and

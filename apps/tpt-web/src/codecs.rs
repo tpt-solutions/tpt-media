@@ -1,11 +1,11 @@
 //! The codec table: which decoders the player can build, keyed by the
 //! track's codec ID. This is the player's **extension point**.
 //!
-//! Only the codecs that exist today are wired in: Cinder, Aura and Reed
-//! (audio) and Thrum (video). Vault and Mote (todo.md sections 33 and 34) are
-//! implemented separately and are deliberately *not* referenced here. To add
-//! one, write a [`DecoderBuilder`] for it and either call
-//! [`DecoderTable::register`] on a table you pass to
+//! All six implemented codecs are wired in: Cinder, Aura and Reed
+//! (audio); Thrum, Vault and Mote (video) — Vault and Mote joined
+//! 2026-10-05, closing §33/§34's "web player does not include ..." items.
+//! To add a future codec, write a [`DecoderBuilder`] for it and either
+//! call [`DecoderTable::register`] on a table you pass to
 //! [`crate::Player::with_table`], or add one line to
 //! [`DecoderTable::native`] once the codec crate is a dependency of this
 //! crate. Nothing else in the player names a concrete codec: the parser is
@@ -19,6 +19,10 @@
 //! decoders from `Default` configs and ignore the track, so a `.tpt` written
 //! at 44.1 kHz or with non-default Cinder bit depth would decode wrongly
 //! through them.
+//!
+//! Note the wasm boundary reality (§45): the browser gets whatever
+//! [`DecoderTable::native`] compiled into the cdylib — `register`/
+//! `with_table` are Rust-side extensibility, not something JS can reach.
 
 use crate::error::WebError;
 use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraDynDecoder};
@@ -28,7 +32,9 @@ use tpt_media_codec::{
     CodecConfig as FrameworkConfig, CodecError, DynDecoder, DynDecoderFactory, ResourceLimits,
 };
 use tpt_media_core::{CodecId, MediaType, PixelFormat, Track};
+use tpt_video_mote::{MoteConfig, MoteDecoderFactory};
 use tpt_video_thrum::{ThrumConfig, ThrumDecoderFactory};
+use tpt_video_vault::{VaultConfig, VaultDecoderFactory};
 
 /// Build a decoder for `track`, enforcing `limits`.
 ///
@@ -57,15 +63,16 @@ impl DecoderTable {
         }
     }
 
-    /// The decoders that exist in this workspace today: Cinder, Aura, Reed,
-    /// Thrum. Vault and Mote are added here (or via
-    /// [`DecoderTable::register`]) when they land.
+    /// The decoders that exist in this workspace today: Cinder, Aura,
+    /// Reed, Thrum, Vault, Mote.
     pub fn native() -> Self {
         let mut t = DecoderTable::empty();
         t.register(*b"CIND", MediaType::Audio, "cinder", build_cinder);
         t.register(*b"AURA", MediaType::Audio, "aura", build_aura);
         t.register(*b"REED", MediaType::Audio, "reed", build_reed);
         t.register(*b"THRM", MediaType::Video, "thrum", build_thrum);
+        t.register(*b"VAUL", MediaType::Video, "vault", build_vault);
+        t.register(*b"MOTE", MediaType::Video, "mote", build_mote);
         t
     }
 
@@ -212,6 +219,64 @@ fn build_thrum(track: &Track, limits: &ResourceLimits) -> Result<Box<dyn DynDeco
         .map_err(|e| codec_err("thrum", e))
 }
 
+fn build_vault(track: &Track, limits: &ResourceLimits) -> Result<Box<dyn DynDecoder>, WebError> {
+    let width = track
+        .media
+        .width
+        .ok_or_else(|| WebError::Codec("vault: video track is missing its width".into()))?;
+    let height = track
+        .media
+        .height
+        .ok_or_else(|| WebError::Codec("vault: video track is missing its height".into()))?;
+    let private = &track.codec_config.data;
+    let cfg = if private.len() >= VaultConfig::CODEC_PRIVATE_LEN {
+        VaultConfig::from_codec_private(width, height, private)
+            .map_err(|e| codec_err("vault", e))?
+    } else {
+        VaultConfig {
+            width,
+            height,
+            format: track.media.pixel_format.unwrap_or(PixelFormat::Yuv420),
+            ..VaultConfig::default()
+        }
+    };
+    // Same shape as thrum: the factory carries the geometry and turns
+    // the (untrusted) codec-private bytes into a validated
+    // configuration; the framework config rides through `build`.
+    let factory = VaultDecoderFactory::new(cfg).map_err(|e| codec_err("vault", e))?;
+    factory
+        .build(&framework(track, limits))
+        .map_err(|e| codec_err("vault", e))
+}
+
+fn build_mote(track: &Track, limits: &ResourceLimits) -> Result<Box<dyn DynDecoder>, WebError> {
+    let width = track
+        .media
+        .width
+        .ok_or_else(|| WebError::Codec("mote: video track is missing its width".into()))?;
+    let height = track
+        .media
+        .height
+        .ok_or_else(|| WebError::Codec("mote: video track is missing its height".into()))?;
+    let private = &track.codec_config.data;
+    let cfg = if private.len() >= MoteConfig::CODEC_PRIVATE_LEN {
+        MoteConfig::from_codec_private(width, height, private).map_err(|e| codec_err("mote", e))?
+    } else {
+        MoteConfig {
+            width,
+            height,
+            format: track.media.pixel_format.unwrap_or(PixelFormat::Yuv420),
+            ..MoteConfig::default()
+        }
+    };
+    // Mote's decoder learns the stream's dictionary as packets arrive;
+    // the factory just carries the validated geometry.
+    let factory = MoteDecoderFactory::new(cfg).map_err(|e| codec_err("mote", e))?;
+    factory
+        .build(&framework(track, limits))
+        .map_err(|e| codec_err("mote", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,13 +287,15 @@ mod tests {
     }
 
     #[test]
-    fn native_table_covers_exactly_the_four_implemented_codecs() {
+    fn native_table_covers_exactly_the_six_implemented_codecs() {
         let t = DecoderTable::native();
         for (id, media, name) in [
             (b"CIND", MediaType::Audio, "cinder"),
             (b"AURA", MediaType::Audio, "aura"),
             (b"REED", MediaType::Audio, "reed"),
             (b"THRM", MediaType::Video, "thrum"),
+            (b"VAUL", MediaType::Video, "vault"),
+            (b"MOTE", MediaType::Video, "mote"),
         ] {
             assert_eq!(t.name(CodecId::new(*id), media), Some(name));
         }

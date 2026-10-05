@@ -1740,7 +1740,13 @@ Not done, and why (left honestly open):
       no `libm` needed — the codecs' float math stays inside `core`.
       Both vault and mote now build bare-metal locally and in the CI
       `no_std` job alongside reed
-* [ ] a WASM build and the web player (§45) do not include Vault
+* [x] a WASM build and the web player (§45) now include Vault —
+      2026-10-05, via the exact route §8 of `docs/web-design.md`
+      recorded: the codec became a `tpt-web` dependency and got a
+      `DecoderTable::native()` line plus a builder mirroring the CLI's
+      track reconstruction. Mote came along in the same change (it had
+      the same gap); the rebuilt wasm is ~368 KB and the Node checks
+      pass against it
 * [ ] maximum decode work (§19 `max_decode_micros`) — per-packet work is
       bounded structurally by the frame geometry, but no time budget is
       checked

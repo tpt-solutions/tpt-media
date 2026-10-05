@@ -17,8 +17,8 @@ plays them with WebAudio and a canvas. Part of the
 | | |
 |---|---|
 | Role | WASM browser player (todo.md §45) |
-| Artifact | `cdylib` → `tpt_web.wasm` (328 KiB release) plus an `rlib` for native tests |
-| Codecs | Cinder, Aura, Reed (audio); Thrum (video). Vault and Mote are **not** dependencies; see [Adding a codec](#adding-a-codec) |
+| Artifact | `cdylib` → `tpt_web.wasm` (~368 KiB release) plus an `rlib` for native tests |
+| Codecs | Cinder, Aura, Reed (audio); Thrum, Vault, Mote (video) — all six in `DecoderTable::native()`; see [Adding a codec](#adding-a-codec) |
 | Bindings | Plain `extern "C"` over integer handles + hand-written JS. **No `wasm-bindgen`** ([why](../../docs/web-design.md#3-why-a-plain-c-abi-and-not-wasm-bindgen)) |
 | Dependencies | Only workspace crates; nothing external |
 | `no_std` | No: an app is exempt from the `no_std`-first rule (CONTRIBUTING §10), not from §9.4 |
@@ -144,7 +144,9 @@ outright.
 
 ## Adding a codec
 
-Vault and Mote are deliberately absent. When one lands, write a
+All six implemented codecs are wired in — Vault and Mote joined 2026-10-05 via
+exactly this route (dependency + one `DecoderTable::native()` line + a builder
+mirroring the CLI's track reconstruction). For the next one: write a
 `DecoderBuilder` (`fn(&Track, &ResourceLimits) -> Result<Box<dyn DynDecoder>,
 WebError>`) and either `table.register(...)` it on a table passed to
 `Player::with_table`, or add one line to `DecoderTable::native()`. Nothing
@@ -155,9 +157,7 @@ else changes; see [`docs/web-design.md`](../../docs/web-design.md) section 8.
 > `DecoderBuilder` is a Rust `fn` pointer, which cannot cross the wasm
 > boundary). So from a browser the only route is: add the codec as a dependency
 > of `tpt-web` and put one line in `DecoderTable::native()`. `register` is for
-> Rust callers embedding the `rlib`. This is a real limitation, not a design
-> intent — it is why the two video codecs play in the CLI and not in the web
-> player.
+> Rust callers embedding the `rlib`.
 
 ## Testing
 

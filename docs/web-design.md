@@ -15,9 +15,10 @@ no-bundler demo page.
 
 Out of scope, on purpose:
 
-- **Vault and Mote** (todo.md §33/§34) are implemented separately and are not
-  dependencies of this crate. §8 below is the extension point that lets them
-  in without touching the parser, player or ABI.
+- ~~**Vault and Mote** (todo.md §33/§34) are implemented separately and are
+  not dependencies of this crate.~~ Closed 2026-10-05: both are now
+  dependencies and in `DecoderTable::native()`; §8 below records the
+  extension point and its reachability.
 - **Encoding, muxing, seeking, subtitles, DRM, adaptive streaming.** This is a
   decode-and-present path for a single `.tpt` byte stream.
 
@@ -206,20 +207,12 @@ player, parser and ABI know nothing about concrete codecs; they speak
 its player with `Player::new(limits)`, which is `DecoderTable::native()`
 exactly; there is no ABI entry point that accepts a table, and a
 `DecoderBuilder` is a Rust `fn` pointer that cannot cross the boundary in any
-case. So a browser consumer cannot register Vault or Mote, and would not
-benefit from a table extension point if one existed: **the only way a codec
-becomes playable in a browser today is to become a dependency of `tpt-web` and
-be added to `DecoderTable::native()`.** The `register` route exists for Rust
-callers embedding the crate natively (`tpt-web` is also an `rlib`), and for
-the eventual case where the table could be selected through the ABI.
-
-That makes the two video codecs reachable by the CLI but not by the web
-player, and it is the honest current state rather than a design intent: adding
-an ABI function to select a table would mean shipping function pointers across
-the wasm boundary, which §4's "no pointer flows from JS into Rust" rule rules
-out. The alternatives are a per-codec feature flag on `tpt-web`, or a second
-`open_*` entry point per codec, both of which put concrete codec names back
-into the ABI. Neither is built; neither is claimed.
+case. **The only way a codec becomes playable in a browser is to become a
+dependency of `tpt-web` and be added to `DecoderTable::native()`** — which is
+the route Vault and Mote took on 2026-10-05 (both now in `native()`; the
+rebuilt wasm is ~368 KB and the Node checks pass against it). The `register`
+route exists for Rust callers embedding the crate natively (`tpt-web` is also
+an `rlib`).
 
 `a_registered_codec_plays_without_touching_the_player` (a fake codec) proves
 step 2 needs no other change. Two constraints a new codec meets:

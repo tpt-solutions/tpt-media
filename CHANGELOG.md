@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Vault and Mote are playable in the browser** (2026-10-05): both video
+  codecs joined `tpt-web` as dependencies and entered
+  `DecoderTable::native()` with builders that reconstruct a decoder from the
+  track exactly as `tpt-cli` does (geometry from `TrackMedia`, parameters
+  from the codec-private bytes, the codec's factory validating). This closes
+  §33's "the web player does not include Vault" via the route
+  `docs/web-design.md` §8 recorded on 2026-10-01 (the extension point is
+  Rust-only; a codec becomes browser-playable by becoming a dependency and
+  taking its `native()` line). The rebuilt `tpt_web.wasm` is ~368 KB (from
+  328 KiB); `check.mjs`/`mock-browser.mjs` pass against it, and the crate
+  README, `docs/web-design.md`, and `codecs.rs` docs no longer describe the
+  codecs as absent.
 - **Vault and Mote now build bare-metal; the CI `no_std` job covers
   every codec that claims it** (2026-10-05): §33's "bare-metal `no_std`
   verification" item was the claim-then-verify pattern again — the

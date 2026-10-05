@@ -812,7 +812,9 @@ dependencies = [
  "tpt-container",
  "tpt-media-codec",
  "tpt-media-core",
+ "tpt-video-mote",
  "tpt-video-thrum",
+ "tpt-video-vault",
  "tpt-web",
 ]
 
