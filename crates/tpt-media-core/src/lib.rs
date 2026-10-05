@@ -16,6 +16,7 @@
 //! possible, and `PartialEq` where it makes sense.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 extern crate alloc;
 

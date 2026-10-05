@@ -29,6 +29,7 @@
 //!
 //! See `docs/provenance.md` for algorithm sources.
 
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
@@ -102,10 +103,19 @@ fn dequantize(q: i32, step: f32) -> f32 {
 /// Cinder encoder configuration.
 #[derive(Clone, Debug)]
 pub struct CinderEncoderConfig {
+    /// MDCT window size in samples: 128 or 256. Encode consumes
+    /// `2·frame_size` samples per block (the TDAC window pair).
     pub frame_size: u16,
+    /// Sample rate in Hz; 44.1/48 kHz per the supported-format table.
     pub sample_rate: u32,
+    /// Number of spectral bands the spectrum is quantised in; the
+    /// `frame_size` MDCT bins are split into `n_bands` equal bands.
     pub n_bands: u8,
+    /// Per-band quantisation steps (length must equal `n_bands`).
+    /// Larger = coarser = fewer bits.
     pub band_steps: Vec<f32>,
+    /// Fixed bit width per quantised coefficient, 4..=12 (the
+    /// `--quality` mapping target).
     pub bits_per_coef: u8,
     /// When `true`, each band's step from `band_steps` is scaled by that
     /// band's absolute threshold of hearing relative to a 1kHz reference
@@ -179,6 +189,9 @@ pub struct CinderEncoder {
 }
 
 impl CinderEncoder {
+    /// Build an encoder for `enc` under the framework configuration
+    /// (`version` + resource limits); validates frame size, band
+    /// count, and step-table length before anything is allocated.
     pub fn new(codec_cfg: CodecConfig, enc: CinderEncoderConfig) -> CodecResult<Self> {
         if enc.frame_size != 128 && enc.frame_size != 256 {
             return Err(CodecError::InvalidConfig("frame_size must be 128 or 256"));
@@ -311,6 +324,10 @@ pub struct CinderDecoder {
 }
 
 impl CinderDecoder {
+    /// Build a decoder matching the *encoder* configuration `enc`
+    /// (band layout, bit depth, rates); frame size is self-described
+    /// per packet, so a decoder configured for one size decodes the
+    /// other correctly.
     pub fn new(codec_cfg: CodecConfig, enc: CinderEncoderConfig) -> CodecResult<Self> {
         if enc.frame_size != 128 && enc.frame_size != 256 {
             return Err(CodecError::InvalidConfig("frame_size must be 128 or 256"));
@@ -488,6 +505,7 @@ impl DynDecoderFactory for CinderDecoderFactory {
     }
 }
 
+/// Type-erased wrapper around [`CinderDecoder`].
 pub struct CinderDynDecoder {
     inner: CinderDecoder,
 }
@@ -544,6 +562,7 @@ impl DynEncoderFactory for CinderEncoderFactory {
     }
 }
 
+/// Type-erased wrapper around [`CinderEncoder`].
 pub struct CinderDynEncoder {
     inner: CinderEncoder,
 }

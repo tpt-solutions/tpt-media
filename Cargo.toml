@@ -74,13 +74,13 @@ exclude = [
 tpt-media-core = { path = "crates/tpt-media-core", version = "0.1.0", default-features = false }
 tpt-media-bitstream = { path = "crates/tpt-media-bitstream", version = "0.1.0", default-features = false }
 tpt-media-codec = { path = "crates/tpt-media-codec", version = "0.1.0", default-features = false }
-tpt-media-container = { path = "crates/tpt-media-container", version = "0.1.0" }
+tpt-media-container = { path = "crates/tpt-media-container", version = "0.1.0", default-features = false }
 tpt-media-pipeline = { path = "crates/tpt-media-pipeline", version = "0.1.0" }
 tpt-media-io = { path = "crates/tpt-media-io", version = "0.1.0" }
 tpt-media-probe = { path = "crates/tpt-media-probe", version = "0.1.0" }
 tpt-media-representation = { path = "crates/tpt-media-representation", version = "0.1.0" }
 tpt-media-research = { path = "crates/tpt-media-research", version = "0.1.0" }
-tpt-container = { path = "containers/tpt-container", version = "0.1.0" }
+tpt-container = { path = "containers/tpt-container", version = "0.1.0", default-features = false }
 
 # Codecs
 tpt-audio-cinder = { path = "codecs/cinder", version = "0.1.0" }

@@ -61,6 +61,7 @@
 //! Every `unsafe` block implements one of the documented caller
 //! requirements above; the `// SAFETY:` comment on each states which.
 
+#![warn(missing_docs)]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tpt_audio_aura::{

@@ -23,6 +23,7 @@
 //! the pipeline consumes these sources/sinks, never the other way round.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 extern crate alloc;
 

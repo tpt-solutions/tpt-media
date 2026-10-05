@@ -29,11 +29,17 @@ use crate::{IoError, IoResult};
 /// WAV `fmt ` chunk data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WavFormat {
+    /// Sample encoding declared by the `fmt ` chunk.
     pub sample_format: SampleFormat,
+    /// Channel count.
     pub channels: u16,
+    /// Sample rate in Hz.
     pub sample_rate: u32,
+    /// The chunk's `byte_rate` field (sample_rate · block_align).
     pub byte_rate: u32,
+    /// The chunk's `block_align` field (bytes per sample frame).
     pub block_align: u16,
+    /// Bits per sample as declared.
     pub bits_per_sample: u16,
 }
 

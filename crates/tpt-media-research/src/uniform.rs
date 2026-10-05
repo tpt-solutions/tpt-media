@@ -39,10 +39,12 @@ impl ScalarStep {
         ScalarStep { step }
     }
 
+    /// Quantize: the nearest step index for `value`.
     pub fn index(&self, value: f32) -> i32 {
         (value / self.step).round() as i32
     }
 
+    /// Dequantize: the step midpoint this index stands for.
     pub fn value(&self, index: i32) -> f32 {
         index as f32 * self.step
     }
@@ -76,8 +78,11 @@ impl RateEstimator<Vec<i32>> for EntropyRate {
 /// representation. `baseline` and `block_dct` use it directly;
 /// `motion_aligned`/`temporal_dct` embed their own streams.
 pub trait LinearCoeffs {
+    /// The coefficient stream as a flat slice.
     fn stream(&self) -> &[f32];
+    /// The coefficient stream, mutable (for in-place quantize).
     fn stream_mut(&mut self) -> &mut [f32];
+    /// Rebuild a coefficient block from a flat stream.
     fn from_stream(stream: Vec<f32>) -> Self;
 }
 

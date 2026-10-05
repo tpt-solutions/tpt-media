@@ -35,6 +35,8 @@ impl LinearCoeffs for BaselineCoeffs {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+/// The do-nothing representation: `z = x`, `T` is the identity.
+/// The rate/quality floor every real representation must beat.
 pub struct Baseline;
 
 impl Representation for Baseline {

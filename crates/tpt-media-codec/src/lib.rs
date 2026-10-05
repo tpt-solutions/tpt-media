@@ -7,6 +7,7 @@
 //! See `ARCHITECTURE.md` §6 and `docs/codec-design.md`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 extern crate alloc;
 
@@ -221,14 +222,20 @@ pub struct Capabilities {
 pub enum SupportedFormat {
     /// Audio sample/format/rate/layout that the codec handles.
     Audio {
+        /// Sample encoding the codec consumes/produces.
         sample_format: tpt_media_core::SampleFormat,
+        /// Channel arrangement the codec consumes/produces.
         channel_layout: tpt_media_core::ChannelLayout,
+        /// Sample rate in Hz.
         sample_rate: u32,
     },
     /// Video pixel format / dimensions that the codec handles.
     Video {
+        /// Pixel layout the codec consumes/produces.
         pixel_format: tpt_media_core::PixelFormat,
+        /// Frame width in pixels.
         width: u32,
+        /// Frame height in pixels.
         height: u32,
     },
 }
@@ -322,6 +329,7 @@ impl Default for CodecConfig {
 
 /// Decoder trait.
 pub trait Decoder {
+    /// The frame type this codec produces (audio or video).
     type Frame;
     /// Static information about this codec.
     fn info(&self) -> &CodecInfo;
@@ -360,6 +368,7 @@ pub trait Decoder {
 
 /// Encoder trait.
 pub trait Encoder {
+    /// The frame type this codec consumes (audio or video).
     type Frame;
     /// Static information about this codec.
     fn info(&self) -> &CodecInfo;
@@ -394,53 +403,81 @@ pub trait Encoder {
 pub enum DynFrame {
     /// Audio frame bytes (interleaved).
     Audio {
+        /// Sample encoding of `samples`.
         sample_format: tpt_media_core::SampleFormat,
+        /// Channel arrangement of `samples`.
         channel_layout: tpt_media_core::ChannelLayout,
+        /// Sample rate in Hz.
         sample_rate: u32,
+        /// Samples per channel.
         sample_count: u32,
+        /// Interleaved sample bytes, `sample_count`·channels·
+        /// bytes-per-sample long. Carries no timestamp: the caller
+        /// associates the packet's PTS with the output.
         samples: Vec<u8>,
     },
     /// Video frame.
     Video {
+        /// Pixel layout of `pixels`.
         pixel_format: tpt_media_core::PixelFormat,
+        /// Frame width in pixels.
         width: u32,
+        /// Frame height in pixels.
         height: u32,
+        /// Byte distance between consecutive rows (at least
+        /// `width` · bytes-per-pixel).
         stride: u32,
+        /// Packed plane bytes, row-major, no timestamp — the
+        /// caller associates the packet's PTS with the output.
         pixels: Vec<u8>,
     },
 }
 
 /// Type-erased decoder factory.
 pub trait DynDecoderFactory {
+    /// The 4-byte codec id this factory builds decoders for.
     fn codec_id(&self) -> &[u8; 4];
+    /// Static information (name, version, capabilities, formats).
     fn info(&self) -> CodecInfo;
+    /// Build a decoder from the (version, codec-private, limits)
+    /// configuration, typically reconstructed from a container track.
     fn build(&self, cfg: &CodecConfig) -> CodecResult<Box<dyn DynDecoder>>;
 }
 
 /// Type-erased decoder.
 pub trait DynDecoder {
+    /// Decode one packet into zero or more type-erased frames.
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<DynFrame>>;
+    /// Flush any buffered state and return held-back frames.
     fn flush(&mut self) -> CodecResult<Vec<DynFrame>>;
     /// Drain the decoder at end-of-stream (graceful EOS — emit any
     /// remaining buffered frames, do not discard reference state).
     fn drain(&mut self) -> CodecResult<Vec<DynFrame>>;
+    /// Static information about the constructed decoder.
     fn info(&self) -> CodecInfo;
 }
 
 /// Type-erased encoder factory.
 pub trait DynEncoderFactory {
+    /// The 4-byte codec id this factory builds encoders for.
     fn codec_id(&self) -> &[u8; 4];
+    /// Static information (name, version, capabilities, formats).
     fn info(&self) -> CodecInfo;
+    /// Build an encoder from the (version, codec-private, limits)
+    /// configuration.
     fn build(&self, cfg: &CodecConfig) -> CodecResult<Box<dyn DynEncoder>>;
 }
 
 /// Type-erased encoder.
 pub trait DynEncoder {
+    /// Encode one type-erased frame into zero or more packets.
     fn encode(&mut self, frame: &DynFrame) -> CodecResult<Vec<Packet>>;
+    /// Flush any buffered state and return held-back packets.
     fn flush(&mut self) -> CodecResult<Vec<Packet>>;
     /// Drain the encoder at end-of-stream (graceful EOS — emit any
     /// remaining buffered packets, do not discard rate-control state).
     fn drain(&mut self) -> CodecResult<Vec<Packet>>;
+    /// Static information about the constructed encoder.
     fn info(&self) -> CodecInfo;
 }
 
@@ -452,30 +489,37 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// An empty registry.
     pub fn new() -> Self {
         Registry::default()
     }
+    /// Register (or replace) the decoder factory for a codec id.
     pub fn register_decoder<F: 'static + DynDecoderFactory>(&mut self, f: F) {
         self.decoders.push(Box::new(f));
     }
+    /// Register (or replace) the encoder factory for a codec id.
     pub fn register_encoder<F: 'static + DynEncoderFactory>(&mut self, f: F) {
         self.encoders.push(Box::new(f));
     }
+    /// The registered decoder factory for `codec_id`, if any.
     pub fn find_decoder(&self, codec_id: &[u8; 4]) -> Option<&dyn DynDecoderFactory> {
         self.decoders
             .iter()
             .find(|f| f.codec_id() == codec_id)
             .map(|f| f.as_ref())
     }
+    /// The registered encoder factory for `codec_id`, if any.
     pub fn find_encoder(&self, codec_id: &[u8; 4]) -> Option<&dyn DynEncoderFactory> {
         self.encoders
             .iter()
             .find(|f| f.codec_id() == codec_id)
             .map(|f| f.as_ref())
     }
+    /// Ids of every registered decoder factory.
     pub fn decoder_ids<'a>(&'a self) -> impl Iterator<Item = &'a [u8; 4]> + 'a {
         self.decoders.iter().map(|f| f.codec_id())
     }
+    /// Ids of every registered encoder factory.
     pub fn encoder_ids<'a>(&'a self) -> impl Iterator<Item = &'a [u8; 4]> + 'a {
         self.encoders.iter().map(|f| f.codec_id())
     }
@@ -497,9 +541,12 @@ pub struct PacketGuard<'a> {
 }
 
 impl<'a> PacketGuard<'a> {
+    /// A guard enforcing `limits`.
     pub fn new(limits: &'a ResourceLimits) -> Self {
         PacketGuard { limits }
     }
+    /// Reject `packet` against the packet-size limit before running
+    /// `f`, so hostile sizes fail before any allocation.
     pub fn check<F, R>(&self, packet: &Packet, f: F) -> CodecResult<R>
     where
         F: FnOnce() -> CodecResult<R>,

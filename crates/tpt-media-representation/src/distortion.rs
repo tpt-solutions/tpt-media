@@ -5,6 +5,8 @@ use crate::volume::SignalView;
 
 /// A distortion/error measure `D(x, x_hat)`. Lower is better.
 pub trait DistortionMetric {
+    /// The distortion between `original` and `reconstructed`; finite
+    /// and non-negative, lower is better.
     fn distortion(&self, original: SignalView<'_>, reconstructed: SignalView<'_>) -> f64;
 }
 

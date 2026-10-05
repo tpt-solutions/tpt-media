@@ -286,16 +286,16 @@ Known sharp edges, stated plainly:
   dictionary size, not by a target.
 - **The encoder is not real-time** (`real_time_encoder` is false): a key
   frame is one accelerated 4096-entry search per patch.
-- **Not wired into the `tpt-web` player.** It *is* driven by `tpt-cli`:
+- **Wired into the `tpt-web` player** (2026-10-05, with Vault: both took
+  the §8 route — dependency + `DecoderTable::native()` line + a builder
+  reconstructing the decoder from the track). It *is* driven by `tpt-cli`:
   `--codec mote` works for `encode`, `decode`, `transcode` and `benchmark`
   through the y4m bridge, it is in the probe capability table, and
-  `tpt video-corpus --codec mote` measures it over the §36 corpus.
-  `tpt-web`'s `DecoderTable` has no Mote entry yet (it takes a
-  `DecoderBuilder`; see `docs/web-design.md` §8). The measured cross-codec
-  figures are in `todo.md` §33 — on a static-camera codec like this the
-  honest summary is that its rate is dominated by the one-off dictionary
-  packet and its quality collapses on high motion, which is what it was
-  built for.
+  `tpt video-corpus --codec mote` measures it over the §36 corpus. The
+  measured cross-codec figures are in `todo.md` §33 — on a static-camera
+  codec like this the honest summary is that its rate is dominated by the
+  one-off dictionary packet and its quality collapses on high motion, which
+  is what it was built for.
 - Tree/product quantisation for larger dictionaries (todo.md §8) is not
   implemented; the search is the accelerated linear scan.
 
@@ -513,6 +513,7 @@ The current versions, and where each layout is specified:
 | Reed | `tpt-audio-reed` | 1 | above, "Reed v0.1 — implemented design" | CRC-32 trailer |
 | Thrum | `tpt-video-thrum` | 1 | above, "Thrum v0.1 — implemented design" | CRC-32 trailer |
 | Vault | `tpt-video-vault` | 1 | above, "Vault v0.1 — implemented design" | CRC-32 trailer |
+| Mote | `tpt-video-mote` | 1 | above, "Mote v0.1 — implemented design" (frame packets + provable bound) | CRC-32 trailer |
 
 A wire-format change bumps `VERSION`, fails fast against every older
 decoder, and must land with its layout table extended here and its

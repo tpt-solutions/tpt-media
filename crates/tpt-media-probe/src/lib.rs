@@ -10,6 +10,7 @@
 //! what is actually in the file rather than a guess.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 extern crate alloc;
 
@@ -30,8 +31,11 @@ use tpt_media_core::{
 /// Probed media container kind.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum ContainerKind {
+    /// A `.tpt` native container (`TPTM` magic).
     Tpt,
+    /// A RIFF/WAVE file.
     Wav,
+    /// Anything else, or the input was empty.
     #[default]
     Unknown,
 }
@@ -41,13 +45,16 @@ pub enum ContainerKind {
 pub struct AudioTrackInfo {
     /// Container-local track ID.
     pub id: u8,
+    /// The 4-byte codec id from the track descriptor.
     pub codec_id: CodecId,
     /// Bitstream version of the codec in the file (`major << 8 | minor`).
     pub codec_version: u16,
     /// Sample format; only reported when the container or codec carries it
     /// (`.tpt` does not serialize it, so this is `None` for `.tpt`).
     pub sample_format: Option<SampleFormat>,
+    /// Channel arrangement from the track descriptor.
     pub channel_layout: Option<ChannelLayout>,
+    /// Sample rate in Hz from the track descriptor.
     pub sample_rate: Option<u32>,
     /// Best-effort sample count derived from duration × sample rate.
     pub sample_count: Option<u64>,
@@ -56,46 +63,75 @@ pub struct AudioTrackInfo {
     /// Number of packets in this track.
     pub frame_count: Option<u64>,
     /// First and last packet timestamps (track timebase).
+    /// PTS of the first packet on the track.
     pub first_pts: Option<Timestamp>,
+    /// PTS of the last packet on the track.
     pub last_pts: Option<Timestamp>,
+    /// Human track name, when tagged.
     pub name: Option<String>,
+    /// BCP-47 language tag, when tagged.
     pub language: Option<String>,
+    /// Free-form typed metadata pairs from the `TMTA` chunk.
     pub metadata: Vec<(String, MetadataValue)>,
 }
 
 /// A probed video track.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VideoTrackInfo {
+    /// Container-local track ID.
     pub id: u8,
+    /// The 4-byte codec id from the track descriptor.
     pub codec_id: CodecId,
+    /// Bitstream version of the codec in the file.
     pub codec_version: u16,
+    /// Frame width in pixels, when the track carries it.
     pub width: Option<u32>,
+    /// Frame height in pixels, when the track carries it.
     pub height: Option<u32>,
+    /// Pixel layout, when the track carries one.
     pub pixel_format: Option<PixelFormat>,
     /// Frame rate × 1000, estimated from packet spacing.
     pub framerate_x1000: Option<u32>,
+    /// Number of packets on the track.
     pub frame_count: Option<u64>,
+    /// Estimated compressed bitrate in bits/second.
     pub bitrate: Option<u64>,
+    /// PTS of the first packet on the track.
     pub first_pts: Option<Timestamp>,
+    /// PTS of the last packet on the track.
     pub last_pts: Option<Timestamp>,
+    /// Human track name, when tagged.
     pub name: Option<String>,
+    /// BCP-47 language tag, when tagged.
     pub language: Option<String>,
+    /// Free-form typed metadata pairs from the `TMTA` chunk.
     pub metadata: Vec<(String, MetadataValue)>,
 }
 
 /// A probed non-audio/video track (subtitle or metadata).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrackInfo {
+    /// Container-local track ID.
     pub id: u8,
+    /// Subtitle or metadata.
     pub media_type: MediaType,
+    /// The 4-byte codec id from the track descriptor.
     pub codec_id: CodecId,
+    /// Bitstream version of the codec in the file.
     pub codec_version: u16,
+    /// Number of packets on the track.
     pub frame_count: Option<u64>,
+    /// Estimated bitrate in bits/second.
     pub bitrate: Option<u64>,
+    /// PTS of the first packet on the track.
     pub first_pts: Option<Timestamp>,
+    /// PTS of the last packet on the track.
     pub last_pts: Option<Timestamp>,
+    /// Human track name, when tagged.
     pub name: Option<String>,
+    /// BCP-47 language tag, when tagged.
     pub language: Option<String>,
+    /// Free-form typed metadata pairs from the `TMTA` chunk.
     pub metadata: Vec<(String, MetadataValue)>,
 }
 
@@ -104,6 +140,7 @@ pub struct TrackInfo {
 /// is available, and the framework-level capability flags.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodecCapabilityReport {
+    /// The 4-byte codec id found in the file.
     pub codec_id: CodecId,
     /// Human name (registered implementation, or the known native family).
     pub name: Option<&'static str>,
@@ -113,18 +150,24 @@ pub struct CodecCapabilityReport {
     pub decoder_available: bool,
     /// `true` if an encoder implementation is registered in the codec `Registry`.
     pub encoder_available: bool,
+    /// The registered implementation declares lossless capability.
     pub lossless: bool,
+    /// The registered implementation declares lossy capability.
     pub lossy: bool,
+    /// The registered implementation declares real-time decode.
     pub real_time_safe: bool,
 }
 
 /// Combined probe result.
 #[derive(Clone, Debug, Default)]
 pub struct ProbeReport {
+    /// The identified container kind.
     pub container: ContainerKind,
+    /// Input size in bytes.
     pub file_size: u64,
     /// Container version (`.tpt` only), major = `>> 8`, minor = `& 0xFF`.
     pub version: Option<u16>,
+    /// The `.tpt` header's global timebase.
     pub global_timebase: Option<Timebase>,
     /// Longest playback across all tracks, in seconds.
     pub duration_seconds: Option<f64>,
@@ -134,10 +177,13 @@ pub struct ProbeReport {
     pub checksum_ok: Option<bool>,
     /// Per-cluster checksum failures as `(track_id, chunk_offset)`.
     pub cluster_checksum_failures: Vec<(u8, u64)>,
+    /// Every probed audio track.
     pub audio: Vec<AudioTrackInfo>,
+    /// Every probed video track.
     pub video: Vec<VideoTrackInfo>,
     /// All subtitle and metadata tracks.
     pub other: Vec<TrackInfo>,
+    /// One report per distinct codec id found in the file.
     pub codec_capabilities: Vec<CodecCapabilityReport>,
     /// Human-readable problems found while probing (parse errors,
     /// truncation, checksum mismatches). Never panics on malformed input.
@@ -145,12 +191,15 @@ pub struct ProbeReport {
 }
 
 impl ProbeReport {
+    /// An empty report (the `Default`).
     pub fn new() -> Self {
         ProbeReport::default()
     }
+    /// `true` when the container could not be identified.
     pub fn is_unknown(&self) -> bool {
         self.container == ContainerKind::Unknown
     }
+    /// Total tracks across all media types.
     pub fn track_count(&self) -> usize {
         self.audio.len() + self.video.len() + self.other.len()
     }

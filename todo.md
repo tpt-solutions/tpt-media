@@ -3040,16 +3040,31 @@ The architecture must satisfy:
       §19 limits + §47 audits + §38 sweeps + §42 hostile-input memory
       tests, with the three real overflow/OOB/bomb bugs they found
       fixed (2026-09-11/14)
-* [x] native codecs have explicit versioned specifications — 2026-09-29:
-      every implemented codec's wire layout is specified field-by-field
-      with its version in `docs/codec-design.md` ("Cinder v1 — wire
-      format", "Aura v1 — wire format", and the Reed/Thrum design
-      sections), the Bitstream Versioning section carries the
-      crate/`VERSION`/layout/integrity table for all four, and the
+* [x] native codecs have explicit versioned specifications — 2026-09-29
+      for the first four, extended 2026-10-05 to all six implemented
+      codecs: every wire layout is specified field-by-field with its
+      version in `docs/codec-design.md` ("Cinder v1 — wire format",
+      "Aura v1 — wire format", the Reed/Thrum design sections, and the
+      Vault/Mote design sections with their wire tables and provable
+      bounds), the Bitstream Versioning section carries the
+      crate/`VERSION`/layout/integrity table for all six, and the
       change discipline (version bump + table + provenance in the same
       change) is stated there
 * [ ] `.tpt` is independently implementable
-* [ ] public APIs have documented contracts
+* [x] public APIs have documented contracts — 2026-10-05, measured rather
+      than assumed: a `-W missing_docs` sweep found 187 undocumented
+      public items across the workspace (the newest codecs were at
+      zero — recent sessions held the standard — while the older
+      foundation crates predated it). Every one is now documented, and
+      `#![warn(missing_docs)]` is on in all seventeen library crates,
+      so the CI clippy gate (`-D warnings`) fails any future
+      undocumented public item instead of trusting review. `cargo doc
+      --workspace` is zero-warning (the sweep also surfaced four
+      broken/private intra-doc links and two container workspace
+      declarations whose `default-features` was silently ignored —
+      both fixed), and the contracts themselves follow CONTRIBUTING
+      §4: panics, errors, complexity, and real-time/allocation
+      behavior on the codec surfaces
 * [x] numerical algorithms have documented conventions — §12 in
       `tpt-dsp` (all 8 families carry `# Numerical contract` +
       `# Panics` sections, audited)

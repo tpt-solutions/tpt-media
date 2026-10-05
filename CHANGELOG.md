@@ -9,6 +9,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Every public API is now documented — and it stays that way by
+  enforcement, not review** (2026-10-05, §54's "public APIs have
+  documented contracts"): a `-W missing_docs` sweep measured the real
+  coverage instead of assuming it and found 187 undocumented public
+  items across the workspace — 39 in `tpt-media-codec`, 47 in
+  `tpt-media-probe`, 35 in `tpt-media-research`, 22 in
+  `tpt-media-representation`, and the rest scattered (the three newest
+  codecs were at zero; the older foundation crates predated the
+  standard). All 187 are documented, `#![warn(missing_docs)]` is now
+  on in all seventeen library crates so the CI clippy gate
+  (`-D warnings`) fails any future undocumented public item, and the
+  sweep surfaced and fixed four broken/private intra-doc links plus
+  two container workspace declarations whose `default-features` was
+  being silently ignored (pipeline's `tpt-container` dependency now
+  opts into `std` properly, and its no_std build still passes).
+  `cargo doc --workspace` remains zero-warning; 68 test binaries stay
+  green.
 - **Vault and Mote are playable in the browser** (2026-10-05): both video
   codecs joined `tpt-web` as dependencies and entered
   `DecoderTable::native()` with builders that reconstruct a decoder from the

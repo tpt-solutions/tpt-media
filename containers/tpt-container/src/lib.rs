@@ -33,6 +33,7 @@
 //!
 //! See `docs/container-design.md` for the full specification.
 
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
 extern crate alloc;

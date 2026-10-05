@@ -74,6 +74,7 @@
 //! See `docs/provenance.md` for algorithm sources.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 extern crate alloc;
 
@@ -282,7 +283,7 @@ impl VaultConfig {
     ///   8x8 luma tile, 8 bits per 4x4 chroma tile);
     /// - per sample, one run token and one level token, each at most
     ///   `MAX_RICE_BITS` (136): the encoder picks the cheapest `k`, so a
-    ///   block never costs more than at `k = 7`, and [`MAX_LEVEL`] bounds the
+    ///   block never costs more than at `k = 7`, and `MAX_LEVEL` bounds the
     ///   largest folded value.
     ///
     /// The encoder checks the finished packet against this and returns

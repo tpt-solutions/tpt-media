@@ -176,7 +176,7 @@ impl<T, O, F: FnMut(T) -> O> Node for Map<T, O, F> {
 /// to the driver. A `cap` (>= `window`) is the hard upper bound beyond
 /// which [`NodeError::BufferOverflow`] is reported.
 ///
-/// In practice that hard bound is unreachable through a [`Chain`], and the
+/// In practice that hard bound is unreachable through a `Chain`, and the
 /// invariant is pinned by `bounded_cap_is_unreachable_in_a_linear_chain`:
 /// the node takes one input and emits at most one output per call, so the
 /// queue can never hold more than `window` items and `cap >= window` (asserted

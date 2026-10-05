@@ -62,6 +62,7 @@
 //! See `docs/provenance.md` for algorithm sources.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 extern crate alloc;
 
@@ -354,6 +355,9 @@ pub struct ReedEncoder {
 }
 
 impl ReedEncoder {
+    /// Build an encoder for `enc` under the framework configuration
+    /// (`version` + resource limits); the Reed parameters themselves
+    /// come from `enc`, which is validated first.
     pub fn new(codec_cfg: CodecConfig, enc: ReedConfig) -> CodecResult<Self> {
         enc.validate()?;
         let mut win = vec![0f32; enc.frame_size()];
@@ -568,6 +572,9 @@ pub struct ReedDecoder {
 }
 
 impl ReedDecoder {
+    /// Build a decoder for `enc` under the framework configuration;
+    /// `enc` is validated first and must match what the encoder used
+    /// (frame size, LPC order, LSF bit depth).
     pub fn new(codec_cfg: CodecConfig, enc: ReedConfig) -> CodecResult<Self> {
         enc.validate()?;
         Ok(ReedDecoder {
@@ -791,6 +798,7 @@ impl DynDecoderFactory for ReedDecoderFactory {
         Ok(alloc::boxed::Box::new(ReedDynDecoder { inner: d }))
     }
 }
+/// Type-erased wrapper around [`ReedDecoder`].
 pub struct ReedDynDecoder {
     inner: ReedDecoder,
 }
@@ -828,6 +836,9 @@ impl DynDecoder for ReedDynDecoder {
     }
 }
 
+/// Type-erased encoder factory building Reed encoders from `Default`
+/// parameters (the track's codec-private data carries the real
+/// parameters on the decode side).
 pub struct ReedEncoderFactory;
 impl DynEncoderFactory for ReedEncoderFactory {
     fn codec_id(&self) -> &[u8; 4] {
@@ -845,6 +856,7 @@ impl DynEncoderFactory for ReedEncoderFactory {
         Ok(alloc::boxed::Box::new(ReedDynEncoder { inner: e }))
     }
 }
+/// Type-erased wrapper around [`ReedEncoder`].
 pub struct ReedDynEncoder {
     inner: ReedEncoder,
 }

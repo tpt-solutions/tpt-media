@@ -43,6 +43,7 @@
 //!
 //! See `docs/provenance.md` for algorithm sources.
 
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
@@ -181,10 +182,17 @@ pub enum AuraMode {
 /// Aura configuration.
 #[derive(Clone, Debug)]
 pub struct AuraConfig {
+    /// Lossless (LPC + Exp-Golomb residuals) or lossy (MDCT +
+    /// masking-driven quantisation).
     pub mode: AuraMode,
+    /// Sample rate in Hz; 44.1/48 kHz per the supported-format table.
     pub sample_rate: u32,
+    /// LPC filter order, 1..=32 (lossless residual prediction).
     pub lpc_order: u8,
+    /// Samples per coded block (lossless) and the MDCT analysis
+    /// hop input length basis; 1024 by default.
     pub block_size: u16,
+    /// MDCT window size for the lossy path (2048 or 4096).
     pub mdct_size: u16,
 }
 
@@ -208,6 +216,8 @@ pub struct AuraEncoder {
 }
 
 impl AuraEncoder {
+    /// Build an encoder for `enc` under the framework configuration
+    /// (`version` + resource limits); `enc` is validated first.
     pub fn new(codec_cfg: CodecConfig, enc: AuraConfig) -> CodecResult<Self> {
         if (enc.lpc_order as usize) > 32 {
             return Err(CodecError::InvalidConfig("aura lpc_order max 32"));
@@ -477,6 +487,8 @@ pub struct AuraDecoder {
 }
 
 impl AuraDecoder {
+    /// Build a decoder matching the *encoder* configuration `enc`
+    /// (mode, block/MDCT sizes, LPC order).
     pub fn new(codec_cfg: CodecConfig, enc: AuraConfig) -> CodecResult<Self> {
         Ok(AuraDecoder {
             info: static_info(Capabilities {
@@ -634,6 +646,7 @@ impl DynDecoderFactory for AuraDecoderFactory {
         Ok(alloc::boxed::Box::new(AuraDynDecoder { inner: d }))
     }
 }
+/// Type-erased wrapper around [`AuraDecoder`].
 pub struct AuraDynDecoder {
     inner: AuraDecoder,
 }
@@ -671,6 +684,9 @@ impl DynDecoder for AuraDynDecoder {
     }
 }
 
+/// Type-erased encoder factory building Aura encoders from `Default`
+/// parameters (the track's codec-private data carries the real
+/// parameters on the decode side).
 pub struct AuraEncoderFactory;
 impl DynEncoderFactory for AuraEncoderFactory {
     fn codec_id(&self) -> &[u8; 4] {
@@ -689,6 +705,7 @@ impl DynEncoderFactory for AuraEncoderFactory {
         Ok(alloc::boxed::Box::new(AuraDynEncoder { inner: e }))
     }
 }
+/// Type-erased wrapper around [`AuraEncoder`].
 pub struct AuraDynEncoder {
     inner: AuraEncoder,
 }

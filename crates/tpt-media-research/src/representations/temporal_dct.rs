@@ -39,6 +39,7 @@ use super::blockdct::BlockDct2D;
 /// Block size `B` shared by the frame-0 and residual transforms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TemporalDctConfig {
+    /// Transform block edge in pixels (square blocks).
     pub block_size: usize,
 }
 
@@ -47,10 +48,16 @@ pub struct TemporalDctConfig {
 /// the prediction residuals for frames `1..frames`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TemporalDctCoeffs {
+    /// Block-DCT coefficients of frame 0 (one per sample).
     pub frame0: Vec<f32>,
+    /// Concatenated block-DCT streams of the prediction residuals
+    /// for frames `1..frames`.
     pub residual: Vec<f32>,
 }
 
+/// The predictive video representation: frame 0 coded as a block
+/// DCT, every later frame coded as the block DCT of its residual
+/// against the previous *reconstructed* frame.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TemporalDct;
 
@@ -152,10 +159,14 @@ impl tpt_media_representation::CoeffMagnitudes for TemporalDctCoeffs {
 /// with the same step; nothing else exists to transmit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TemporalDctQuantized {
+    /// Quantized frame-0 coefficient stream.
     pub frame0: Vec<i32>,
+    /// Quantized residual coefficient streams, concatenated.
     pub residual: Vec<i32>,
 }
 
+/// Quantizer for [`TemporalDct`] coefficient streams: one scalar
+/// step for every coefficient, frame 0 and residuals alike.
 #[derive(Clone, Copy, Debug)]
 pub struct TemporalDctQuantizer {
     step: ScalarStep,

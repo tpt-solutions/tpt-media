@@ -24,7 +24,9 @@ pub trait CoeffMagnitudes {
 
 /// Sparsity/energy-compaction summary of a coefficient magnitude stream.
 pub struct SparsityReport {
+    /// Total coefficient count in the stream.
     pub total: usize,
+    /// Coefficients with non-zero magnitude.
     pub nonzero: usize,
     /// Cumulative fraction of total energy captured by the top `k`
     /// coefficients (by magnitude), for `k` in `1..=total`.

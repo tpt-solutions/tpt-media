@@ -40,7 +40,9 @@ use tpt_media_representation::{
 /// error (mean squared error, lower is better).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RdPoint {
+    /// Encoded size normalised per luma sample.
     pub bits_per_sample: f64,
+    /// Mean squared error against the source volume.
     pub mse: f64,
 }
 

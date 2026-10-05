@@ -36,7 +36,7 @@ pub(crate) const STAGING_MAX_BYTES: usize = 4 * 1024 * 1024;
 /// a few dozen bytes, `u16`-bounded codec-private data and two short strings.
 pub(crate) const MAX_TRAK_BYTES: usize = 256 * 1024;
 
-/// Player-level resource limits. See the [module docs](self).
+/// Player-level resource limits. See the module docs.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct WebLimits {
     /// Limits handed to every decoder and used for packet / metadata /

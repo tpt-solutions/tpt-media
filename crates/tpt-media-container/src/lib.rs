@@ -6,6 +6,7 @@
 //! The native implementation lives in the `tpt-container` crate.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 extern crate alloc;
 

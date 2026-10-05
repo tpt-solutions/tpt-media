@@ -5,11 +5,17 @@
 pub struct ChannelMask(u16);
 
 impl ChannelMask {
+    /// Left front channel (WAVEFORMATEX / FLAC `FL`).
     pub const FRONT_LEFT: ChannelMask = ChannelMask(0x0001);
+    /// Right front channel.
     pub const FRONT_RIGHT: ChannelMask = ChannelMask(0x0002);
+    /// Center front channel (dialog).
     pub const FRONT_CENTER: ChannelMask = ChannelMask(0x0004);
+    /// Low-frequency effects channel (subwoofer).
     pub const LOW_FREQUENCY: ChannelMask = ChannelMask(0x0008);
+    /// Left rear channel.
     pub const BACK_LEFT: ChannelMask = ChannelMask(0x0010);
+    /// Right rear channel.
     pub const BACK_RIGHT: ChannelMask = ChannelMask(0x0020);
 
     /// Empty mask (no channels).

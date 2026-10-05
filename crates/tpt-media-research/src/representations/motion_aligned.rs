@@ -28,6 +28,7 @@ use super::blockdct::BlockDct2D;
 /// Block size `B` for the aligned volume's spatial DCT.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MotionAlignedConfig {
+    /// Block edge `B` in pixels (square blocks).
     pub block_size: usize,
 }
 
@@ -35,7 +36,9 @@ pub struct MotionAlignedConfig {
 /// complete decoder state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MotionAlignedCoeffs {
+    /// The volume's (single) displacement.
     pub velocity: [f32; 2],
+    /// Block-DCT coefficients of the velocity-aligned volume.
     pub dct: Vec<f32>,
 }
 
@@ -45,10 +48,12 @@ pub struct MotionAlignedCoeffs {
 /// transmitting it is still paid via [`MotionAlignedRate`].
 #[derive(Clone, Copy, Debug)]
 pub struct MotionAligned {
+    /// Per-block displacement applied before the transform.
     pub velocity: [f32; 2],
 }
 
 impl MotionAligned {
+    /// A representation with every block moving by `(vx, vy)`.
     pub fn with_velocity(vx: f32, vy: f32) -> Self {
         MotionAligned { velocity: [vx, vy] }
     }
@@ -155,11 +160,16 @@ impl tpt_media_representation::CoeffMagnitudes for MotionAlignedCoeffs {
 /// through at full `f32` precision (it is already "as transmitted").
 #[derive(Clone, Debug, PartialEq)]
 pub struct MotionAlignedQuantized {
+    /// This block's displacement (as transmitted).
     pub velocity: [f32; 2],
+    /// Transform-domain coefficients (quantized).
     pub dct: Vec<i32>,
 }
 
 #[derive(Clone, Copy, Debug)]
+/// Quantizer for [`MotionAligned`] coefficients: displacement is
+/// passed through at full `f32` precision (it is already "as
+/// transmitted"), only the DCT coefficients are scalar-stepped.
 pub struct MotionAlignedQuantizer {
     step: ScalarStep,
 }

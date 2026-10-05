@@ -9,8 +9,11 @@
 /// Dimensions of a `V(x, y, t)` volume.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SignalDims {
+    /// Luma width in pixels.
     pub width: usize,
+    /// Luma height in pixels.
     pub height: usize,
+    /// Number of temporal frames.
     pub frames: usize,
 }
 
@@ -64,10 +67,12 @@ impl<'a> SignalView<'a> {
         SignalView { dims, data }
     }
 
+    /// The volume's dimensions.
     pub fn dims(&self) -> SignalDims {
         self.dims
     }
 
+    /// The packed plane data, row-major, frame-major (t·h·w).
     pub fn data(&self) -> &'a [f32] {
         self.data
     }
@@ -78,6 +83,7 @@ impl<'a> SignalView<'a> {
         &self.data[t * len..(t + 1) * len]
     }
 
+    /// One luma sample.
     pub fn sample(&self, x: usize, y: usize, t: usize) -> f32 {
         self.frame(t)[y * self.dims.width + x]
     }
@@ -102,10 +108,12 @@ impl<'a> SignalViewMut<'a> {
         SignalViewMut { dims, data }
     }
 
+    /// The volume's dimensions.
     pub fn dims(&self) -> SignalDims {
         self.dims
     }
 
+    /// The packed plane data, mutable.
     pub fn data_mut(&mut self) -> &mut [f32] {
         self.data
     }
@@ -116,6 +124,7 @@ impl<'a> SignalViewMut<'a> {
         &mut self.data[t * len..(t + 1) * len]
     }
 
+    /// Overwrite one luma sample.
     pub fn set_sample(&mut self, x: usize, y: usize, t: usize, value: f32) {
         let width = self.dims.width;
         self.frame_mut(t)[y * width + x] = value;
@@ -171,22 +180,27 @@ impl SignalBuffer {
         SignalBuffer { dims, data }
     }
 
+    /// The volume's dimensions.
     pub fn dims(&self) -> SignalDims {
         self.dims
     }
 
+    /// The packed plane data, row-major, frame-major (t·h·w).
     pub fn data(&self) -> &[f32] {
         &self.data
     }
 
+    /// Consume the buffer into its packed data.
     pub fn into_vec(self) -> Vec<f32> {
         self.data
     }
 
+    /// A read-only view over the whole buffer.
     pub fn view(&self) -> SignalView<'_> {
         SignalView::new(self.dims, &self.data)
     }
 
+    /// A mutable view over the whole buffer.
     pub fn view_mut(&mut self) -> SignalViewMut<'_> {
         SignalViewMut::new(self.dims, &mut self.data)
     }

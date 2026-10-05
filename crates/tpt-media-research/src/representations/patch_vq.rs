@@ -32,9 +32,14 @@ use crate::uniform::{dequantize_stream, quantize_stream, ScalarStep};
 /// Patch size `B`, codebook size `K`, and the training schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PatchVqConfig {
+    /// Patch edge `B` in pixels (patches are `B×B`).
     pub patch_size: usize,
+    /// Dictionary size `K` (a power of two in practice, for the
+    /// index bit width).
     pub codebook_entries: usize,
+    /// Lloyd iterations during training.
     pub train_iterations: usize,
+    /// SplitMix64 seed for the deterministic initialisation.
     pub train_seed: u64,
 }
 
@@ -43,7 +48,9 @@ pub struct PatchVqConfig {
 /// information** — both are transmitted.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PatchVqCoeffs {
+    /// The trained dictionary, flat `K·B²` in patch order.
     pub codebook: Vec<f32>,
+    /// One dictionary index per patch of the volume.
     pub indices: Vec<u32>,
 }
 
@@ -95,6 +102,9 @@ pub fn extract_patches(signal: SignalView<'_>, config: &PatchVqConfig) -> Vec<f3
     out
 }
 
+/// The patch-VQ representation: the frame is tiled into `B×B`
+/// patches, a dictionary is trained on them (deterministically),
+/// and each patch is coded as the index of its nearest entry.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PatchVq;
 

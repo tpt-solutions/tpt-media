@@ -78,8 +78,8 @@ enum State {
     Failed,
 }
 
-/// Push-based `.tpt` parser with a bounded buffer. See the
-/// [module docs](self).
+/// Push-based `.tpt` parser with a bounded buffer. See the module
+/// docs.
 #[derive(Debug)]
 pub struct StreamParser {
     limits: WebLimits,

@@ -206,7 +206,7 @@ impl Pipe {
     }
 }
 
-/// The streaming player. See the [module docs](self).
+/// The streaming player. See the module docs.
 pub struct Player {
     limits: WebLimits,
     table: DecoderTable,

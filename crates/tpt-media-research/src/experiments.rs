@@ -43,7 +43,9 @@ use crate::uniform::{EntropyRate, LinearQuantizer};
 /// Result of one matched-rate experiment.
 #[derive(Clone, Debug)]
 pub struct ExperimentReport {
+    /// Human label of the representation under test.
     pub label: &'static str,
+    /// One rate/distortion curve per quantizer setting tried.
     pub curves: Vec<LabeledCurve>,
     /// Target rates (bits/sample) chosen **inside** every curve's sampled
     /// range, so every cell is reached by interpolation, never extrapolation.

@@ -17,6 +17,7 @@
 //! is no `rand`, no thread-local state, no I/O. Two runs with the same
 //! inputs and the same seed are byte-identical.
 
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
 pub mod det_rng;

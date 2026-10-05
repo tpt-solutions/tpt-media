@@ -21,7 +21,10 @@ use crate::volume::{SignalView, SignalViewMut};
 /// a block size both sides already agree on, analogous to a codec profile
 /// constant) — never per-instance data that must be signalled per input.
 pub trait Representation {
+    /// Fixed, out-of-band-agreed parameters (block sizes and the
+    /// like) — never per-instance data needing signalling.
     type Config;
+    /// The coefficient domain this representation transforms into.
     type Coeffs;
 
     /// `z = T(x)`.

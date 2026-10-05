@@ -14,19 +14,27 @@ use crate::node::NodeError;
 pub enum MediaFormat {
     /// Raw interleaved PCM audio.
     Audio {
+        /// Sample encoding carried on the edge.
         sample_format: SampleFormat,
+        /// Channel arrangement carried on the edge.
         channel_layout: ChannelLayout,
+        /// Sample rate in Hz.
         sample_rate: u32,
     },
     /// Raw video frames.
     Video {
+        /// Pixel layout carried on the edge.
         pixel_format: PixelFormat,
+        /// Frame width in pixels.
         width: u32,
+        /// Frame height in pixels.
         height: u32,
     },
     /// Compressed/container-level items (packets of a single codec).
     Compressed {
+        /// Whether the packets carry audio or video.
         media_type: MediaType,
+        /// The 4-byte codec id of the packets.
         codec_id: CodecId,
     },
     /// An application-defined opaque edge.

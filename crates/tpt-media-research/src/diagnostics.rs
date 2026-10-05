@@ -39,6 +39,8 @@ pub struct SecondaryDiagnostics {
     pub coefficients_for_99pct_energy: usize,
 }
 
+/// Non-rate/quality health signals for a quantized coefficient
+/// stream (dead-zone occupancy, clipping, entropy proxies).
 pub fn secondary_diagnostics(quantized: &[i32]) -> SecondaryDiagnostics {
     let mags: Vec<f32> = quantized.iter().map(|&i| i as f32).collect();
     let report = tpt_media_representation::SparsityReport::compute(&mags, 1e-6);

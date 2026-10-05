@@ -18,6 +18,7 @@ use super::blockdct::BlockDct2D;
 /// Block size `B` (a square tile; must divide the signal's width and height).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockDctConfig {
+    /// Transform block edge in pixels (square blocks).
     pub block_size: usize,
 }
 
@@ -40,6 +41,8 @@ impl LinearCoeffs for BlockDctCoeffs {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+/// The classic still-image representation: per-block separable 2D
+/// DCT-II with uniform scalar quantisation (the JPEG shape).
 pub struct BlockDct;
 
 impl Representation for BlockDct {

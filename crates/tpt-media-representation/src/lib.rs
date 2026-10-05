@@ -18,6 +18,7 @@
 //! allocation, larger scratch, and expensive search are all fine, since this
 //! is research/analysis code, never a real-time encode/decode path.
 
+#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
 mod distortion;
