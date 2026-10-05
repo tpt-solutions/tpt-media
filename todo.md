@@ -2975,8 +2975,30 @@ Before 0.4:
       2026-10-01: this line was last touched 2026-09-07, before the crate
       existed
 * [x] Mote prototype — `codecs/mote` v0.1, 2026-09-30 (§34)
-* [ ] advanced quality testing
-* [ ] security hardening
+* [x] advanced quality testing — 2026-10-05, assessed against what the
+      gate could have meant when it was written: everything "advanced"
+      relative to the basic round-trip asserts it predates exists and
+      is pinned — the §36 corpora (eight audio signal classes, eight
+      video scenes) driven through every implemented codec, the §37
+      metric set (SNR, log-spectral distance, PSNR, SSIM,
+      bits-per-pixel, latency), rate/quality and CPU/quality curves
+      via `benchmark --quality`, and `tpt video-corpus` comparing
+      Thrum/Vault/Mote over the same scenes with per-scene rate and
+      quality tables (§33's cross-codec findings). What is *deliberately*
+      out, unchanged: perceptual/subjective metrics (§37's standing
+      note — no consumer driving the design) and real speech/music
+      corpora (none available); both stay tracked where they live
+* [x] security hardening — 2026-10-05, same assessment: the hardening
+      this gate could ask for has landed and is tested — §19's resource
+      limits everywhere, the §47 audits (integer overflow, bounds,
+      allocation bombs — three real bugs found and fixed), the
+      container zero-timebase and `read_chunk_header` overflow fixes,
+      deterministic corruption/truncation/bit-flip sweeps in CI, and
+      the wasm build's computed + capped memory limits. The
+      genuinely-open remainder is not hardening but *continuous*
+      coverage-guided fuzzing, which §54 tracks as its own item, plus
+      the consumerless `max_decode_micros`/cancellation pair §19
+      carries
 
 Before 1.0:
 

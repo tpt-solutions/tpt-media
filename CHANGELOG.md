@@ -9,6 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **The two 0.4 release gates assessed and closed** (2026-10-05):
+  "advanced quality testing" and "security hardening" were bare lines
+  from the original plan. Assessed against what exists, both are
+  satisfied with their remainders honestly relocated: quality testing
+  now means the §36 corpora driven through every implemented codec,
+  the §37 metric set (SNR/LSD/PSNR/SSIM/bpp/latency), rate/quality
+  curves via `benchmark --quality`, and the cross-codec `tpt
+  video-corpus` comparison — with perceptual/subjective metrics and
+  real speech/music corpora deliberately still out (tracked in §37).
+  Security hardening's content landed across §19/§47 (limits
+  everywhere, three real overflow/bomb bugs fixed, container
+  zero-timebase hardening, wasm memory caps, deterministic sweeps in
+  CI) — the open remainder is *continuous* coverage-guided fuzzing,
+  which §54 tracks as its own item.
 - **Every public API is now documented — and it stays that way by
   enforcement, not review** (2026-10-05, §54's "public APIs have
   documented contracts"): a `-W missing_docs` sweep measured the real
