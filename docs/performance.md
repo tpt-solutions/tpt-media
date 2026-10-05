@@ -259,14 +259,27 @@ block and 0–3 LSBs of noise, default `qp = 30`.
 
 | bench | median | per frame |
 | --- | ---: | ---: |
-| `vault/qcif_176x144_yuv420/encode_i_frame` | 180 ms | 45 ms |
-| `vault/qcif_176x144_yuv420/encode_p_frame` (1 I + 3 P) | 218 ms | 54 ms |
-| `vault/qcif_176x144_yuv420/encode_p_frame_refs1` | 215 ms | 54 ms |
-| `vault/qcif_176x144_yuv420/decode` | 7.4 ms | 1.9 ms |
-| `vault/cif_352x288_yuv420/encode_i_frame` | 690 ms | 172 ms |
-| `vault/cif_352x288_yuv420/encode_p_frame` (1 I + 3 P) | 712 ms | 178 ms |
-| `vault/cif_352x288_yuv420/encode_p_frame_refs1` | 712 ms | 178 ms |
-| `vault/cif_352x288_yuv420/decode` | 25.2 ms | 6.3 ms |
+| `vault/qcif_176x144_yuv420/encode_i_frame` | 15.8 ms | 3.9 ms |
+| `vault/qcif_176x144_yuv420/encode_p_frame` (1 I + 3 P) | 22.9 ms | 5.7 ms |
+| `vault/qcif_176x144_yuv420/encode_p_frame_refs1` | 23.7 ms | 5.9 ms |
+| `vault/qcif_176x144_yuv420/decode` | 0.65 ms | 0.16 ms |
+| `vault/cif_352x288_yuv420/encode_i_frame` | 51.3 ms | 12.8 ms |
+| `vault/cif_352x288_yuv420/encode_p_frame` (1 I + 3 P) | 56.1 ms | 14.0 ms |
+| `vault/cif_352x288_yuv420/encode_p_frame_refs1` | 58.7 ms | 14.7 ms |
+| `vault/cif_352x288_yuv420/decode` | 2.4 ms | 0.6 ms |
+
+These are the fast-transform numbers (2026-10-05): the tile transform
+now runs on `tpt-dsp-core`'s FFT-backed `FastDct2dPlan` (std builds;
+bare metal keeps the direct `dct_2d` path with identical conventions).
+Against the direct-transform implementation measured 2026-09-30
+(medians: QCIF I-frame 180 ms / 45 ms per frame, CIF I-frame 690 ms /
+172 ms, QCIF decode 7.4 ms) this is **11–26× faster on encode and
+~11–23× on decode**, and — the part that matters for the §33 corpus
+findings — *every corpus scene now fits the 33.3 ms frame budget at
+QCIF* (worst: high-motion, 22.2 ms encode + 0.9 ms decode). Rate and
+quality are unchanged: the bench clip still codes to 202 B/packet at
+37.11 dB (QCIF) and 498 B at 37.87 dB (CIF), byte-for-byte the direct
+transform's figures.
 
 Mean packet size and luma PSNR over those clips: **202 B/packet at 37.11 dB
 (QCIF), 498 B/packet at 37.87 dB (CIF)**. Machine caveat, measured: the
@@ -283,9 +296,12 @@ intra-frame encode time — 9 024 transform calls across a 4-frame
 intra stream, 44.2 ms/frame — and **88.2%** of a P-frame stream,
 where the motion search's 89 627 SAD evaluations cost **8.6%** and
 candidate pricing sits at 89.2% (nested with the transform: pricing
-is where the transforms are paid). This is the measured basis for
-§33's "faster encoder" item: a fast transform path and fewer priced
-candidates per leaf are the levers, in that order.
+is where the transforms are paid). That profile is what motivated the
+`FastDct2dPlan` switch above, which is why the table is now 11–26×
+faster; the remaining time is motion search, candidate pricing
+arithmetic, and bit counting, with the transform no longer the
+dominant term. (The levers for further work, if it is ever needed:
+fewer priced candidates per leaf, and per-block `qp`.)
 
 Everything below comes from `codecs/vault/tests/measure.rs`
 (`cargo test --release -p tpt-video-vault --test measure -- --ignored

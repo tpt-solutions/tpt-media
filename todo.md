@@ -1687,29 +1687,32 @@ Not done, and why (left honestly open):
       `transcode`. `todo.md` §33's probe-registry-only caveat no longer
       applies
 * [x] §36/§37 video-corpus quality and a bitrate comparison against another
-      codec (2026-10-01) — `tpt video-corpus` takes `--codec` and now
+      codec (2026-10-01; re-measured 2026-10-05 after the fast
+      transform landed) — `tpt video-corpus` takes `--codec` and now
       measures thrum, vault or mote over the same eight scenes at the same
       geometry, reporting the codec it actually measured in both the table
-      and the JSON. QCIF 176x144 4:2:0, 4 frames/scene, release build on a
-      shared machine, mean PSNR / bytes per scene (luma):
+      and the JSON. QCIF 176x144 4:2:0, 6 frames/scene, release build on a
+      shared machine (PSNR dB / bytes per scene / enc ms per frame, luma):
 
       | scene | thrum | vault | mote |
       |---|---|---|---|
-      | talking-head | 34.0 dB / 422 B | 44.1 dB / 317 B | 44.8 dB / 10 342 B |
-      | camera-motion | 52.2 / 312 | 54.8 / 87 | 58.6 / 10 116 |
-      | static-scene | 52.3 / 312 | 55.3 / 87 | exact / 10 116 |
-      | high-motion | 18.3 / 29 333 | 28.6 / 37 401 | 15.7 / 11 635 |
-      | screen-content | 25.0 / 1 222 | 36.2 / 1 849 | 35.7 / 10 133 |
+      | talking-head | 32.5 / 500 / 4.4 | 44.1 / 370 / 5.0 | 44.2 / 10 478 / 0.9 |
+      | camera-motion | 52.2 / 390 / 4.5 | 54.4 / 117 / 2.9 | 57.1 / 10 138 / 0.3 |
+      | static-scene | 52.3 / 390 / 4.4 | 55.3 / 117 / 3.6 | exact / 10 138 / 0.3 |
+      | high-motion | 18.3 / 44 547 / 7.4 | 28.7 / 46 322 / 22.2 | 15.6 / 12 716 / 4.0 |
+      | animation | 20.6 / 1 087 / 4.6 | 44.9 / 796 / 5.8 | 26.7 / 10 532 / 0.4 |
+      | screen-content | 24.2 / 1 354 / 4.3 | 36.2 / 1 986 / 4.8 | 35.7 / 10 169 / 0.4 |
 
       Vault is uniformly higher-quality than Thrum at the same `qp`, and on
-      the three predictable scenes it is *also* smaller (87 B vs 312 B at
-      camera-motion) — but it pays for it in encode CPU: 17-104 ms/frame
-      against Thrum's 4-7, so it blows the 33.3 ms frame budget on every
-      scene except the two easiest. Mote is the opposite: ~0.5-5 ms/frame and
-      ~10 KB per scene regardless of content, the latter dominated by its
-      dictionary packet amortised over only four frames; it also collapses on
-      high-motion (15.7 dB, SSIM 0.28), which is the expected result for a
-      codec built for static cameras. **No cross-codec "high-compression"
+      the predictable scenes it is *also* smaller (117 B vs 390 B at
+      camera-motion). With the `FastDct2dPlan` transform the CPU picture
+      inverted: Vault's encode is 2.9-22.2 ms/frame — inside the 33.3 ms
+      budget on *every* scene, where the direct transform put it at
+      17-104 ms and over budget almost everywhere — while Thrum sits at
+      ~4.5 ms and Mote at ~0.3-4 ms. Mote remains ~10 KB per scene
+      regardless of content, dominated by its dictionary packet, and still
+      collapses on high-motion (15.6 dB, SSIM 0.25), which is the expected
+      result for a codec built for static cameras. **No cross-codec "high-compression"
       claim is made**: these are synthetic clips, all three ran at the same
       `qp` which does not mean equal quality, and Mote's figures are
       dominated by a one-off dictionary. Real-content numbers still do not
@@ -1725,20 +1728,24 @@ Not done, and why (left honestly open):
 * [ ] rate control (`qp` is a constant), scene-cut detection, per-block `qp`
 * [ ] coefficient-level RDO (RDOQ / trellis), a tuned `λ`, and an RD-decided
       loop-filter flag
-* [ ] a faster encoder — **profiled 2026-10-05, and the suspicion is
-      confirmed with numbers**: temporary phase timers over the
-      criterion bench's own QCIF clip measured the *transform*
-      (`dct_2d` + quantise + `idct_2d` reconstruction, per candidate)
-      at **97.2%** of intra-frame encode time (9 024 transform calls
-      over a 4-frame intra stream, 44.2 ms/frame) and **88.2%** of a
-      P-frame stream, with the motion search's 89 627 SAD evaluations
-      costing **8.6%** and candidate pricing at 89.2% (nested — it is
-      where the transforms are paid). So the direct `O(n³)` DCT
-      evaluated at every partition level really is the dominant cost;
-      the levers are a fast transform path (FFT-backed DCT-II, §5.2's
-      `FastDctIvPlan` shape) and fewer priced candidates per leaf, in
-      that order. The encoder is not
-      real-time and the decoder is not claimed real-time either
+* [x] a faster encoder — 2026-10-05, profiled then fixed. The profile
+      (temporary phase timers over the criterion bench's own QCIF
+      clip) measured the *transform* (`dct_2d` + quantise +
+      `idct_2d` reconstruction, per candidate) at **97.2%** of
+      intra-frame encode time and **88.2%** of a P-frame stream, with
+      the motion search's 89 627 SAD evaluations at **8.6%** — so the
+      fast-transform lever was pulled first: `tpt-dsp-core` gained
+      `FastDct2Plan`/`FastDct2dPlan` (FFT-backed DCT-II/III sharing
+      one length-`2n` inverse FFT, verified against the direct pair at
+      4–128 points and 4×16–32×32), and Vault's `Xform` runs on it in
+      std builds (bare metal keeps the direct path). Measured: **11–26×
+      faster encode, 11–23× faster decode** (QCIF I-frame 180 →
+      15.8 ms, CIF I-frame 690 → 51.3 ms), rate and PSNR byte-identical
+      on the bench clips, and *every §36 corpus scene now fits the
+      33.3 ms frame budget* (worst: high-motion 22.2 ms encode). The
+      encoder still carries no real-time capability *claim* — that is
+      a maintained contract, not a benchmark side-effect — but the
+      measured cost is no longer the obstacle
 * [x] bare-metal `no_std` verification — 2026-10-05, and the claim was
       false until it was tested (the recurring pattern): `cargo build
       -p tpt-video-vault --target thumbv7em-none-eabi

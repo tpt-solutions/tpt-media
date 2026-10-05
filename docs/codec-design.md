@@ -443,11 +443,13 @@ Known sharp edges, stated plainly:
   through the y4m bridge, it is in the probe capability table, and
   `tpt video-corpus --codec vault` measures it over the §36 corpus. Its
   quality over that corpus is now measured (`todo.md` §33): uniformly higher
-  PSNR than Thrum at the same `qp`, and on the three predictable scenes also
-  *smaller* (87 B vs 312 B at camera-motion), but it pays in encode CPU —
-  17-104 ms/frame against Thrum's 4-7, so it misses the 33.3 ms frame budget
-  on every scene except the two easiest. Those are synthetic clips at a
-  shared `qp`, so they support no cross-codec compression claim.
+  PSNR than Thrum at the same `qp`, and on the predictable scenes also
+  *smaller* (117 B vs 390 B at camera-motion). Encode CPU — the 2026-09-30
+  direct-transform build spent 17-104 ms/frame and missed the 33.3 ms
+  frame budget on every scene but two; since 2026-10-05 the tile transform
+  runs on `tpt-dsp-core`'s FFT-backed `FastDct2dPlan` and every scene fits
+  the budget (2.9-22.2 ms/frame). Those are synthetic clips at a shared
+  `qp`, so they support no cross-codec compression claim.
 
 ## Common Patterns
 

@@ -9,6 +9,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **The fast transform: Vault's encoder is 11-26× faster and every
+  corpus scene now fits the frame budget** (2026-10-05, §33's "faster
+  encoder" item closed). Following the profile that put the transform
+  at 88-97% of encode time, `tpt-dsp-core` gained
+  `FastDct2Plan`/`FastDct2dPlan` — FFT-backed DCT-II/III sharing one
+  length-`2n` inverse FFT with a half-twiddle extraction, no input
+  reordering, verified against the direct pair at 4-128 points and
+  4×16-32×32, measured 4.4-15× faster than direct at the video tile
+  sizes — and Vault's `Xform` now runs on it in std builds (one plan
+  per tile edge 4/8/16/32; bare metal keeps the direct `dct_2d` path,
+  no_std build verified). Measured over the criterion bench's own
+  clips: QCIF I-frame 180 → **15.8 ms** (45 → 3.9 ms/frame), CIF
+  I-frame 690 → **51.3 ms**, decode 7.4 ms → **0.65 ms** — with rate
+  and PSNR byte-identical to the direct transform's figures (202
+  B/packet @ 37.11 dB). The §36 corpus re-measured across all three
+  video codecs: every Vault scene fits the 33.3 ms budget at QCIF
+  (worst: high-motion 22.2 ms encode), where the direct transform
+  missed it on all but two. The web player's wasm was rebuilt with the
+  fast path (371 KB) and its Node checks pass. Vault's provenance row
+  moved to reviewed (the DCT and the FFT-based computation are
+  textbook, both GREEN).
 - **Vault's encoder cost is now profiled, not suspected** (2026-10-05,
   §33's "faster encoder" item): temporary phase timers over the
   criterion bench's own QCIF clip measured the transform (`dct_2d` +

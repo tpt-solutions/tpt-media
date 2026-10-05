@@ -19,6 +19,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+#[cfg(feature = "std")]
+use tpt_dsp_core::FastDct2dPlan;
 use tpt_dsp_core::{dct_2d, idct_2d};
 use tpt_media_bitstream::rice::{decode_riced, encode_riced, WriteLike};
 use tpt_media_bitstream::{BitReader, WriteError};
@@ -53,9 +55,32 @@ pub(crate) fn tile_size(m: usize) -> usize {
 }
 
 /// Reusable float scratch for the tile transforms.
+///
+/// With `std`, the separable transform runs on `tpt-dsp-core`'s
+/// FFT-backed [`FastDct2dPlan`] (one plan per tile edge 4/8/16/32) —
+/// the profiled-dominant cost of the encoder (todo.md §33: 88–97% of
+/// encode time was the direct `O(n³)` DCT). Without `std` the direct
+/// `dct_2d`/`idct_2d` path remains: same conventions, same results up
+/// to float rounding, no FFT dependency on bare metal.
 pub(crate) struct Xform {
     buf: Vec<f32>,
     scratch: Vec<f32>,
+    #[cfg(feature = "std")]
+    fast: [FastDct2dPlan; 4],
+}
+
+/// Tile edges are exactly {4, 8, 16, 32} (`tile_size` clamps to
+/// `MAX_TRANSFORM` = 32, and plane edges are multiples of 8 down to 4
+/// for chroma); the fast-plan table is indexed by `log2(t) - 2`.
+#[cfg(feature = "std")]
+fn fast_index(t: usize) -> Option<usize> {
+    match t {
+        4 => Some(0),
+        8 => Some(1),
+        16 => Some(2),
+        32 => Some(3),
+        _ => None,
+    }
 }
 
 impl Xform {
@@ -63,7 +88,40 @@ impl Xform {
         Xform {
             buf: vec![0.0; MAX_TRANSFORM * MAX_TRANSFORM],
             scratch: vec![0.0; 2 * MAX_TRANSFORM],
+            #[cfg(feature = "std")]
+            fast: [
+                FastDct2dPlan::new(4, 4),
+                FastDct2dPlan::new(8, 8),
+                FastDct2dPlan::new(16, 16),
+                FastDct2dPlan::new(32, 32),
+            ],
         }
+    }
+
+    /// In-place 2D DCT-II over `buf[..t*t]` (treated as `t x t`).
+    fn transform_2d(&mut self, t: usize) {
+        #[cfg(feature = "std")]
+        if let Some(i) = fast_index(t) {
+            self.fast[i].forward(&mut self.buf[..t * t]);
+            return;
+        }
+        #[cfg(not(feature = "std"))]
+        dct_2d(&mut self.buf[..t * t], t, t, &mut self.scratch);
+        #[cfg(feature = "std")]
+        dct_2d(&mut self.buf[..t * t], t, t, &mut self.scratch);
+    }
+
+    /// In-place 2D DCT-III over `buf[..t*t]` (treated as `t x t`).
+    fn inverse_2d(&mut self, t: usize) {
+        #[cfg(feature = "std")]
+        if let Some(i) = fast_index(t) {
+            self.fast[i].inverse(&mut self.buf[..t * t]);
+            return;
+        }
+        #[cfg(not(feature = "std"))]
+        idct_2d(&mut self.buf[..t * t], t, t, &mut self.scratch);
+        #[cfg(feature = "std")]
+        idct_2d(&mut self.buf[..t * t], t, t, &mut self.scratch);
     }
 
     /// Forward transform + quantise the residual `src - pred` of the
@@ -94,7 +152,7 @@ impl Xform {
             out[..t * t].fill(0);
             return;
         }
-        dct_2d(&mut self.buf[..t * t], t, t, &mut self.scratch);
+        self.transform_2d(t);
         let scale = 1.0 / ((t * t) as f32 / 4.0);
         let inv_step = 1.0 / step;
         for u in 0..t {
@@ -134,7 +192,7 @@ impl Xform {
                 self.buf[u * t + v] = o / weight(t, u, v);
             }
         }
-        idct_2d(&mut self.buf[..t * t], t, t, &mut self.scratch);
+        self.inverse_2d(t);
         for y in 0..t {
             for x in 0..t {
                 let i = (ty + y) * m + tx + x;
