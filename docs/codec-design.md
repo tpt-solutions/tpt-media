@@ -455,6 +455,52 @@ Known sharp edges, stated plainly:
   (`tpt encode --codec vault --bitrate`), measured at a 60 kbit/s
   target decoding to 61.7 kbit/s measured.
 
+### Vault B-frames — design for v0.2 (written 2026-10-05, not started)
+
+The design below is what a B-frame implementation must change, worked
+through so the next session starts from a plan. It is deliberately
+conservative: bi-prediction by plain averaging, no weighted prediction,
+no long-term references — those stay in the bullet above for v0.3+.
+
+**Wire format (a v2 bump).** The 1-bit `intra` flag becomes a 2-bit
+frame type (`I` / `P` / `B`); every decoder rejects version 1 vs 2 by
+the existing fail-fast rule. A B-frame header gains the two reference
+indices and two motion vectors per leaf, plus one combine selector
+(`average`, the only v0.2 mode). Display order must be recoverable:
+the cleanest v0.2 choice is an explicit 16-bit *picture order count
+delta* on B and P headers, because "derive it from PTS" would couple
+the codec to container behaviour that `.tpt` does not promise.
+
+**Encoder.** A lookahead window of `b_frames` frames (config, default
+2, encoder-only): frames are coded I/P/B/P/B... with the next P (or I)
+coded *before* the B-frames between them, so its reconstruction is a
+legal future reference. Each B leaf prices forward-only, backward-only
+and bi-directional candidates with the existing `J = D + λ·R` — the
+RDO machinery needs no new concept, only a second reference list.
+B-frames never enter the reference store. Rate control composes
+unchanged: the bucket budgets each frame at its measured cost, and the
+4× intra allowance already handles the I-frame spike.
+
+**Decoder.** Reordering: packets now arrive in *decode* order, and the
+decoder must hold B-frames until their future reference decodes, then
+emit in display order. That means a bounded reorder buffer (at most
+`b_frames + 1` pictures — `max_packet_bits`-style worst-case argument
+extends), an explicit end-of-stream flush that releases held frames
+(the decoder's existing `drain`), and one decision for consumers:
+`decode()` returns *display-order* frames with gaps the caller waits
+through. `tpt-web`'s push player feeds packets one at a time and
+presents what comes out, so it inherits the reorder delay unchanged —
+but its "presented N pictures" counters and the demo timing shift by
+the B-depth, and `real_time_decoder` gains a caveat (reorder latency
+= `b_frames` frame periods).
+
+**Tests to add before coding.** Display-order round trip through an
+I/P/B/P/B sequence; a B-frame whose forward and backward references
+disagree (the averaging path); `max_packet_bits` bound at `b_frames`
+= 2; corruption sweeps over the new header fields; and the tpt-web
+reorder-buffer drain at end of stream.
+
+
 ## Common Patterns
 
 All codecs share:

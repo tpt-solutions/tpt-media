@@ -1724,7 +1724,17 @@ Not done, and why (left honestly open):
       packets understated Mote's rate by 25% (496 → 621 kbps on
       talking-head). Pinned by `corpus_counts_decoded_pictures_not_packets`.
 * [ ] B-frames, bi-prediction, weighted prediction, long-term references and
-      reference reordering
+      reference reordering — design written 2026-10-05
+      (`docs/codec-design.md`, "Vault B-frames — design for v0.2");
+      not started. The headline costs, so nobody starts it casually:
+      a 2-bit frame type replacing the intra flag, display-order
+      signalling (the decoder needs a reordering buffer, and
+      `tpt-web`'s push player and the packet-bound proof both re-derive
+      from "one frame is one packet, in decode order"), two-reference
+      bi-prediction syntax, and B-frames-excluded-from-references
+      bookkeeping in both the encoder's RDO and the decoder's reference
+      store. Rate control (landed) composes cleanly — the bucket just
+      budgets B-frames at their measured cost
 * [x] frame-level rate control (2026-10-05): `VaultConfig::
       target_bits_per_frame` — a bounded search (at most three encodes
       per frame) around the previous frame's choice, driven by a

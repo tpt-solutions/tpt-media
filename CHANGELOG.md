@@ -583,6 +583,15 @@ Added
 
 ### Added
 
+- **B-frames design written** (2026-10-05, §33's remaining item): the
+  full v0.2 plan now lives in `docs/codec-design.md` ("Vault B-frames
+  — design for v0.2") — the 2-bit frame type and explicit picture
+  order count for the wire, the encoder lookahead and
+  excluded-from-references bookkeeping, the decoder's bounded reorder
+  buffer and end-of-stream drain, the `tpt-web` presentation-delay
+  caveat, and the tests to write before coding. Not started; rate
+  control (landed above) composes with it unchanged.
+
 - **Vault gained frame-level rate control — `--bitrate` now means
   something on the video path** (2026-10-05, half of §33's
   rate-control item): `VaultConfig::target_bits_per_frame` drives a
