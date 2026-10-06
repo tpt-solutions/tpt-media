@@ -406,6 +406,29 @@ a clean reference for the frames after. The detector's constants
 empirical, and the knob ships default-off pending content that would
 justify a default.
 
+Bi-prediction weights (`bweight`, v3; `measure.rs::b_weight_decisions`:
+which weight the exact-frame-`J` search picks per B frame, and what it
+cost):
+
+| clip | `qp` | B-frame weights (display: w/4) | B bytes | B PSNR |
+| --- | ---: | --- | ---: | ---: |
+| panning, noisy | 30 | 1: 3, 2: 3, 3: 3, 5: 3, 6: 1, 7: 1 | 137-156 | 37.7-38.5 dB |
+| panning, noisy | 18 | 1: 3, 2: 1, 3: 1, 5: 3, 6: 3, 7: 3 | 452-706 | 44.6-44.9 dB |
+| quadratic exposure ramp | 30 | 1: 3, 2: 2, 3: 2, 5: 3, 6: 1, 7: 1 | 106-192 | 51.5-53.2 dB |
+| quadratic exposure ramp | 18 | 1: 3, 2: 2, 3: 2, 5: 3, 6: 1, 7: 1 | 175-268 | 57.8-61.0 dB |
+
+The recorded finding: the search fires readily — on an ordinary pan it
+picks quarter weights on most B frames at both quantisers, because the
+past and future motion searches land on *different* vectors and tilting
+the combine prices cheaper than the residual it would save. Where the
+average survives, it is because J says so (the shallow part of the
+quadratic ramp, where the residual a tilted weight would remove is
+sub-step at `qp` 30). The cost is up to three encodes per B frame; B
+frames are the cheapest type, so this is an offline-codec trade, not a
+real-time claim. `tests/weighted_b.rs` pins the exact case: a B frame
+constructed as the decoder's own 3/4-past blend of its references
+reconstructs perfectly when the search picks 3.
+
 References (panning noisy clip, default `qp`): `max_refs` 1, 4, 16 gave 126,
 132 and 129 B/frame at 36.64, 36.98 and 36.83 dB. **A pan gains nothing from
 extra references**, as expected; the value of references is on content that
