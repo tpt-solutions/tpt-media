@@ -160,7 +160,7 @@ pub const MAX_QP: u8 = 51;
 /// Largest supported bi-predictive depth (`b_frames`).
 pub const MAX_B_FRAMES: usize = 4;
 
-/// Frame types on the v2 wire: the header's 2-bit `ftype` field. `Rsv`
+/// Frame types on the wire: the header's 2-bit `ftype` field. `Rsv`
 /// (3) is rejected as malformed so the encoding has room to grow.
 pub mod ftype {
     /// Intra: coded without references; resets the display sequence.

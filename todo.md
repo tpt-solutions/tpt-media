@@ -1802,8 +1802,10 @@ Not done, and why (left honestly open):
       exactly), the weight census, and the reserved value's rejection.
       v1/v2 streams are rejected fail-fast under v3. Still open
       (v0.3+): per-leaf weights and explicit forward/backward-only
-      leaves, long-term references, reference reordering — designed
-      before coded. The keyframe schedule also now counts every coded
+      leaves (stage 2), long-term references (stage 3; reference
+      reordering deliberately folded into it) — **designed
+      2026-10-07**, `docs/codec-design.md`'s "v0.3 remainder" section,
+      coded next. The keyframe schedule also now counts every coded
       frame (display cadence; see CHANGELOG)
 * [x] frame-level rate control (2026-10-05): `VaultConfig::
       target_bits_per_frame` — a bounded search (at most three encodes

@@ -507,7 +507,7 @@ no long-term references — those stay in the bullet above for v0.3+.
 
 **Wire format (the v2 bump, shipped).** The v1 1-bit `intra` flag
 became a 2-bit frame type (`I` / `P` / `B`, `3` reserved-rejected) and
-every frame gained a 16-bit `poc` — see "Wire format (version 2)"
+every frame gained a 16-bit `poc` — see "Wire format (version 3)"
 above. A B-frame leaf carries a skip bit; a non-skip leaf carries four
 Rice-coded absolute motion vectors (past pair, then future pair)
 against a (0, 0) predictor **and then the same coefficient tiles as any
@@ -576,6 +576,60 @@ frame built as the decoder's own 3/4-past blend is reconstructed
 exactly at 3/4 past. Remaining on the v0.3 list: per-leaf weights and
 explicit forward/backward-only leaves, long-term references and
 reference reordering (wire v4+ material, designed before coded).
+
+### Vault B-frames v0.3 remainder — design (written 2026-10-07, coded next)
+
+What is left after stage 1, worked through so the next session starts
+from a plan. Ordered by value per unit of wire and encoder complexity.
+
+**Stage 2 — per-leaf combine modes (wire v4).** A "forward-only" B leaf
+is today only expressible as a bi leaf with the other vector at zero,
+which still averages the other reference's block in. Real
+forward/backward-only leaves need a signalled mode, and they *save*
+wire: a forward-only leaf needs two motion vectors, not four. Design:
+the B leaf's syntax becomes `skip` bit, then (non-skip) a 2-bit combine
+— `0` = weighted bi (both vectors, header weight), `1` = forward-only
+(past vector + coefficients only), `2` = backward-only, `3`
+reserved-rejected. The RDO prices all three per leaf with the existing
+`J = D + λ·R` (the candidates already exist inside `eval_b_leaf`'s
+search; they are just not separately expressible on the wire). The
+header `bweight` keeps applying only to combine `0`. Sharp edge to
+state in the doc: a combine mode per leaf is 2 bits on every non-skip
+B leaf, so content that never uses the new modes pays for them —
+measure before defaulting the mode field in, and consider collapsing
+`1`/`2` into one bit if the third state stays unused. Tests before
+coding: per-leaf mode census on a straddling-cut clip (B's whose
+forward reference is the wrong scene must go backward-only); the
+max_packet_bits bound with the new field; the corruption sweep over
+the mode field.
+
+**Stage 3 — one long-term reference (wire v4 or v5).** The value case
+is the census test's own A/B/A/B content: the last-N-pictures
+reference store forgets the first A by the time the second A arrives,
+and multi-reference only pays when the revisit is recent. Design: one
+extra decoder slot outside the short-term pool. Frame header gains
+`ltr_update` (1 bit: "make this frame's reconstruction the long-term
+picture", valid on I/P frames only) and the per-leaf reference index
+space extends by one address naming that slot (5-bit `num_refs` field
+stays the short-term count; the leaf-level index grows a 6th "long-term"
+value — cheapest as one extra wire value on the existing field, not a
+second field). The decoder's `max_reference_frames` limit accounts for
+the extra slot. The encoder prices the long-term picture as one more
+candidate reference in the existing search. Sharp edges: an LTR
+survives intra refreshes (it must, or it is pointless) — the I-frame
+reference-store reset keeps the LTR, which changes the cold-start
+invariant the hostile-input tests rely on; and a stream joining
+mid-GOP hits `NeedMoreInput` naming the LTR. Tests before coding:
+A/B/A/B rate with and without LTR (the value case must show), hostile
+headers over the new flag, drift-freedom with LTR + B frames + scene
+cut together.
+
+**Not planned: reference reordering as a standalone feature.** Every
+inter leaf already names its reference explicitly, so reordering the
+*default* list buys nothing the per-leaf index does not; what reordering
+is for in H.264 arrives here with stage 3's long-term slot. If a real
+stream ever shows a need for multi-list bi-prediction beyond the fixed
+pair, that is a v5 design against measured content, not speculation.
 
 
 ## Common Patterns
