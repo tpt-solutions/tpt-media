@@ -75,6 +75,20 @@ const LAMBDA_SAD_SCALE: f32 = 0.4;
 /// whose distortion is at most this many `step^2` per sample is not split.
 const EARLY_TERMINATE_MSE: f64 = 0.10;
 
+/// Scene-cut rule ([`VaultConfig::scene_cut`]): a reference frame whose
+/// mean absolute luma difference from the most recent reference exceeds
+/// both [`SCENE_CUT_FLOOR`] and this factor times the previous reference
+/// frame's difference is coded intra. Empirical, like everything else
+/// here; tuned by eye on synthetic cuts, not on real content.
+const SCENE_CUT_FACTOR: f32 = 4.0;
+
+/// Absolute floor of the same rule, in mean absolute luma levels: a
+/// spike from a near-frozen sequence (previous difference near zero,
+/// where the factor term is meaningless) must still clear this to count
+/// as a cut, and the first frame after an intra must exceed it (its
+/// factor term has no previous value to compare against).
+const SCENE_CUT_FLOOR: f32 = 12.0;
+
 /// Rotating neighbourhood of the pattern search (8-connected).
 const NEIGHBOURS: [(i32, i32); 8] = [
     (-1, -1),
@@ -104,11 +118,13 @@ struct Cand {
 
 /// Vault encoder.
 ///
-/// Holds the reconstructed reference pictures (the *loop-filtered* ones,
-/// most recent first, at most [`VaultConfig::max_refs`]) so encoder and
-/// decoder stay in lock-step. The first frame is always an I-frame; after
-/// that one is emitted every `keyframe_interval` frames (an I-frame clears
-/// the reference list) and the rest are P-frames.
+/// Holds the reconstructed reference pictures (the *loop-filtered* ones —
+/// or the plain ones, per the RD loop-filter decision — most recent
+/// first, at most [`VaultConfig::max_refs`]) so encoder and decoder stay
+/// in lock-step. The first frame is always an I-frame; after that one is
+/// emitted every `keyframe_interval` frames (an I-frame clears the
+/// reference list), or earlier when the scene-cut detector fires, and
+/// the rest are P-frames.
 pub struct VaultEncoder {
     info: CodecInfo,
     cfg: CodecConfig,
@@ -117,12 +133,23 @@ pub struct VaultEncoder {
     scans: Scans,
     frames: u64,
     keyframe_interval: u64,
+    /// Reference frames coded since the last intra (saturating). The
+    /// scheduled-keyframe phase: an I is due when this has reached
+    /// `keyframe_interval - 1`, so exactly `keyframe_interval` reference
+    /// frames — counting the I — lie between scheduled intras. It mirrors
+    /// `frames` (the lookahead's future reference does not advance it,
+    /// matching the schedule the modulo form produced).
+    since_intra: u64,
     /// Rate-control bucket: cumulative bits spent minus the per-frame
     /// targets, clamped below so one early overspend cannot starve the
     /// stream forever. Negative = the stream owes quality.
     rc_debt: f64,
     /// The previous frame's chosen qp (the search's starting point).
     rc_qp: i32,
+    /// The scene-cut detector's state: the previous reference frame's
+    /// mean absolute luma difference from *its* most recent reference,
+    /// reset across intras and meaningless until the first reference.
+    prev_mad: Option<f32>,
     /// This frame's display position within the current GOP, written on
     /// the wire (v2) so the decoder can reorder B-frames. Increments per
     /// frame; resets on an intra.
@@ -171,17 +198,22 @@ impl VaultEncoder {
             scans: Scans::new(),
             frames: 0,
             keyframe_interval,
+            since_intra: keyframe_interval.saturating_sub(1),
             rc_debt: 0.0,
             rc_qp: 0,
+            prev_mad: None,
             gop_poc: 0,
             pending: alloc::collections::VecDeque::new(),
             b_awaiting_future: false,
         })
     }
 
-    /// Whether the next frame will be coded as an I-frame.
+    /// Whether the next *scheduled* reference frame would be coded as an
+    /// I-frame. A scene-cut detection ([`VaultConfig::scene_cut`]) can
+    /// make a frame intra before its turn; this reports the schedule
+    /// only.
     pub fn next_is_keyframe(&self) -> bool {
-        self.keyframe_interval == 0 || self.frames % self.keyframe_interval == 0
+        self.keyframe_interval == 0 || self.since_intra >= self.keyframe_interval - 1
     }
 
     /// Number of reference pictures currently held.
@@ -195,6 +227,61 @@ impl VaultEncoder {
         self.refs
             .first()
             .map(|p| picture_to_frame(p, Timestamp::zero(Timebase::ONE_PER_SECOND)))
+    }
+
+    /// Mean absolute luma difference between `frame` and the most recent
+    /// reference picture — the scene-cut detector's measure (what a
+    /// predictive frame against this reference would have to explain).
+    /// `None` when there is no reference yet, or when the frame's buffer
+    /// is too small to read (a malformed frame that `encode`'s normal
+    /// validation rejects later; the detector just stays silent).
+    fn mad_vs_last_ref(&self, frame: &VideoFrame) -> Option<f32> {
+        let r = self.refs.first()?;
+        let w = self.enc.width as usize;
+        let h = self.enc.height as usize;
+        let stride = frame.stride as usize;
+        if stride < w {
+            return None;
+        }
+        if frame.pixels.len() < stride.checked_mul(h)? {
+            return None;
+        }
+        let mut acc: u64 = 0;
+        for y in 0..h {
+            let row = &frame.pixels[y * stride..y * stride + w];
+            let ref_row = &r.planes[0].data[y * w..(y + 1) * w];
+            acc += row
+                .iter()
+                .zip(ref_row)
+                .map(|(a, b)| u64::from((i32::from(*a) - i32::from(*b)).unsigned_abs()))
+                .sum::<u64>();
+        }
+        Some(acc as f32 / (w * h) as f32)
+    }
+
+    /// Whether the next reference frame is coded intra: a due keyframe, a
+    /// cold start, or — with the [`VaultConfig::scene_cut`] knob — a
+    /// detected cut against the most recent reference. Updates the
+    /// detector's running state, so it must be called exactly once per
+    /// reference-frame decision.
+    fn reference_should_be_intra(&mut self, frame: &VideoFrame) -> bool {
+        if self.next_is_keyframe() || self.refs.is_empty() {
+            self.prev_mad = None;
+            return true;
+        }
+        if !self.enc.scene_cut {
+            return false;
+        }
+        let Some(mad) = self.mad_vs_last_ref(frame) else {
+            return false;
+        };
+        // Without a previous difference (right after an intra) only the
+        // floor applies; the factor term compares like with like.
+        let cut = mad > SCENE_CUT_FLOOR && mad > SCENE_CUT_FACTOR * self.prev_mad.unwrap_or(mad);
+        // The cut frame's own difference is the new scene's baseline, so
+        // steady content in the new scene cannot re-trigger immediately.
+        self.prev_mad = Some(mad);
+        cut
     }
 }
 
@@ -222,7 +309,7 @@ impl Encoder for VaultEncoder {
 
         if self.enc.b_frames == 0 {
             // I/P path: code the frame directly (no lookahead).
-            let intra = self.next_is_keyframe() || self.refs.is_empty();
+            let intra = self.reference_should_be_intra(frame);
             if intra {
                 self.refs.clear();
                 self.gop_poc = 0;
@@ -244,6 +331,11 @@ impl Encoder for VaultEncoder {
             self.refs.insert(0, recon);
             self.refs.truncate(usize::from(self.enc.max_refs));
             self.frames += 1;
+            if intra {
+                self.since_intra = 0;
+            } else {
+                self.since_intra = self.since_intra.saturating_add(1);
+            }
             pkt.flags = PacketFlags::END_OF_FRAME
                 | if intra {
                     PacketFlags::KEYFRAME
@@ -275,7 +367,7 @@ impl Encoder for VaultEncoder {
                     for f in buffered {
                         let pts = f.frame.pts;
                         let num_refs = self.refs.len().min(usize::from(self.enc.max_refs));
-                        let key = self.next_is_keyframe();
+                        let key = self.reference_should_be_intra(&f);
                         let poc = if key { 0 } else { self.gop_poc + 1 };
                         self.gop_poc = poc;
                         let ftype = if key {
@@ -288,6 +380,11 @@ impl Encoder for VaultEncoder {
                         self.refs.insert(0, recon);
                         self.refs.truncate(usize::from(self.enc.max_refs));
                         self.frames += 1;
+                        if key {
+                            self.since_intra = 0;
+                        } else {
+                            self.since_intra = self.since_intra.saturating_add(1);
+                        }
                         pkt.flags = PacketFlags::END_OF_FRAME
                             | if key {
                                 PacketFlags::KEYFRAME
@@ -328,12 +425,13 @@ impl Encoder for VaultEncoder {
                 continue;
             }
             // No anchor waiting: code the front frame as the group's
-            // reference (I on a keyframe boundary or cold start, else P).
+            // reference (I on a keyframe boundary, cold start or detected
+            // scene cut, else P).
             if self.pending.is_empty() {
                 break;
             }
             let anchor = self.pending.pop_front().unwrap();
-            let intra = self.next_is_keyframe() || self.refs.is_empty();
+            let intra = self.reference_should_be_intra(&anchor);
             if intra {
                 self.refs.clear();
                 self.gop_poc = 0;
@@ -355,6 +453,11 @@ impl Encoder for VaultEncoder {
             self.refs.insert(0, recon);
             self.refs.truncate(usize::from(self.enc.max_refs));
             self.frames += 1;
+            if intra {
+                self.since_intra = 0;
+            } else {
+                self.since_intra = self.since_intra.saturating_add(1);
+            }
             pkt.flags = PacketFlags::END_OF_FRAME
                 | if intra {
                     PacketFlags::KEYFRAME
@@ -376,7 +479,7 @@ impl Encoder for VaultEncoder {
         // store clears as before.
         let mut packets = alloc::vec![];
         while let Some(f) = self.pending.pop_front() {
-            let intra = self.next_is_keyframe() || self.refs.is_empty();
+            let intra = self.reference_should_be_intra(&f);
             if intra {
                 self.refs.clear();
                 self.gop_poc = 0;
@@ -397,6 +500,11 @@ impl Encoder for VaultEncoder {
             self.refs.insert(0, recon);
             self.refs.truncate(usize::from(self.enc.max_refs));
             self.frames += 1;
+            if intra {
+                self.since_intra = 0;
+            } else {
+                self.since_intra = self.since_intra.saturating_add(1);
+            }
             pkt.flags = PacketFlags::END_OF_FRAME
                 | if intra {
                     PacketFlags::KEYFRAME
@@ -436,9 +544,10 @@ impl VaultEncoder {
             // the search move it.
             qp = self.enc.qp;
         }
-        // The first frame is intra and typically costs several P-frames;
-        // the bucket absorbs it over the frames that follow.
-        let frame_target = if rc && self.frames == 0 {
+        // An intra frame — the first, a scheduled keyframe, or a detected
+        // scene cut — typically costs several P-frames; the bucket absorbs
+        // it over the frames that follow.
+        let frame_target = if rc && ftype == crate::ftype::I {
             target.saturating_mul(4)
         } else {
             target
@@ -481,7 +590,24 @@ impl VaultEncoder {
 
         let mut recon = out.recon;
         let field = out.field;
-        if self.enc.loop_filter {
+        let mut data = out.data;
+        if self.enc.loop_filter && self.enc.loop_filter_rdo {
+            // Decide the per-frame flag by rate–distortion: filter only
+            // when the filtered picture is the closer to the source (ties
+            // keep the filter — at equal distortion the smoother picture
+            // is the better reference, and the header bit costs the same
+            // either way). The comparison ignores its effect on later
+            // frames' prediction, like every other greedy decision here.
+            let plain = picture_ssd(&src, &recon);
+            let mut smooth = recon.clone();
+            loop_filter(&mut smooth, &field, qp);
+            let smooth_d = picture_ssd(&src, &smooth);
+            let filtered = smooth_d <= plain;
+            if filtered {
+                recon = smooth;
+            }
+            set_loop_filter_bit(&mut data, filtered);
+        } else if self.enc.loop_filter {
             loop_filter(&mut recon, &field, qp);
         }
 
@@ -490,7 +616,6 @@ impl VaultEncoder {
         if out.bits > self.enc.max_packet_bits() as u64 {
             return Err(CodecError::Internal);
         }
-        let mut data = out.data;
         let crc = crc32(&data);
         data.extend_from_slice(&crc.to_le_bytes());
         debug_assert!(data.len() <= self.enc.max_packet_bits().div_ceil(8) + CRC_TRAILER_BYTES);
@@ -592,6 +717,32 @@ struct EncodedFrame {
     field: Field,
     data: Vec<u8>,
     bits: u64,
+}
+
+/// Rewrite the header's `loop_filter` bit in a finished packet payload.
+///
+/// The RD decision needs the reconstruction, which only exists once the
+/// header — the bit included — is already written. The v2 layout puts the
+/// bit at absolute position 29 (16 version + 2 ftype + 6 qp + 5
+/// num_refs), i.e. byte 3, mask `0x04` MSB-first; the offset is pinned
+/// against a real decoder parse by
+/// `set_loop_filter_bit_targets_the_bit_the_decoder_reads`.
+pub(crate) fn set_loop_filter_bit(data: &mut [u8], on: bool) {
+    const LF_BYTE: usize = 29 / 8;
+    const LF_MASK: u8 = 1 << (7 - 29 % 8);
+    if on {
+        data[LF_BYTE] |= LF_MASK;
+    } else {
+        data[LF_BYTE] &= !LF_MASK;
+    }
+}
+
+/// Sum of squared differences over every coded plane — the frame-level
+/// distortion the loop-filter RD decision compares.
+fn picture_ssd(a: &Picture, b: &Picture) -> u64 {
+    (0..a.nplanes())
+        .map(|p| ssd(&a.planes[p].data, &b.planes[p].data))
+        .sum()
 }
 
 /// Per-frame encoder state. Borrows the source and the references so the

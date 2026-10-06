@@ -140,44 +140,54 @@ codec: the content is smooth and highly predictable.
 cargo test -p tpt-video-vault
 ```
 
-38 tests: 15 unit tests (Rice lengths against the real writer, coefficient
+52 tests: 18 unit tests (Rice lengths against the real writer, coefficient
 block round trips and the worst-case bound at all four transform sizes,
 transform round trip and a DC known answer, half-pel interpolation known
 answers and off-picture safety, intra availability and a plane-extrapolation
-exactness check, loop-filter behaviour, config validation), 18 property tests
+exactness check, loop-filter behaviour, config validation, RDOQ decisions,
+the loop-filter bit patch against a decoder parse), 20 property tests
 (decoder output bit-identical to the encoder's own reconstruction across
 sizes that are not multiples of 64, both formats and 1–16 references;
 determinism; `qp` ordering; flat frames exact; static scenes and pans cheap;
 the RDO objective not worse than a forced 8×8 partition; the packet bound;
 hostile headers; resource limits; the corruption sweep; factories; keyframe
-reset), 4 coding-tool census tests (large blocks where flat and small where
-busy, half-pel vectors chosen on a half-pel shift, older references used and
-paying off on an A/B/A/B cut, near-total skip on a repeated frame) and 1
-memory test (peak independent of stream length).
+reset; B-frame display order and reference hygiene), 4 coding-tool census
+tests (large blocks where flat and small where busy, half-pel vectors chosen
+on a half-pel shift, older references used and paying off on an A/B/A/B cut,
+near-total skip on a repeated frame), 1 memory test (peak independent of
+stream length), 3 rate-control tests, 2 loop-filter-RD tests and 4 scene-cut
+tests; plus `#[ignore]`d measurement harnesses for the tables in
+`docs/performance.md`.
 
 ## Known limitations
 
-- The encoder is slow (about 45-55 ms/frame at QCIF, 170-180 ms at CIF in release, on a quiet machine)
-  and not real-time. The direct `O(n³)` separable DCT from
-  `tpt-dsp-core` evaluated at every partition level is the likely dominant cost (not profiled; the time grows with the largest allowed block, see `docs/performance.md`).
-- No B-frames, no weighted prediction, no long-term references or reference
-  reordering (the references are simply the last N pictures), no rate control,
-  no scene-cut detection, no per-block quantiser adaptation, no
-  coefficient-level RDO (RDOQ).
-- The loop filter is switched by a per-frame flag that the encoder does **not**
-  decide by rate–distortion. Measured: it helped a textured clip (up to
-  +0.44 dB) and was neutral-to-harmful on a smooth-gradient clip (see
-  `docs/performance.md`). It is on by default.
+- Not claimed real-time on either side. The transform runs on
+  `tpt-dsp-core`'s FFT-backed `FastDct2dPlan` in std builds (bare metal
+  keeps the direct path); since 2026-10-05 every §36 corpus scene fits
+  the 33.3 ms QCIF frame budget (2.9-22.2 ms/frame, `docs/performance.md`).
+- No weighted prediction, no long-term references or reference reordering
+  (the references are simply the last N pictures), no per-block quantiser
+  adaptation. Rate control (`target_bits_per_frame`), B-frames
+  (`b_frames`), scene-cut detection (`scene_cut`) and coefficient-level
+  RDO (`rdoq`) exist as encoder-only knobs; the scene-cut constants and
+  the RDO `λ` are empirical and untuned on real content.
+- The loop filter's per-frame flag comes from configuration, or — with
+  `loop_filter_rdo` — from a same-frame SSE comparison. That comparison
+  cannot see the filter's effect on later frames' prediction: on the
+  smooth panning clip it keeps the filter while the stream would decode
+  better without it (`docs/performance.md`). Fixed-flag measurements: it
+  helped a textured clip (up to +0.44 dB) and was neutral-to-harmful on a
+  smooth-gradient clip. On by default.
 - The closed loop has no drift when encoder and decoder run the same build on
   the same target; the transform is `f32` and the workspace makes no
   cross-target bit-exactness claim (todo.md §39).
-- Not wired into the `tpt-web` player. It *is* driven by `tpt-cli`:
-  `--codec vault` works for `encode`, `decode`, `transcode` and `benchmark`
-  through the y4m bridge, it is in the probe capability table, and
-  `tpt video-corpus --codec vault` measures it over the §36 corpus. The
-  cross-codec table is in `todo.md` §33 — measured on synthetic clips at a
-  shared `qp`, so it is a quality/speed/bytes comparison, **not** a
-  compression-ratio claim against another codec.
+- Playable in the `tpt-web` browser player (with Mote, since 2026-10-05)
+  and driven by `tpt-cli`: `--codec vault` works for `encode`, `decode`,
+  `transcode` and `benchmark` through the y4m bridge, it is in the probe
+  capability table, and `tpt video-corpus --codec vault` measures it over
+  the §36 corpus. The cross-codec table is in `todo.md` §33 — measured on
+  synthetic clips at a shared `qp`, so it is a quality/speed/bytes
+  comparison, **not** a compression-ratio claim against another codec.
 
 ## License
 

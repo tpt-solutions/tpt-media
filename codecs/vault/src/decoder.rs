@@ -39,9 +39,11 @@ use crate::{
 
 /// Vault decoder.
 ///
-/// Keeps up to [`VaultConfig::max_refs`] loop-filtered reference pictures
-/// (most recent first) and a copy of the last emitted frame for
-/// [`VaultDecoder::conceal`]. There is no reordering: one frame out per
+/// Keeps up to [`VaultConfig::max_refs`] reference pictures (most recent
+/// first; each loop-filtered exactly when its own header bit said so) and
+/// a copy of the last emitted frame for
+/// [`VaultDecoder::conceal`]. B-frames are held in a reorder buffer until
+/// their display position comes up; everything else is one frame out per
 /// packet in.
 pub struct VaultDecoder {
     info: CodecInfo,
@@ -138,6 +140,9 @@ pub struct FrameStats {
     pub ref_hist: [u32; 16],
     /// Leaves with at least one non-zero coefficient.
     pub coded: u32,
+    /// Whether the frame's header bit said to run the loop filter (so a
+    /// test can observe a per-frame loop-filter decision).
+    pub loop_filter: bool,
 }
 
 /// Everything one frame's parse needs.
@@ -322,7 +327,10 @@ impl Decoder for VaultDecoder {
                 },
             },
             num_refs,
-            stats: FrameStats::default(),
+            stats: FrameStats {
+                loop_filter: lf,
+                ..FrameStats::default()
+            },
         };
         for sy in (0..h).step_by(SUPERBLOCK) {
             for sx in (0..w).step_by(SUPERBLOCK) {

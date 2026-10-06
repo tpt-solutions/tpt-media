@@ -337,7 +337,8 @@ appear in P-frames only; an I-frame is all intra).
   Chroma reuses the luma mode.
 
 **References.** Up to 16 (`MAX_REFERENCE_FRAMES`, 5 bits on the wire): the
-last `max_refs` loop-filtered reconstructions, most recent first. An I-frame
+last `max_refs` reconstructions — each loop-filtered exactly when its own
+frame's header bit said so — most recent first. An I-frame
 clears the store. The decoder rejects a frame that claims more references
 than it holds with `NeedMoreInput` (a stream joined mid-way or after loss),
 and more than `limits.max_reference_frames` with a resource-limit error.
@@ -371,7 +372,17 @@ only real coding-structure edges: leaf-block boundaries plus the 32×32 tile
 seams inside a 64×64 luma leaf. An edge between two skip/no-residual units
 with the same reference and motion within a pel is not filtered. The whole
 picture is filtered after reconstruction, and the filtered picture is the
-next reference. It is enabled by a per-frame header bit.
+next reference. It is enabled by a per-frame header bit: the encoder
+signals the configuration flag as-is, or — with `loop_filter_rdo` —
+decides the bit per frame after the frame is coded, keeping whichever of
+the filtered and unfiltered reconstructions is closer to the source
+(ties keep the filter) and patching the header bit to match
+(`encoder::set_loop_filter_bit`, its offset pinned against a decoder
+parse). The decision prices the current frame only: on the smooth panning
+clip it keeps the filter even though the *stream* decodes better without
+it, because the unfiltered reference predicts the pan better — the same
+greedy limitation every other decision here shares (numbers in
+`performance.md`).
 
 **Rate–distortion optimisation.** For each node the encoder compares
 `J = D + λR` between coding it as a leaf and splitting it, with
@@ -392,9 +403,11 @@ next reference. It is enabled by a per-frame header bit.
 
 This is **not** a global optimum and is not claimed to be. Candidate
 generation is heuristic and pruned; the motion search is a pattern search
-that can settle in a local minimum; there is no coefficient-level RDO
-(RDOQ) or trellis quantisation; decisions ignore their effect on later
-blocks' vector predictors and intra neighbours; and `λ` is not tuned. What
+that can settle in a local minimum; coefficient-level RDO exists only as
+the default-off `rdoq` knob (an exact-rate zeroing pass, measured
+byte-identical on the available content pending a tuned `λ`) and there is
+no trellis quantisation; decisions ignore their effect on later blocks'
+vector predictors and intra neighbours; and `λ` is not tuned. What
 holds, and is tested, is narrower: each decision is the cheapest among the
 alternatives that were priced, and freeing the partition never does worse
 on `J` than forcing 8×8 on the test frames.
@@ -437,17 +450,26 @@ per area), plus one run and one level token per sample, each at most
 
 Known sharp edges, stated plainly:
 
-- **Slow encoder, neither side real-time.** Every partition level prices an
-  intra, an inter and a skip candidate with a real transform, and the
-  `tpt-dsp-core` DCT is a direct `O(n³)` separable one. About 45-55 ms/frame at
-  QCIF and 170-180 ms at CIF in release on the development machine (twice that under load).
-- **No B-frames, weighted prediction, long-term references, reference
-  reordering, rate control, scene-cut detection or per-block `qp`.** The
-  reference list is simply the last N pictures.
-- **The loop filter is not RD-decided.** It is a per-frame flag the encoder
-  sets from configuration. Measured on synthetic clips it helped textured
-  content and was neutral-to-harmful on smooth gradients (numbers in
-  `performance.md`); it is on by default.
+- **Encoder cost.** Every partition level prices an intra, an inter and a
+  skip candidate with a real transform; since 2026-10-05 the tile
+  transform runs on `tpt-dsp-core`'s FFT-backed `FastDct2dPlan` in std
+  builds (bare metal keeps the direct path) and every §36 corpus scene
+  fits the 33.3 ms QCIF frame budget (2.9-22.2 ms/frame, worst:
+  high-motion). Neither side carries a real-time *claim* — that is a
+  maintained contract, not a benchmark side-effect.
+- **No weighted prediction, long-term references, reference reordering
+  or per-block `qp`.** The reference list is simply the last N pictures.
+  Rate control, B-frames, scene-cut detection (`scene_cut`) and
+  coefficient-level RDO (`rdoq`) exist as encoder-only knobs; the
+  scene-cut constants and `λ` are empirical and untuned on real content.
+- **The loop filter's flag is RD-decidable, not RD-optimal.** With
+  `loop_filter_rdo` the encoder picks the per-frame bit by same-frame
+  SSE against the source, which cannot see the filter's effect on later
+  frames' prediction: on the smooth panning clip it keeps the filter on
+  every frame while the stream decodes better with it off (numbers in
+  `performance.md`). Fixed-flag measurements: the filter helped textured
+  content and was neutral-to-harmful on smooth gradients; it is on by
+  default.
 - **Vector predictor is left-else-top**, not a median, and ignores whether
   the neighbour used a different reference.
 - **Intra is minimal**: four modes, no top-right samples, no angular modes,
@@ -455,7 +477,8 @@ Known sharp edges, stated plainly:
 - **Closed-loop exactness assumes the same build and target on both sides**;
   the transform is `f32` and the workspace makes no cross-target bit-exactness
   claim (todo.md §39).
-- **Not wired into the `tpt-web` player.** It *is* driven by `tpt-cli`:
+- **In the `tpt-web` player since 2026-10-05** (with Mote, via
+  `DecoderTable::native()`). It *is* also driven by `tpt-cli`:
   `--codec vault` works for `encode`, `decode`, `transcode` and `benchmark`
   through the y4m bridge, it is in the probe capability table, and
   `tpt video-corpus --codec vault` measures it over the §36 corpus. Its

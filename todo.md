@@ -1747,20 +1747,49 @@ Not done, and why (left honestly open):
       stops short on the textured first I-frame), 24 kbit/s → 28.6 (the
       `qp = MAX_QP` floor is the lowest the codec can go). Deterministic
       (pinned by test), decodes with the unchanged decoder. Still open:
-      scene-cut detection, per-block `qp`
-* [ ] a tuned `λ` and an RD-decided loop-filter flag — the RDOQ half
-      landed 2026-10-05 as an encoder knob (`rdoq: bool`, default
-      **off**): an exact-rate zeroing pass (per level, from the block's
-      last down: the level's own Rice code, its run merge, and the
-      shortened span when it is the last; distortion `(level·step)²` by
-      Parseval, so the step cancels against λ), unit-tested to fire
-      exactly when the RD math says so at both ends of the step range,
-      restricted to tiles ≤16×16 where the O(tile²) sweep is cheap.
-      Measured over the bench clip at `qp` 30 and 12: output
-      byte-identical with the pass on, at a 0-6% time cost — the
-      dead-zone quantiser leaves no marginal levels for it to drop on
-      the available content, so it ships as a knob pending a λ tuned on
-      real content rather than a default
+      per-block `qp`. **Scene cut detection followed 2026-10-07** as the
+      encoder-only `VaultConfig::scene_cut` knob (default off, `rdoq`-style
+      pending real content): a reference frame whose mean absolute luma
+      difference from the most recent reference spikes above both an
+      absolute floor (12) and a factor (4) times the previous frame's
+      difference codes intra; the detector is a spike rule, so the busy
+      pan clip does not fire it (pinned byte-identical with the knob
+      off), a hard cut fires exactly once at the new scene's first frame,
+      and in the B-frame path a cut lands on the next group anchor (a cut
+      inside a group waits for the boundary by design — the group's
+      future reference still codes predictive). Measured
+      (`measure.rs::scene_cut_on_and_off`): the win is rate, not
+      distortion — 288 vs 297 B post-cut at equal 43.38 dB, because the
+      RDO's intra-leaf fallback already keeps a P-after-cut's quality.
+      The keyframe schedule became a `since_intra` counter so a detected
+      cut re-arms it; default-config streams are bit-identical to before
+      (the whole pre-existing suite passes unchanged)
+* [ ] a tuned `λ` — the other two halves of this item have landed as
+      encoder knobs. RDOQ 2026-10-05 (`rdoq: bool`, default **off**): an
+      exact-rate zeroing pass (per level, from the block's last down: the
+      level's own Rice code, its run merge, and the shortened span when
+      it is the last; distortion `(level·step)²` by Parseval, so the step
+      cancels against λ), unit-tested to fire exactly when the RD math
+      says so at both ends of the step range, restricted to tiles ≤16×16
+      where the O(tile²) sweep is cheap. Measured over the bench clip at
+      `qp` 30 and 12: output byte-identical with the pass on, at a 0-6%
+      time cost — the dead-zone quantiser leaves no marginal levels for
+      it to drop on the available content. **The RD-decided loop-filter
+      flag 2026-10-07** (`loop_filter_rdo: bool`, default **off**): after
+      the frame is coded, the encoder filters a copy of the
+      reconstruction, keeps whichever of the two is closer to the source
+      (ties keep the filter), and patches the finished packet's header
+      bit to match — an offset pinned against a real decoder parse, and
+      drift-freedom pinned through the real decoder for all three test
+      content shapes. The decision prices the *current frame only*, and
+      the measurement says exactly what that buys
+      (`measure.rs::loop_filter_rdo_decision`): on textured content and
+      pure noise it lands on the stream-level better side, but on the
+      smooth panning clip it keeps the filter on every frame while the
+      fixed-off *stream* decodes better (40.08 vs 39.97 dB at `qp` 26) —
+      the filter's harm there is a prediction effect no per-frame
+      decision can see. What remains open is the tuned `λ` itself, which
+      is waiting on real content this repository does not have
 * [x] a faster encoder — 2026-10-05, profiled then fixed. The profile
       (temporary phase timers over the criterion bench's own QCIF
       clip) measured the *transform* (`dct_2d` + quantise +

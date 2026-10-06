@@ -23,7 +23,10 @@
 //! - **Up to 16 reference frames** ([`MAX_REFERENCE_FRAMES`]): the last
 //!   `max_refs` loop-filtered reconstructions, most recent first. Each
 //!   inter leaf names its reference. Skip always means reference 0 with the
-//!   predicted vector. There are no B-frames and no bi-prediction.
+//!   predicted vector. Optional B-frames
+//!   ([`VaultConfig::b_frames`]) bi-predict from the reference frames on
+//!   both sides of their display position and never become references
+//!   themselves; display order is recovered from the per-frame `poc`.
 //! - **Four intra modes** at every block size (DC, vertical, horizontal,
 //!   and a plane-extrapolation mode), chroma sharing the luma mode.
 //! - **2D DCT** from `tpt-dsp-core` at 4x4 to 32x32 (a 64x64 leaf is four
@@ -40,7 +43,10 @@
 //! - **Loop filter**: a boundary-strength-driven 2-strength deblocking
 //!   filter that only touches real coding-structure edges (leaf
 //!   boundaries, and the 32x32 tile seams inside a 64x64 leaf); the
-//!   filtered picture is the next reference.
+//!   filtered picture is the next reference. Signalled per frame by a
+//!   header bit: from [`VaultConfig::loop_filter`] as-is, or decided
+//!   per frame by rate–distortion with
+//!   [`VaultConfig::loop_filter_rdo`].
 //!
 //! ## Pixel formats
 //!
@@ -48,10 +54,10 @@
 //! is refused with [`CodecError::Unsupported`]. Width and height are
 //! non-zero multiples of [`MIN_BLOCK`] (8).
 //!
-//! ## Wire format (version 1)
+//! ## Wire format (version 2)
 //!
 //! ```text
-//! 16 bits version | 1 intra | 6 qp | 5 num_refs | 1 loop_filter
+//! 16 bits version | 2 ftype | 6 qp | 5 num_refs | 1 loop_filter | 16 poc
 //! superblocks in raster order, each a quadtree of `split` flags and leaves
 //! 32 bits CRC-32 (little endian) over everything before it
 //! ```
@@ -62,14 +68,19 @@
 //!
 //! ## Limits, stated plainly
 //!
-//! - The encoder is slow and is **not** claimed real-time; the decoder is
-//!   not claimed real-time either (`Capabilities` says so). Measured
-//!   numbers are in `docs/performance.md`.
-//! - The largest transform is 32x32 and every transform is a direct
-//!   `O(n^3)` separable DCT from `tpt-dsp-core`, which is what makes
-//!   large-block RDO expensive.
-//! - No rate control (`qp` is a constant), no B-frames, no weighted
-//!   prediction, no per-block quantiser adaptation, no scene-cut detection.
+//! - The encoder is not claimed real-time (`Capabilities` says so); the
+//!   measured cost is in `docs/performance.md` — the transform runs on
+//!   `tpt-dsp-core`'s FFT-backed `FastDct2dPlan` in std builds, which
+//!   brought every §36 corpus scene inside the 33.3 ms QCIF frame
+//!   budget (bare metal keeps the direct path).
+//! - The largest transform is 32x32; a 64x64 leaf is coded as four such
+//!   tiles.
+//! - No weighted prediction, no long-term references or reference
+//!   reordering, no per-block quantiser adaptation. Rate control,
+//!   B-frames, scene-cut detection ([`VaultConfig::scene_cut`]) and
+//!   coefficient-level RDO ([`VaultConfig::rdoq`]) exist as
+//!   encoder-only knobs; the scene-cut constants and `lambda` are
+//!   empirical and untuned on real content.
 //!
 //! See `docs/provenance.md` for algorithm sources.
 
@@ -273,12 +284,26 @@ pub struct VaultConfig {
     /// Frame-level rate control: when set, each frame is coded at the
     /// quantiser that keeps the stream near this many **bits per
     /// frame** — a bounded search around the previous frame's choice
-    /// (at most three encodes), with a 4× allowance on the first
-    /// (intra) frame while the budget bucket recovers. The frame
-    /// header already carries a per-frame `qp`, so this is
-    /// encoder-only: no wire change, and `qp` is ignored while this is
-    /// `Some`.
+    /// (at most three encodes), with a 4× allowance on intra frames
+    /// while the budget bucket recovers. The frame header already
+    /// carries a per-frame `qp`, so this is encoder-only: no wire
+    /// change, and `qp` is ignored while this is `Some`.
     pub target_bits_per_frame: Option<u32>,
+    /// Scene-cut detection: a reference frame whose mean absolute luma
+    /// difference from the most recent reference spikes above both an
+    /// absolute floor and a factor times the previous frame's
+    /// difference is coded intra instead of predictive, rather than
+    /// waiting for the next scheduled keyframe. Encoder-only (an
+    /// intra is an intra to the decoder, however it was decided); the
+    /// constants are empirical and untuned on real content.
+    pub scene_cut: bool,
+    /// Decide the per-frame loop-filter flag by rate–distortion
+    /// instead of always signalling [`VaultConfig::loop_filter`]:
+    /// after the frame is reconstructed the encoder filters a copy,
+    /// keeps whichever of the two is closer to the source, and writes
+    /// that choice into the header bit the decoder already reads.
+    /// Encoder-only; ties keep the filter. Same-build deterministic.
+    pub loop_filter_rdo: bool,
 }
 
 impl Default for VaultConfig {
@@ -295,6 +320,8 @@ impl Default for VaultConfig {
             target_bits_per_frame: None,
             b_frames: 0,
             rdoq: false,
+            scene_cut: false,
+            loop_filter_rdo: false,
         }
     }
 }

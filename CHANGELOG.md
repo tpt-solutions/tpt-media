@@ -9,6 +9,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 Added
 
+- **Vault's loop filter can be rate–distortion decided, and scene cuts
+  break the keyframe schedule** (2026-10-07, two of todo.md §33's open
+  encoder items): `VaultConfig::loop_filter_rdo` decides the per-frame
+  loop-filter header bit after the frame is coded — keeping whichever of
+  the filtered and unfiltered reconstructions is closer to the source,
+  patching the finished packet's header bit (offset pinned against a
+  decoder parse) — and `VaultConfig::scene_cut` codes the first frame
+  after a hard cut intra when its mean absolute luma difference from the
+  most recent reference spikes above both an absolute floor and a factor
+  times the previous frame's difference. Both knobs are encoder-only and
+  default **off**, `rdoq`-style, pending real content. The honest
+  measurements (harnesses and tables in `measure.rs` /
+  `docs/performance.md`): the loop-filter decision reproduces the
+  stream-level fixed-flag preference on textured content and on pure
+  noise, but on the smooth panning clip it keeps the filter on every
+  frame while the stream decodes better without it — the filter's harm
+  there is a *prediction* effect no per-frame decision can price; the
+  scene-cut detector saves tail bytes, not distortion (the RDO's
+  intra-leaf fallback already keeps a P-after-cut's quality), 288 vs
+  297 B post-cut at equal PSNR on the synthetic cut. Supporting changes:
+  a cut (or any intra) now gets the rate controller's 4× intra allowance
+  rather than only the first frame, the keyframe schedule is a
+  `since_intra` counter so a detected cut re-arms it (scheduled keyframes
+  stay one interval apart after a cut; default-config streams are
+  bit-identical to before), and `FrameStats` gained a `loop_filter` field
+  so tests can observe the per-frame decision. Vault's README, whose
+  Known-limitations list predated rate control, B-frames and the fast
+  transform, was brought up to date in the same change.
 - **§40's randomized SIMD-equivalence sweeps landed in `tpt-dsp`**
   (2026-10-05, upstream): five SplitMix64-seeded sweeps drive the SIMD
   and scalar paths with random values on every nightly `simd` build —

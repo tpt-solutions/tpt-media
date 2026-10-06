@@ -208,3 +208,141 @@ fn max_block_size_and_references() {
         println!("max_refs {refs:2}: {b:4} B/frame {p:.3} dB  {ms:.0} ms/frame");
     }
 }
+
+/// Per-pixel uniform noise, reseeded per frame — the one content shape
+/// where deblocking moves *every* edge sample away from the source
+/// (the source's own edges are noise), so the same-frame distortion
+/// genuinely prefers the filter off.
+fn noise_clip() -> Vec<VideoFrame> {
+    (0..FRAMES)
+        .map(|i| {
+            let mut f = VideoFrame::alloc(W as u32, H as u32, PixelFormat::Yuv420);
+            let mut state = 0xB00B_1E55_u64 ^ (i as u64).wrapping_mul(0x9E37_79B9);
+            for y in 0..H {
+                for x in 0..W {
+                    f.pixels[y * W + x] = (((lcg(&mut state) >> 56) * 256) >> 8) as u8;
+                }
+            }
+            f.pixels[W * H..].fill(128);
+            f.frame.pts = Timestamp {
+                ticks: i as i64,
+                timebase: Timebase::new(1, 30),
+            };
+            f
+        })
+        .collect()
+}
+
+/// The RD-decided loop-filter flag: fixed off, fixed on, and per-frame
+/// RD, with the RD run's per-frame decision printed from the decoder's
+/// census.
+#[test]
+#[ignore]
+fn loop_filter_rdo_decision() {
+    for (name, clip, qps) in [
+        ("panning noisy(3)", panning_clip(3), [26u8, 46]),
+        ("texture", texture_clip(), [26, 38]),
+        ("pure noise", noise_clip(), [26, 40]),
+    ] {
+        println!("== loop filter rdo, clip {name}");
+        for qp in qps {
+            for (mode, lf, rdo) in [("off", false, false), ("on ", true, false), ("rdo", true, true)]
+            {
+                let cfg = VaultConfig {
+                    qp,
+                    loop_filter: lf,
+                    loop_filter_rdo: rdo,
+                    ..base()
+                };
+                let fwc = CodecConfig {
+                    limits: ResourceLimits::permissive(),
+                    ..CodecConfig::default()
+                };
+                let mut enc = VaultEncoder::new(fwc.clone(), cfg.clone()).unwrap();
+                let mut dec = VaultDecoder::new(fwc, cfg).unwrap();
+                let (mut bytes, mut ps) = (0usize, 0.0);
+                let mut flags = Vec::new();
+                for f in &clip {
+                    let p = enc.encode(f).unwrap().remove(0);
+                    bytes += p.data.len();
+                    let o = dec.decode(&p).unwrap().remove(0);
+                    ps += psnr(&f.pixels[..W * H], &o.pixels[..W * H]);
+                    flags.push(if dec.last_stats().loop_filter { 'F' } else { '.' });
+                }
+                let decisions: String = flags.into_iter().collect();
+                let ps = ps / clip.len() as f64;
+                println!(
+                    "qp {qp:2} filter {mode}: {bytes:4} B/clip {ps:.3} dB/clip  [{decisions}] (F = filtered)"
+                );
+            }
+        }
+    }
+}
+
+/// Flat synthetic scenes (a dark rising gradient vs a bright falling one
+/// with different chroma) with a hard cut halfway — the `scene_cut`
+/// knob's home turf. With the keyframe schedule parked far away, prints
+/// intra count, tail (post-cut) bytes and mean post-cut PSNR for the
+/// knob off and on.
+#[test]
+#[ignore]
+fn scene_cut_on_and_off() {
+    let clip: Vec<VideoFrame> = (0..16)
+        .map(|i| {
+            let mut f = VideoFrame::alloc(W as u32, H as u32, PixelFormat::Yuv420);
+            let pan = i * 2;
+            for y in 0..H {
+                for x in 0..W {
+                    let g = (x * 140 / W + y * 60 / H) as i32;
+                    let stripe = (x as i32 + pan) % 24;
+                    let v = if i < 8 {
+                        30 + (g + stripe) / 2
+                    } else {
+                        225 - (g + stripe) / 3
+                    };
+                    f.pixels[y * W + x] = v.clamp(0, 255) as u8;
+                }
+            }
+            f.pixels[W * H..].fill(if i < 8 { 128 } else { 100 });
+            f.frame.pts = Timestamp {
+                ticks: i as i64,
+                timebase: Timebase::new(1, 30),
+            };
+            f
+        })
+        .collect();
+    for scene_cut in [false, true] {
+        let cfg = VaultConfig { scene_cut, ..base() };
+        let fwc = CodecConfig {
+            limits: ResourceLimits::permissive(),
+            ..CodecConfig::default()
+        };
+        let mut enc = VaultEncoder::with_keyframe_interval(fwc.clone(), cfg.clone(), 10_000)
+            .unwrap();
+        let mut dec = VaultDecoder::new(fwc, cfg).unwrap();
+        let mut packets = Vec::new();
+        for f in &clip {
+            packets.extend(enc.encode(f).unwrap());
+        }
+        let keys = packets
+            .iter()
+            .filter(|p| p.flags.contains(tpt_media_core::PacketFlags::KEYFRAME))
+            .count();
+        let mut post_psnr = 0.0;
+        let mut post_n = 0usize;
+        for (i, p) in packets.iter().enumerate() {
+            for o in dec.decode(p).unwrap() {
+                if i >= 8 {
+                    post_psnr += psnr(&clip[i].pixels[..W * H], &o.pixels[..W * H]);
+                    post_n += 1;
+                }
+            }
+        }
+        println!(
+            "scene_cut {scene_cut:5}: {keys} intra, total {} B, post-cut tail {} B, post-cut PSNR {:.2} dB",
+            packets.iter().map(|p| p.data.len()).sum::<usize>(),
+            packets[8..].iter().map(|p| p.data.len()).sum::<usize>(),
+            post_psnr / post_n.max(1) as f64,
+        );
+    }
+}

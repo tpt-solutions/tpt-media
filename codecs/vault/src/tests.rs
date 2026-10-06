@@ -444,3 +444,45 @@ fn rdoq_can_zero_a_whole_block() {
     rdoq_tile(&mut levels, &scan, 0.1, crate::LAMBDA_SCALE);
     assert!(levels.iter().all(|&l| l == 0), "tiny levels at a tiny step");
 }
+
+/// The loop-filter RD decision patches a finished packet: the bit it
+/// flips must be exactly the one the decoder parses as `loop_filter`,
+/// with every other header field untouched.
+#[test]
+fn set_loop_filter_bit_targets_the_bit_the_decoder_reads() {
+    use crate::encoder::set_loop_filter_bit;
+
+    let parse = |data: &[u8]| {
+        let mut r = BitReader::new(data);
+        let version = r.read(16).unwrap();
+        let ftype = r.read(2).unwrap();
+        let qp = r.read(QP_BITS).unwrap();
+        let num_refs = r.read(5).unwrap();
+        let lf = r.read(1).unwrap();
+        let poc = r.read(16).unwrap();
+        (version, ftype, qp, num_refs, lf, poc)
+    };
+
+    // A v2 header exactly as the encoder writes it: filter on.
+    let mut w = PacketBits::new();
+    w.write_bits(16, u64::from(VERSION)).unwrap();
+    w.write_bits(2, u64::from(crate::ftype::P)).unwrap();
+    w.write_bits(QP_BITS, 30).unwrap();
+    w.write_bits(5, 4).unwrap();
+    w.write_bits(1, 1).unwrap();
+    w.write_bits(16, 0x1234).unwrap();
+    let mut data = w.finish();
+
+    set_loop_filter_bit(&mut data, false);
+    let (v, t, q, n, lf, p) = parse(&data);
+    assert_eq!(v, u64::from(VERSION));
+    assert_eq!(t, u64::from(crate::ftype::P));
+    assert_eq!(q, 30);
+    assert_eq!(n, 4);
+    assert_eq!(lf, 0, "the patched-off bit must be the one the decoder reads");
+    assert_eq!(p, 0x1234);
+
+    set_loop_filter_bit(&mut data, true);
+    let (_, _, _, _, lf, _) = parse(&data);
+    assert_eq!(lf, 1, "and back on");
+}

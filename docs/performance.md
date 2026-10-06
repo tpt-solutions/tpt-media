@@ -362,6 +362,50 @@ is not a free win on these clips. It is on by default, and an earlier
 `d < beta` averaging variant was measurably worse (+24% rate at `qp` 26 on
 the smooth clip), which is why it was replaced by the H.263 Annex J form.
 
+The RD-decided flag (`loop_filter_rdo`, measured by `measure.rs`'s
+`loop_filter_rdo_decision`; per-frame decisions shown as F = filtered,
+. = unfiltered; PSNR is the clip mean, luma):
+
+| clip | `qp` | fixed off | fixed on | `loop_filter_rdo` |
+| --- | ---: | --- | --- | --- |
+| panning, noisy | 26 | 1789 B, 40.08 dB | 1967 B, 39.97 dB | 1967 B, 39.97 dB `[FFFFFFFF]` |
+| panning, noisy | 46 | 307 B, 30.27 dB | 291 B, 29.92 dB | 291 B, 29.92 dB `[FFFFFFFF]` |
+| texture | 26 | 2765 B, 38.04 dB | 2753 B, 38.11 dB | 2753 B, 38.11 dB `[FFFFFFFF]` |
+| texture | 38 | 898 B, 30.15 dB | 1022 B, 30.59 dB | 1022 B, 30.59 dB `[FFFFFFFF]` |
+| pure noise | 26 | 149 848 B, 32.38 dB | 149 847 B, 32.37 dB | 149 848 B, 32.38 dB `[........]` |
+| pure noise | 40 | 53 469 B, 18.58 dB | 53 472 B, 18.57 dB | 53 469 B, 18.58 dB `[........]` |
+
+Recorded honestly: the decision minimises the *same-frame* SSE against
+the source, and where that agrees with the stream (textured content,
+pure noise — whose block edges are noise the filter can only move away
+from the source) it lands on the better side. But on the smooth panning
+clip it keeps the filter on every frame while the fixed-off stream
+decodes better, because there the filter's cost is not the current
+frame's distortion at all: the unfiltered reference simply predicts the
+pan better, and a per-frame decision cannot price a future frame's
+prediction. The knob therefore ships default-off (like `rdoq`), useful
+when same-frame distortion is the objective, and the stream-level
+caveat is stated rather than papered over.
+
+Scene-cut detection (`scene_cut`, measured by `measure.rs`'s
+`scene_cut_on_and_off`; 16 flat frames with a hard cut halfway, the
+keyframe schedule parked at 10 000 so nothing masks the detector):
+
+| `scene_cut` | intra frames | post-cut tail | post-cut PSNR |
+| --- | ---: | ---: | ---: |
+| off | 1 | 297 B | 43.38 dB |
+| on | 2 | 288 B | 43.38 dB |
+
+The honest reading: on this synthetic cut the win is **rate, not
+distortion** — 3% fewer tail bytes at equal PSNR. The RDO already
+falls back to intra leaves inside a P-frame when prediction against the
+old scene fails, so a P-after-cut keeps its quality and merely wastes
+the inter syntax per block; the detector's saving is that syntax, plus
+a clean reference for the frames after. The detector's constants
+(spike factor 4, absolute floor 12 mean absolute luma levels) are
+empirical, and the knob ships default-off pending content that would
+justify a default.
+
 References (panning noisy clip, default `qp`): `max_refs` 1, 4, 16 gave 126,
 132 and 129 B/frame at 36.64, 36.98 and 36.83 dB. **A pan gains nothing from
 extra references**, as expected; the value of references is on content that
