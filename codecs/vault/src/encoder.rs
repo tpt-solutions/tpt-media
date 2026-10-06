@@ -906,12 +906,103 @@ impl FrameEnc<'_> {
         }
     }
 
+    /// Evaluate the candidates of one B-frame leaf. The v2 B wire has no
+    /// intra and no single-reference leaf: the skip bit decodes as the
+    /// zero-vector reference-0 (the future reference) prediction, and
+    /// every non-skip leaf decodes as the plain average of the two
+    /// motion-compensated references (`refs[1]` past with `mv`, `refs[0]`
+    /// future with `mv_b`). Both references are searched, and the
+    /// searched pair and its two single-vector special cases are priced
+    /// with exactly the predictions the decoder produces; skip seeds
+    /// `best` and the bi candidates replace it on `<=`.
+    fn eval_b_leaf(
+        &mut self,
+        x: usize,
+        y: usize,
+        s: usize,
+        flag_bits: u64,
+        src: &Blk,
+        pmv: (i32, i32),
+    ) -> Cand {
+        if self.scratch.len() < s * s {
+            self.scratch.resize(s * s, 0);
+        }
+        let (past, future) = {
+            let mut searched = [(0i32, 0i32); 2];
+            for (vi, r) in [1usize, 0].into_iter().enumerate() {
+                let (mv, _) = {
+                    let mut se = Searcher {
+                        plane: &self.refs[r].planes[0],
+                        src: &src.p[0],
+                        x,
+                        y,
+                        s,
+                        pmv,
+                        lam: self.lambda_sad,
+                        buf: &mut self.scratch,
+                    };
+                    se.run(self.search_range)
+                };
+                searched[vi] = mv;
+            }
+            (searched[0], searched[1])
+        };
+
+        let mut best = {
+            let leaf = Self::base_leaf(s, LeafKind::Skip);
+            let pred = build_pred(
+                &self.recon,
+                self.refs,
+                LeafKind::Skip,
+                0,
+                (0, 0),
+                (0, 0),
+                IntraMode::Dc,
+                x,
+                y,
+                s,
+            );
+            self.make_cand(leaf, src, pred, flag_bits)
+        };
+        for (mv, mv_b) in [(past, future), (past, (0, 0)), ((0, 0), future)] {
+            let mut leaf = Self::base_leaf(s, LeafKind::Bi);
+            leaf.mv = mv;
+            leaf.mv_b = mv_b;
+            let pred = build_pred(
+                &self.recon,
+                self.refs,
+                LeafKind::Bi,
+                0,
+                mv,
+                mv_b,
+                IntraMode::Dc,
+                x,
+                y,
+                s,
+            );
+            let c = self.make_cand(leaf, src, pred, flag_bits);
+            if c.j <= best.j {
+                best = c;
+            }
+        }
+        best
+    }
+
     /// Evaluate the leaf candidates of the `s x s` block at `(x, y)` and
     /// return the cheapest by `J`. Ties keep the earlier of skip < inter <
     /// intra.
     fn eval_leaf(&mut self, x: usize, y: usize, s: usize, flag_bits: u64) -> Cand {
         let src = Blk::load(self.src, x, y, s);
         let pmv = self.field.mv_pred(x / MIN_BLOCK, y / MIN_BLOCK);
+
+        // B leaves have their own candidate set: the wire cannot express
+        // an intra leaf there, every non-skip leaf decodes as the
+        // bi-average, and the skip decodes as a zero-vector prediction —
+        // pricing the I/P candidate set against that wire made the RDO
+        // optimise predictions the decoder never produces.
+        if self.ctx.b_frame {
+            return self.eval_b_leaf(x, y, s, flag_bits, &src, pmv);
+        }
 
         // Intra first: it exists in every frame, so it seeds `best`. The
         // later candidates replace it on `<=`, so ties resolve

@@ -505,23 +505,31 @@ no long-term references — those stay in the bullet above for v0.3+.
 **Wire format (the v2 bump, shipped).** The v1 1-bit `intra` flag
 became a 2-bit frame type (`I` / `P` / `B`, `3` reserved-rejected) and
 every frame gained a 16-bit `poc` — see "Wire format (version 2)"
-above. A B-frame leaf carries four Rice-coded motion-vector deltas
-(past pair, then future pair) against a (0, 0) predictor; the
-references are the fixed pair (past anchor, future reference), so no
-per-leaf reference index is spent. Combine mode is plain averaging
-(weighted prediction is v0.3+). Display order is recovered from the
-explicit `poc` — "derive it from PTS" would couple the codec to
-container behaviour that `.tpt` does not promise.
+above. A B-frame leaf carries a skip bit; a non-skip leaf carries four
+Rice-coded absolute motion vectors (past pair, then future pair)
+against a (0, 0) predictor **and then the same coefficient tiles as any
+other non-skip leaf** — the first implementation returned before the
+coefficient tail, so B frames coded no residual at all (fixed
+2026-10-07, see todo.md Known Issues); the references are the fixed
+pair (past anchor, future reference), so no per-leaf reference index is
+spent. Combine mode is plain averaging (weighted prediction is v0.3+).
+Display order is recovered from the explicit `poc` — "derive it from
+PTS" would couple the codec to container behaviour that `.tpt` does not
+promise.
 
 **Encoder.** A lookahead window of `b_frames` frames (config, default
 2, encoder-only): frames are coded I/P/B/P/B... with the next P (or I)
 coded *before* the B-frames between them, so its reconstruction is a
-legal future reference. Each B leaf prices forward-only, backward-only
-and bi-directional candidates with the existing `J = D + λ·R` — the
-RDO machinery needs no new concept, only a second reference list.
-B-frames never enter the reference store. Rate control composes
-unchanged: the bucket budgets each frame at its measured cost, and the
-4× intra allowance already handles the I-frame spike.
+legal future reference. Each B leaf prices exactly the candidates the
+wire can express, with the existing `J = D + λ·R`: the zero-vector
+skip, and the bi-average with both references searched — the searched
+pair plus its two single-vector special cases (the v2 B syntax has no
+intra and no single-reference leaf, and pricing the I/P candidate set
+against this wire made the first implementation optimise predictions
+the decoder never produces). B-frames never enter the reference store.
+Rate control composes unchanged: the bucket budgets each frame at its
+measured cost, and the 4× intra allowance covers every intra frame —
+the first frame, scheduled keyframes, and detected scene cuts.
 
 **Decoder.** Reordering: packets now arrive in *decode* order, and the
 decoder must hold B-frames until their future reference decodes, then

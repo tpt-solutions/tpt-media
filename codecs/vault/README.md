@@ -140,7 +140,7 @@ codec: the content is smooth and highly predictable.
 cargo test -p tpt-video-vault
 ```
 
-52 tests: 18 unit tests (Rice lengths against the real writer, coefficient
+53 tests: 18 unit tests (Rice lengths against the real writer, coefficient
 block round trips and the worst-case bound at all four transform sizes,
 transform round trip and a DC known answer, half-pel interpolation known
 answers and off-picture safety, intra availability and a plane-extrapolation
@@ -155,8 +155,9 @@ reset; B-frame display order and reference hygiene), 4 coding-tool census
 tests (large blocks where flat and small where busy, half-pel vectors chosen
 on a half-pel shift, older references used and paying off on an A/B/A/B cut,
 near-total skip on a repeated frame), 1 memory test (peak independent of
-stream length), 3 rate-control tests, 2 loop-filter-RD tests and 4 scene-cut
-tests; plus `#[ignore]`d measurement harnesses for the tables in
+stream length), 3 rate-control tests, 2 loop-filter-RD tests, 4 scene-cut
+tests and 1 B-frame quality test (decoded B frames within 3 dB of the
+same clip coded without them); plus `#[ignore]`d measurement harnesses for the tables in
 `docs/performance.md`.
 
 ## Known limitations

@@ -77,8 +77,9 @@ impl Leaf {
 #[derive(Copy, Clone)]
 pub(crate) struct LeafCtx {
     pub intra_frame: bool,
-    /// B frame: leaves carry two motion vectors against the fixed
-    /// reference pair `refs[1]` (past) / `refs[0]` (future).
+    /// B frame: non-skip leaves carry two motion vectors against the
+    /// fixed reference pair `refs[1]` (past) / `refs[0]` (future), then
+    /// coefficient tiles like any other non-skip leaf.
     pub b_frame: bool,
     /// Bits of the reference index field.
     pub ref_bits: u32,
@@ -120,21 +121,22 @@ pub(crate) fn write_leaf<W: WriteLike>(
     scans: &Scans,
 ) -> Result<(), WriteError> {
     if ctx.b_frame {
-        // B leaves: skip is the zero-vector bi-average; otherwise four
-        // Rice-coded motion-vector deltas against a (0, 0) predictor
-        // (past, then future). No intra modes, no reference indices —
-        // the reference pair is fixed for the whole frame.
+        // B leaves: the skip bit is the zero-vector reference-0 (future)
+        // prediction; otherwise four Rice-coded motion vectors against a
+        // (0, 0) predictor (past vector, then future vector) — and then
+        // the coefficient tiles, exactly like any other non-skip leaf.
+        // No intra modes, no reference indices: the reference pair is
+        // fixed for the whole frame.
         let skip = leaf.kind == LeafKind::Skip;
         w.write_bits(1, u64::from(skip))?;
-        if !skip {
-            encode_riced(w, MVD_K, i64::from(leaf.mv.0))?;
-            encode_riced(w, MVD_K, i64::from(leaf.mv.1))?;
-            encode_riced(w, MVD_K, i64::from(leaf.mv_b.0))?;
-            encode_riced(w, MVD_K, i64::from(leaf.mv_b.1))?;
+        if skip {
+            return Ok(());
         }
-        return Ok(());
-    }
-    if !ctx.intra_frame {
+        encode_riced(w, MVD_K, i64::from(leaf.mv.0))?;
+        encode_riced(w, MVD_K, i64::from(leaf.mv.1))?;
+        encode_riced(w, MVD_K, i64::from(leaf.mv_b.0))?;
+        encode_riced(w, MVD_K, i64::from(leaf.mv_b.1))?;
+    } else if !ctx.intra_frame {
         let skip = leaf.kind == LeafKind::Skip;
         w.write_bits(1, u64::from(skip))?;
         if skip {
@@ -150,7 +152,9 @@ pub(crate) fn write_leaf<W: WriteLike>(
             encode_riced(w, MVD_K, i64::from(leaf.mvd.0))?;
             encode_riced(w, MVD_K, i64::from(leaf.mvd.1))?;
         }
-        LeafKind::Bi => unreachable!("bi leaves only exist in b frames"),
+        // A B leaf's vectors are already on the wire; only its
+        // coefficient tiles follow.
+        LeafKind::Bi => {}
         LeafKind::Intra => w.write_bits(2, leaf.mode as u64)?,
         LeafKind::Skip => {}
     }
@@ -177,39 +181,6 @@ pub(crate) fn read_leaf(
     scans: &Scans,
 ) -> CodecResult<Leaf> {
     let bad = |_| CodecError::MalformedPacket;
-    if ctx.b_frame {
-        // B leaves: skip bit, then four Rice-coded motion-vector deltas
-        // against a (0, 0) predictor (past vector, then future vector).
-        let skip = r.read(1).map_err(bad)? == 1;
-        let mut leaf = Leaf {
-            size,
-            kind: LeafKind::Skip,
-            ref_idx: 0,
-            mv: (0, 0),
-            mvd: (0, 0),
-            mv_b: (0, 0),
-            mode: IntraMode::Dc,
-            coefs: Vec::new(),
-        };
-        if skip {
-            return Ok(leaf);
-        }
-        leaf.kind = LeafKind::Bi;
-        let dx0 = decode_riced(r, MVD_K).map_err(bad)?;
-        let dy0 = decode_riced(r, MVD_K).map_err(bad)?;
-        let dx1 = decode_riced(r, MVD_K).map_err(bad)?;
-        let dy1 = decode_riced(r, MVD_K).map_err(bad)?;
-        leaf.mv = (dx0 as i32, dy0 as i32);
-        leaf.mv_b = (dx1 as i32, dy1 as i32);
-        return Ok(leaf);
-    }
-    let (skip, intra) = if ctx.intra_frame {
-        (false, true)
-    } else if r.read(1).map_err(bad)? == 1 {
-        (true, false)
-    } else {
-        (false, r.read(1).map_err(bad)? == 1)
-    };
     let mut leaf = Leaf {
         size,
         kind: LeafKind::Skip,
@@ -220,35 +191,68 @@ pub(crate) fn read_leaf(
         mode: IntraMode::Dc,
         coefs: Vec::new(),
     };
-    if skip {
-        return Ok(leaf);
-    }
-    if intra {
-        leaf.kind = LeafKind::Intra;
-        leaf.mode = IntraMode::from_bits(r.read(2).map_err(bad)? as u8);
+    if ctx.b_frame {
+        // B leaves: skip bit, then four Rice-coded motion vectors
+        // against a (0, 0) predictor (past vector, then future vector),
+        // then the coefficient tiles like any other non-skip leaf.
+        if r.read(1).map_err(bad)? == 1 {
+            // A B skip decodes as the zero-vector reference-0 (future)
+            // prediction — the exact prediction the encoder prices.
+            leaf.mv = (0, 0);
+            leaf.mv_b = (0, 0);
+            return Ok(leaf);
+        }
+        leaf.kind = LeafKind::Bi;
+        let dx0 = decode_riced(r, MVD_K).map_err(bad)?;
+        let dy0 = decode_riced(r, MVD_K).map_err(bad)?;
+        let dx1 = decode_riced(r, MVD_K).map_err(bad)?;
+        let dy1 = decode_riced(r, MVD_K).map_err(bad)?;
+        // Absolute vectors, bounded exactly like the I/P ones (the same
+        // `MV_LIMIT` the search clamps to); anything wider is hostile.
+        let lim = i64::from(MV_LIMIT);
+        if dx0.abs() > lim || dy0.abs() > lim || dx1.abs() > lim || dy1.abs() > lim {
+            return Err(CodecError::MalformedPacket);
+        }
+        leaf.mv = (dx0 as i32, dy0 as i32);
+        leaf.mv_b = (dx1 as i32, dy1 as i32);
     } else {
-        leaf.kind = LeafKind::Inter;
-        if ctx.ref_bits > 0 {
-            let idx = r.read(ctx.ref_bits).map_err(bad)? as usize;
-            if idx >= num_refs {
+        let (skip, intra) = if ctx.intra_frame {
+            (false, true)
+        } else if r.read(1).map_err(bad)? == 1 {
+            (true, false)
+        } else {
+            (false, r.read(1).map_err(bad)? == 1)
+        };
+        if skip {
+            return Ok(leaf);
+        }
+        if intra {
+            leaf.kind = LeafKind::Intra;
+            leaf.mode = IntraMode::from_bits(r.read(2).map_err(bad)? as u8);
+        } else {
+            leaf.kind = LeafKind::Inter;
+            if ctx.ref_bits > 0 {
+                let idx = r.read(ctx.ref_bits).map_err(bad)? as usize;
+                if idx >= num_refs {
+                    return Err(CodecError::MalformedPacket);
+                }
+                leaf.ref_idx = idx as u8;
+            }
+            let dx = decode_riced(r, MVD_K).map_err(bad)?;
+            let dy = decode_riced(r, MVD_K).map_err(bad)?;
+            // Anything that could overflow or exceed the legal vector range is
+            // hostile; reject before doing arithmetic on it.
+            let lim = i64::from(2 * MV_LIMIT);
+            if dx.abs() > lim || dy.abs() > lim {
                 return Err(CodecError::MalformedPacket);
             }
-            leaf.ref_idx = idx as u8;
+            let mv = (pred_mv.0 + dx as i32, pred_mv.1 + dy as i32);
+            if mv.0.abs() > MV_LIMIT || mv.1.abs() > MV_LIMIT {
+                return Err(CodecError::MalformedPacket);
+            }
+            leaf.mvd = (dx as i32, dy as i32);
+            leaf.mv = mv;
         }
-        let dx = decode_riced(r, MVD_K).map_err(bad)?;
-        let dy = decode_riced(r, MVD_K).map_err(bad)?;
-        // Anything that could overflow or exceed the legal vector range is
-        // hostile; reject before doing arithmetic on it.
-        let lim = i64::from(2 * MV_LIMIT);
-        if dx.abs() > lim || dy.abs() > lim {
-            return Err(CodecError::MalformedPacket);
-        }
-        let mv = (pred_mv.0 + dx as i32, pred_mv.1 + dy as i32);
-        if mv.0.abs() > MV_LIMIT || mv.1.abs() > MV_LIMIT {
-            return Err(CodecError::MalformedPacket);
-        }
-        leaf.mvd = (dx as i32, dy as i32);
-        leaf.mv = mv;
     }
     leaf.coefs = vec![0i32; coef_count(size, ctx.nplanes)];
     let mut off = 0usize;

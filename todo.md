@@ -224,6 +224,39 @@
   §38's fuzzing checklist matters even for code that already has
   conventional unit tests.
 
+* **2026-10-07 — Vault's B frames coded no residual at all, and priced
+  candidates the decoder never renders** (found by a per-frame PSNR
+  probe two days after the B-frames landed, not by the tests that
+  shipped with them): `write_leaf`/`read_leaf`'s B-frame branch
+  returned after the skip bit and the four motion vectors, *before*
+  the shared coefficient tail — every B frame on the wire was
+  prediction-only, while the encoder's RDO reconstructed candidates
+  with quantised residuals and priced them as if the coefficients cost
+  nothing; and the candidate set was the I/P one (intra,
+  single-reference inter, predicted-vector skip) against a wire whose
+  non-skip leaves the decoder renders as a past/future average and
+  whose skip decodes as a zero-vector future prediction. Nothing
+  propagated: B reconstructions never enter the reference store, so
+  the I/P chain stayed drift-free and every display-order/schedule
+  test passed — only the B frames' own quality was silently 7-12 dB
+  below what the encoder believed it had bought. Two lessons the repo
+  keeps re-earning: a census of *tools used* is not a test of
+  *reconstruction correctness* (the B-frame tests pinned display order
+  and reference hygiene, and `decoder_matches_encoder_reconstruction`
+  only ran on the `b_frames = 0` default), and a probe must compare
+  each output against the source frame its **pts** names — comparing
+  against the frame whose encode produced the packet measures the
+  wrong picture once packets are reordered. Fixed the same day: B
+  leaves fall through to the coefficient tail like every other
+  non-skip leaf (v2 keeps its number — the corrected syntax is the
+  only v2, nothing released ever emitted the other one — and a hostile
+  B vector now gets the same `MV_LIMIT` range check the I/P path
+  always had), and the encoder prices the zero-vector skip plus the
+  searched bi pair and its two single-vector special cases.
+  `tests/b_frames.rs` pins decoded B frames within 3 dB of the same
+  clip coded without them (observed worst gap under 1 dB; pre-fix
+  7-12 dB).
+
 ---
 
 # 0. Purpose
@@ -1735,7 +1768,13 @@ Not done, and why (left honestly open):
       and emits in display order; flush releases held frames sorted.
       Still open: weighted prediction, long-term references,
       reference reordering, per-B combine modes beyond averaging
-      (the design's v0.3 list)
+      (the design's v0.3 list). **Fixed 2026-10-07, two days after
+      landing**: the first cut wrote B leaves' skip bit and motion
+      vectors but no coefficient tiles and priced I/P candidates
+      against the bi-average wire — B frames decoded prediction-only,
+      7-12 dB below the encoder's belief (Known Issues above);
+      `tests/b_frames.rs` now pins B-frame quality against the same
+      clip coded I/P-only
 * [x] frame-level rate control (2026-10-05): `VaultConfig::
       target_bits_per_frame` — a bounded search (at most three encodes
       per frame) around the previous frame's choice, driven by a

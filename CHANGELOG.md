@@ -452,6 +452,31 @@ Added
 
 ### Fixed
 
+- **Vault's B frames coded no residual at all, and priced candidates the
+  decoder never renders** (2026-10-07, found by a per-frame PSNR probe two
+  days after the B-frames landed - not by the display-order tests that
+  shipped with them). `write_leaf`/`read_leaf`'s B-frame branch returned
+  after the skip bit and the four motion vectors, before the shared
+  coefficient tail: every B frame on the wire was prediction-only, while
+  the encoder's RDO reconstructed candidates with quantised residuals and
+  priced them as if the coefficients cost nothing. The candidate set was
+  the I/P one (intra, single-reference inter, predicted-vector skip)
+  against a wire whose non-skip leaves the decoder renders as a
+  past/future average and whose skip decodes as a zero-vector future
+  prediction. Nothing propagated - B reconstructions never enter the
+  reference store, so the I/P chain stayed drift-free and every
+  display-order and schedule test passed; only the B frames' own quality
+  was silently 7-12 dB below what the encoder believed it had bought.
+  Fixed within v2 (nothing released ever emitted the other syntax, so the
+  version keeps its number): B leaves fall through to the coefficient
+  tail like every other non-skip leaf, a hostile B vector now gets the
+  same `MV_LIMIT` range check the I/P path always had, and the encoder
+  prices the zero-vector skip plus the searched bi pair and its two
+  single-vector special cases - predictions identical to what the decoder
+  renders, pinned by checksum equality. `codecs/vault/tests/b_frames.rs`
+  pins decoded B frames within 3 dB of the same clip coded without B
+  frames (observed worst gap under 1 dB; pre-fix 7-12 dB).
+
 - **`tpt-media-research`'s RD harness reported `NaN` bits-per-sample for an
   empty volume, and `codebook_mse` returned `NaN` for an empty training set**
   (2026-10-01, found while auditing that crate's public API against section 38's
