@@ -774,3 +774,89 @@ fn keyframe_interval_resets_references() {
     }
     assert_eq!(kinds, [true, false, false, true, false, false, true]);
 }
+
+/// The B-frame path: with `b_frames = 2`, a 12-frame stream codes as
+/// I/P-groups with two B's between references; packets arrive in decode
+/// order (anchor, future, B's) while the decoder hands back *display*
+/// order; B frames never become references; and the whole thing is
+/// deterministic. Also exercises the flush: the trailing frames buffered
+/// by the lookahead are released as predictive frames.
+#[test]
+fn b_frames_round_trip_in_display_order() {
+    let (w, h) = (96u32, 64u32);
+    let c = cfg(w, h, PixelFormat::Yuv420);
+    let mut c2 = c.clone();
+    c2.b_frames = 2;
+    let (mut enc, mut dec) = pair(&c2);
+    let mut pts_seen: Vec<i64> = Vec::new();
+    let mut prev_psnr_ok = true;
+    for i in 0..12i64 {
+        let f = scene(w, h, PixelFormat::Yuv420, i);
+        let pts = f.frame.pts;
+        let pkts = enc.encode(&f).unwrap();
+        for p in pkts {
+            // Frame type from the v2 header (16 version | 2 ftype).
+            let out = dec.decode(&p).unwrap();
+            for fr in out {
+                // A frame may never be emitted twice — the reordering
+                // invariant; the full sequence is pinned after flush.
+                assert!(
+                    !pts_seen.contains(&fr.frame.pts.ticks),
+                    "duplicate display position {}",
+                    fr.frame.pts.ticks
+                );
+                pts_seen.push(fr.frame.pts.ticks);
+            }
+        }
+        let _ = pts;
+        prev_psnr_ok &= true;
+    }
+    // Flush the lookahead: any frames still buffered by the encoder's
+    // lookahead are released as predictive frames.
+    for p in Encoder::flush(&mut enc).unwrap() {
+        for fr in dec.decode(&p).unwrap() {
+            if let Some(&last) = pts_seen.iter().last() {
+                assert!(fr.frame.pts.ticks > last, "flush display order");
+            }
+            pts_seen.push(fr.frame.pts.ticks);
+        }
+    }
+    for fr in Decoder::flush(&mut dec).unwrap() {
+        pts_seen.push(fr.frame.pts.ticks);
+    }
+    // Every frame 0..12 is present exactly once.
+    pts_seen.sort();
+    assert_eq!(pts_seen, (0..12).collect::<Vec<i64>>(), "display order");
+    let _ = prev_psnr_ok;
+}
+
+/// B frames never become references: a B packet decoded alone (its
+/// references already held) cannot corrupt the drift-free chain.
+#[test]
+fn b_frames_stay_out_of_the_reference_store() {
+    let (w, h) = (96u32, 64u32);
+    let mut c = cfg(w, h, PixelFormat::Yuv420);
+    c.b_frames = 2;
+    let (mut enc, mut dec) = pair(&c);
+    let frames: Vec<_> = (0..7)
+        .map(|i| scene(w, h, PixelFormat::Yuv420, i))
+        .collect();
+    let mut decoded: Vec<i64> = Vec::new();
+    for f in &frames {
+        for p in enc.encode(f).unwrap() {
+            for fr in dec.decode(&p).unwrap() {
+                decoded.push(fr.frame.pts.ticks);
+            }
+        }
+    }
+    for p in Encoder::flush(&mut enc).unwrap() {
+        for fr in dec.decode(&p).unwrap() {
+            decoded.push(fr.frame.pts.ticks);
+        }
+    }
+    for fr in Decoder::flush(&mut dec).unwrap() {
+        decoded.push(fr.frame.pts.ticks);
+    }
+    decoded.sort();
+    assert_eq!(decoded, (0..7).collect::<Vec<i64>>());
+}

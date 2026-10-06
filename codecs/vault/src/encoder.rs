@@ -127,6 +127,11 @@ pub struct VaultEncoder {
     /// the wire (v2) so the decoder can reorder B-frames. Increments per
     /// frame; resets on an intra.
     gop_poc: u16,
+    /// Lookahead buffer (display order) for the B-frame path.
+    pending: alloc::collections::VecDeque<VideoFrame>,
+    /// `true` while an anchor is coded and its B's await the future
+    /// reference that closes the group.
+    b_awaiting_future: bool,
 }
 
 impl VaultEncoder {
@@ -169,6 +174,8 @@ impl VaultEncoder {
             rc_debt: 0.0,
             rc_qp: 0,
             gop_poc: 0,
+            pending: alloc::collections::VecDeque::new(),
+            b_awaiting_future: false,
         })
     }
 
@@ -212,22 +219,213 @@ impl Encoder for VaultEncoder {
         self.cfg
             .limits
             .check_allocation(frame_bytes.saturating_mul(usize::from(self.enc.max_refs) + 2))?;
-        let src = picture_from_frame(frame)?;
 
-        let intra = self.next_is_keyframe() || self.refs.is_empty();
-        if intra {
-            self.refs.clear();
+        if self.enc.b_frames == 0 {
+            // I/P path: code the frame directly (no lookahead).
+            let intra = self.next_is_keyframe() || self.refs.is_empty();
+            if intra {
+                self.refs.clear();
+                self.gop_poc = 0;
+            }
+            let num_refs = if intra {
+                0
+            } else {
+                self.refs.len().min(usize::from(self.enc.max_refs))
+            };
+            let ftype = if intra {
+                crate::ftype::I
+            } else {
+                crate::ftype::P
+            };
+            let poc = if intra { 0 } else { self.gop_poc + 1 };
+            self.gop_poc = poc;
+            let (mut pkt, recon) =
+                self.encode_frame_rc(frame, ftype, poc, num_refs, frame.frame.pts)?;
+            self.refs.insert(0, recon);
+            self.refs.truncate(usize::from(self.enc.max_refs));
+            self.frames += 1;
+            pkt.flags = PacketFlags::END_OF_FRAME
+                | if intra {
+                    PacketFlags::KEYFRAME
+                } else {
+                    PacketFlags::empty()
+                };
+            return Ok(alloc::vec![pkt]);
         }
-        let num_refs = if intra {
-            0
-        } else {
-            self.refs.len().min(usize::from(self.enc.max_refs))
-        };
 
-        // Rate control: when a per-frame target is configured, the frame
-        // is coded at the smallest qp (bounded re-encodes, at most three)
-        // whose packet fits the budget bucket; otherwise the configured
-        // constant qp applies.
+        // B-frame path: buffer the frame; a group is coded when the
+        // lookahead holds an anchor (already coded), its `b_frames`
+        // bi-predictive frames, and the future reference that closes the
+        // group. Decode order within a group: anchor, future, B's.
+        self.pending.push_back(frame.clone());
+        let mut packets = alloc::vec![];
+        loop {
+            if self.b_awaiting_future {
+                // Need the future reference plus the B's themselves.
+                if self.pending.len() < self.enc.b_frames + 1 {
+                    break;
+                }
+                // A keyframe due now must not land between the anchor and
+                // its B's (the decoder's intra reference reset would
+                // strand them): degenerate group - code the buffered
+                // frames in display order as P's and let the keyframe
+                // open the next group.
+                if self.next_is_keyframe() {
+                    let buffered: Vec<_> = self.pending.drain(..).collect();
+                    for f in buffered {
+                        let pts = f.frame.pts;
+                        let num_refs = self.refs.len().min(usize::from(self.enc.max_refs));
+                        let key = self.next_is_keyframe();
+                        let poc = if key { 0 } else { self.gop_poc + 1 };
+                        self.gop_poc = poc;
+                        let ftype = if key {
+                            crate::ftype::I
+                        } else {
+                            crate::ftype::P
+                        };
+                        let (mut pkt, recon) =
+                            self.encode_frame_rc(&f, ftype, poc, num_refs, pts)?;
+                        self.refs.insert(0, recon);
+                        self.refs.truncate(usize::from(self.enc.max_refs));
+                        self.frames += 1;
+                        pkt.flags = PacketFlags::END_OF_FRAME
+                            | if key {
+                                PacketFlags::KEYFRAME
+                            } else {
+                                PacketFlags::empty()
+                            };
+                        packets.push(pkt);
+                    }
+                    self.b_awaiting_future = false;
+                    continue;
+                }
+                // Future reference (coded as P; a keyframe due here took
+                // the degenerate path above). Its display position skips
+                // the B slots: anchor poc A, B's A+1..=A+b, future A+b+1.
+                let anchor_poc = self.gop_poc;
+                let future = self.pending.pop_back().unwrap();
+                let pts = future.frame.pts;
+                self.gop_poc += self.enc.b_frames as u16 + 1;
+                let (pkt, recon) = self.encode_frame_rc(
+                    &future,
+                    crate::ftype::P,
+                    self.gop_poc,
+                    self.refs.len().min(usize::from(self.enc.max_refs)),
+                    pts,
+                )?;
+                self.refs.insert(0, recon);
+                packets.push(pkt);
+                // The B's, in display order, against the fixed pair
+                // refs[1] = past anchor, refs[0] = future.
+                let bs: Vec<_> = self.pending.drain(..self.enc.b_frames).collect();
+                for (bi, b) in bs.into_iter().enumerate() {
+                    let pts = b.frame.pts;
+                    let poc = anchor_poc + bi as u16 + 1;
+                    let (pkt, _) = self.encode_frame_rc(&b, crate::ftype::B, poc, 2, pts)?;
+                    packets.push(pkt);
+                }
+                self.b_awaiting_future = false;
+                continue;
+            }
+            // No anchor waiting: code the front frame as the group's
+            // reference (I on a keyframe boundary or cold start, else P).
+            if self.pending.is_empty() {
+                break;
+            }
+            let anchor = self.pending.pop_front().unwrap();
+            let intra = self.next_is_keyframe() || self.refs.is_empty();
+            if intra {
+                self.refs.clear();
+                self.gop_poc = 0;
+            }
+            let num_refs = if intra {
+                0
+            } else {
+                self.refs.len().min(usize::from(self.enc.max_refs))
+            };
+            let ftype = if intra {
+                crate::ftype::I
+            } else {
+                crate::ftype::P
+            };
+            let poc = if intra { 0 } else { self.gop_poc + 1 };
+            self.gop_poc = poc;
+            let (mut pkt, recon) =
+                self.encode_frame_rc(&anchor, ftype, poc, num_refs, anchor.frame.pts)?;
+            self.refs.insert(0, recon);
+            self.refs.truncate(usize::from(self.enc.max_refs));
+            self.frames += 1;
+            pkt.flags = PacketFlags::END_OF_FRAME
+                | if intra {
+                    PacketFlags::KEYFRAME
+                } else {
+                    PacketFlags::empty()
+                };
+            packets.push(pkt);
+            // The next `b_frames` input frames are this anchor's B's; the
+            // group closes when their future reference arrives.
+            self.b_awaiting_future = true;
+        }
+        Ok(packets)
+    }
+
+    fn flush(&mut self) -> CodecResult<Vec<Packet>> {
+        // Lookahead first: every buffered frame is coded as a predictive
+        // frame in display order (a trailing group's B's have no future
+        // reference to lean on, so they upgrade). Then the reference
+        // store clears as before.
+        let mut packets = alloc::vec![];
+        while let Some(f) = self.pending.pop_front() {
+            let intra = self.next_is_keyframe() || self.refs.is_empty();
+            if intra {
+                self.refs.clear();
+                self.gop_poc = 0;
+            }
+            let num_refs = if intra {
+                0
+            } else {
+                self.refs.len().min(usize::from(self.enc.max_refs))
+            };
+            let ftype = if intra {
+                crate::ftype::I
+            } else {
+                crate::ftype::P
+            };
+            let poc = if intra { 0 } else { self.gop_poc + 1 };
+            self.gop_poc = poc;
+            let (mut pkt, recon) = self.encode_frame_rc(&f, ftype, poc, num_refs, f.frame.pts)?;
+            self.refs.insert(0, recon);
+            self.refs.truncate(usize::from(self.enc.max_refs));
+            self.frames += 1;
+            pkt.flags = PacketFlags::END_OF_FRAME
+                | if intra {
+                    PacketFlags::KEYFRAME
+                } else {
+                    PacketFlags::empty()
+                };
+            packets.push(pkt);
+        }
+        self.b_awaiting_future = false;
+        self.refs.clear();
+        Ok(packets)
+    }
+}
+impl VaultEncoder {
+    /// Rate control: when a per-frame target is configured, the frame
+    /// is coded at the smallest qp (bounded re-encodes, at most three)
+    /// whose packet fits the budget bucket; otherwise the configured
+    /// constant qp applies. Returns the packet (payload + CRC, PTS and
+    /// flags left for the caller) and the reconstruction for the
+    /// reference store.
+    fn encode_frame_rc(
+        &mut self,
+        frame: &VideoFrame,
+        ftype: u8,
+        poc: u16,
+        num_refs: usize,
+        pts: Timestamp,
+    ) -> CodecResult<(Packet, Picture)> {
+        let src = picture_from_frame(frame)?;
         let rc = self.enc.target_bits_per_frame.is_some();
         let target = self.enc.target_bits_per_frame.unwrap_or(0) as u64;
         let mut qp = self.rc_qp.clamp(1, i32::from(MAX_QP)) as u8;
@@ -246,7 +444,7 @@ impl Encoder for VaultEncoder {
             target
         };
 
-        let mut out = self.encode_at_qp(&src, qp, intra, num_refs)?;
+        let mut out = self.encode_at_qp(&src, qp, ftype, poc, num_refs)?;
         let mut bits = out.bits;
         let mut attempts = 1usize;
         if rc {
@@ -257,7 +455,7 @@ impl Encoder for VaultEncoder {
                     1
                 };
                 qp = (qp + jump).min(MAX_QP);
-                out = self.encode_at_qp(&src, qp, intra, num_refs)?;
+                out = self.encode_at_qp(&src, qp, ftype, poc, num_refs)?;
                 bits = out.bits;
                 attempts += 1;
             }
@@ -270,7 +468,7 @@ impl Encoder for VaultEncoder {
             if bits < frame_target * 7 / 8 && self.rc_debt <= 0.0 && qp > 1 && attempts < 3 {
                 let jump = if bits < frame_target / 4 { 2 } else { 1 };
                 let finer_qp = qp.saturating_sub(jump).max(1);
-                let finer = self.encode_at_qp(&src, finer_qp, intra, num_refs)?;
+                let finer = self.encode_at_qp(&src, finer_qp, ftype, poc, num_refs)?;
                 let credit = (-self.rc_debt) as u64;
                 if finer.bits <= frame_target + credit.min(frame_target.saturating_mul(2)) {
                     out = finer;
@@ -297,44 +495,30 @@ impl Encoder for VaultEncoder {
         data.extend_from_slice(&crc.to_le_bytes());
         debug_assert!(data.len() <= self.enc.max_packet_bits().div_ceil(8) + CRC_TRAILER_BYTES);
 
-        self.refs.insert(0, recon);
-        self.refs.truncate(usize::from(self.enc.max_refs));
-        self.frames += 1;
-        self.gop_poc = if intra {
-            0
-        } else {
-            self.gop_poc.wrapping_add(1)
-        };
-
-        let flags = PacketFlags::END_OF_FRAME
-            | if intra {
-                PacketFlags::KEYFRAME
-            } else {
-                PacketFlags::empty()
-            };
-        Ok(alloc::vec![Packet {
+        let pkt = Packet {
             data,
-            pts: frame.frame.pts,
-            dts: frame.frame.pts,
-            flags,
+            pts,
+            dts: pts,
+            flags: PacketFlags::END_OF_FRAME,
             track_id: 0,
             duration: None,
-        }])
+        };
+        Ok((pkt, recon))
     }
-}
 
-impl VaultEncoder {
     /// One full encode of `src` at a fixed quantiser: the header, the
     /// superblock RDO stream, and the (unfiltered) reconstruction. The
-    /// rate-control loop in [`VaultEncoder::encode`] calls this up to
-    /// three times per frame.
+    /// rate-control loop in [`VaultEncoder::encode_frame_rc`] calls this
+    /// up to three times per frame.
     fn encode_at_qp(
         &mut self,
         src: &Picture,
         qp: u8,
-        intra: bool,
+        ftype: u8,
+        poc: u16,
         num_refs: usize,
     ) -> CodecResult<EncodedFrame> {
+        let intra = ftype == crate::ftype::I;
         let step = quant_step(qp);
         let mut fe = FrameEnc {
             src,
@@ -352,7 +536,12 @@ impl VaultEncoder {
             search_range: i32::from(self.enc.search_range),
             ctx: LeafCtx {
                 intra_frame: intra,
-                ref_bits: ref_index_bits(num_refs),
+                b_frame: ftype == crate::ftype::B,
+                ref_bits: if ftype == crate::ftype::B {
+                    0
+                } else {
+                    ref_index_bits(num_refs)
+                },
                 nplanes: src.nplanes(),
             },
             scratch: Vec::new(),
@@ -360,18 +549,13 @@ impl VaultEncoder {
 
         let mut w = PacketBits::new();
         let werr = |_: WriteError| CodecError::Internal;
-        let ftype = if intra {
-            crate::ftype::I
-        } else {
-            crate::ftype::P
-        };
         w.write_bits(16, u64::from(VERSION)).map_err(werr)?;
         w.write_bits(2, u64::from(ftype)).map_err(werr)?;
         w.write_bits(QP_BITS, u64::from(qp)).map_err(werr)?;
         w.write_bits(5, num_refs as u64).map_err(werr)?;
         w.write_bits(1, u64::from(self.enc.loop_filter))
             .map_err(werr)?;
-        w.write_bits(16, u64::from(self.gop_poc)).map_err(werr)?;
+        w.write_bits(16, u64::from(poc)).map_err(werr)?;
 
         for sy in (0..src.height).step_by(SUPERBLOCK) {
             for sx in (0..src.width).step_by(SUPERBLOCK) {
@@ -565,6 +749,7 @@ impl FrameEnc<'_> {
             ref_idx: 0,
             mv: (0, 0),
             mvd: (0, 0),
+            mv_b: (0, 0),
             mode: IntraMode::Dc,
             coefs: Vec::new(),
         }
@@ -601,6 +786,7 @@ impl FrameEnc<'_> {
             self.refs,
             LeafKind::Intra,
             0,
+            (0, 0),
             (0, 0),
             mode,
             x,
@@ -649,6 +835,7 @@ impl FrameEnc<'_> {
                 LeafKind::Inter,
                 r,
                 mv,
+                (0, 0),
                 IntraMode::Dc,
                 x,
                 y,
@@ -669,6 +856,7 @@ impl FrameEnc<'_> {
             LeafKind::Skip,
             0,
             pmv,
+            (0, 0),
             IntraMode::Dc,
             x,
             y,

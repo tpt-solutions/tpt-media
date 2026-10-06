@@ -132,6 +132,9 @@ pub const MIN_QP: u8 = 1;
 /// Largest legal quantiser index (6 bits on the wire).
 pub const MAX_QP: u8 = 51;
 
+/// Largest supported bi-predictive depth (`b_frames`).
+pub const MAX_B_FRAMES: usize = 4;
+
 /// Frame types on the v2 wire: the header's 2-bit `ftype` field. `Rsv`
 /// (3) is rejected as malformed so the encoding has room to grow.
 pub mod ftype {
@@ -258,6 +261,15 @@ pub struct VaultConfig {
     /// fine-`qp` and real-content encodes, pending a `λ` tuned on
     /// content that actually exists.
     pub rdoq: bool,
+    /// Bi-predictive frames between consecutive reference frames.
+    /// `0` (the default) codes an I/P-only stream; `2` codes
+    /// I P B B P B … with each B predicted from the reference frames
+    /// on both sides of its display position. Encoder-only, and
+    /// B-frames are never stored as references. Display order is
+    /// recovered by the decoder from the per-frame `poc` field, so
+    /// consumers see frames in display order with a `b_frames`-period
+    /// presentation delay.
+    pub b_frames: usize,
     /// Frame-level rate control: when set, each frame is coded at the
     /// quantiser that keeps the stream near this many **bits per
     /// frame** — a bounded search around the previous frame's choice
@@ -281,6 +293,7 @@ impl Default for VaultConfig {
             max_block_size: SUPERBLOCK,
             loop_filter: true,
             target_bits_per_frame: None,
+            b_frames: 0,
             rdoq: false,
         }
     }
@@ -374,6 +387,9 @@ impl VaultConfig {
             return Err(CodecError::InvalidConfig(
                 "vault max_block_size must be 8, 16, 32 or 64",
             ));
+        }
+        if self.b_frames > MAX_B_FRAMES {
+            return Err(CodecError::InvalidConfig("vault b_frames must be 0..=4"));
         }
         Ok(())
     }

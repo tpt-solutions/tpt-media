@@ -51,6 +51,11 @@ pub struct VaultDecoder {
     scans: Scans,
     xf: Xform,
     stats: FrameStats,
+    /// Decoded frames awaiting their display position (B-frame
+    /// reordering). Bounded by the stream's `b_frames` depth.
+    reorder: Vec<(u16, VideoFrame)>,
+    /// The display position expected next; the reordering key.
+    next_poc: u16,
 }
 
 impl VaultDecoder {
@@ -76,6 +81,8 @@ impl VaultDecoder {
             refs: Vec::new(),
             scans: Scans::new(),
             xf: Xform::new(),
+            reorder: Vec::new(),
+            next_poc: 0,
             stats: FrameStats::default(),
         })
     }
@@ -120,6 +127,8 @@ pub struct FrameStats {
     pub skip: u32,
     /// Inter (non-skip) leaves.
     pub inter: u32,
+    /// Bi-predictive leaves (B frames only).
+    pub bi: u32,
     /// Intra leaves.
     pub intra: u32,
     /// Inter or skip leaves whose vector has a half-pel component.
@@ -190,6 +199,7 @@ impl FrameDec<'_> {
                 st.inter += 1;
                 st.ref_hist[usize::from(leaf.ref_idx) & 15] += 1;
             }
+            LeafKind::Bi => st.bi += 1,
             LeafKind::Intra => st.intra += 1,
         }
         if leaf.kind != LeafKind::Intra && ((leaf.mv.0 | leaf.mv.1) & 1) != 0 {
@@ -204,6 +214,7 @@ impl FrameDec<'_> {
             leaf.kind,
             leaf.ref_idx,
             leaf.mv,
+            leaf.mv_b,
             leaf.mode,
             x,
             y,
@@ -271,10 +282,8 @@ impl Decoder for VaultDecoder {
         }
         let num_refs = r.read(5).map_err(bad)? as usize;
         let lf = r.read(1).map_err(bad)? == 1;
-        // Display position within the GOP. With b-frames not yet coded
-        // by the encoder, decode order == display order and the value is
-        // sequential; the reorder buffer lands with the B-coding stage.
-        let _poc = r.read(16).map_err(bad)? as u16;
+        // Display position within the GOP: the reorder key.
+        let poc = r.read(16).map_err(bad)? as u16;
         let intra = ftype == crate::ftype::I;
         if intra != (num_refs == 0) {
             return Err(CodecError::MalformedPacket);
@@ -304,6 +313,7 @@ impl Decoder for VaultDecoder {
             step: quant_step(qp),
             ctx: LeafCtx {
                 intra_frame: intra,
+                b_frame: ftype == crate::ftype::B,
                 ref_bits: ref_index_bits(num_refs),
                 nplanes: if self.enc.format == tpt_media_core::PixelFormat::Yuv420 {
                     3
@@ -330,15 +340,36 @@ impl Decoder for VaultDecoder {
         let frame = picture_to_frame(&recon, packet.pts);
         if intra {
             self.refs.clear();
+            self.next_poc = 0;
         }
-        self.refs.insert(0, recon);
-        self.refs.truncate(usize::from(self.enc.max_refs));
-        Ok(alloc::vec![frame])
+        // B frames are predictive from both neighbours and never become
+        // references themselves.
+        if ftype != crate::ftype::B {
+            self.refs.insert(0, recon);
+            self.refs.truncate(usize::from(self.enc.max_refs));
+        }
+
+        // Display-order emission: a frame whose poc is next emits
+        // immediately (draining whatever it unblocks); anything else
+        // waits in the reorder buffer.
+        self.reorder.push((poc, frame));
+        let mut out = Vec::new();
+        while let Some(pos) = self.reorder.iter().position(|(p, _)| *p == self.next_poc) {
+            let (_, f) = self.reorder.remove(pos);
+            out.push(f);
+            self.next_poc = self.next_poc.wrapping_add(1);
+        }
+        Ok(out)
     }
 
     fn flush(&mut self) -> CodecResult<Vec<VideoFrame>> {
+        // End of stream: release every held frame in display order.
+        self.reorder.sort_by_key(|(p, _)| *p);
+        let out = self.reorder.iter().map(|(_, f)| f.clone()).collect();
+        self.reorder.clear();
+        self.next_poc = 0;
         self.refs.clear();
-        Ok(Vec::new())
+        Ok(out)
     }
 }
 

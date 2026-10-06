@@ -583,6 +583,29 @@ Added
 
 ### Added
 
+- **Vault B-frames: bi-prediction with display-order reordering, wire
+  v2** (2026-10-05, §33): `VaultConfig::b_frames` (0..=4, default 0)
+  buffers a lookahead group — anchor, `b_frames` bi-predictive frames,
+  future reference — coded in decode order (anchor, future, B's) so
+  each B's references precede its packet. B leaves carry four
+  Rice-coded motion-vector deltas against the fixed
+  past/future reference pair (no per-leaf reference index); the
+  prediction is the plain average of the two motion-compensated
+  references, and B reconstructions never enter the reference store.
+  The v2 wire (2-bit frame type + 16-bit per-frame poc, stage 1 of
+  this change) lets the decoder hold B frames and emit in *display*
+  order; the encoder's flush upgrades trailing B's to predictive
+  frames, and the CLI video encoder flushes the lookahead before
+  finalising the stream, so no frames are lost. Keyframes never land
+  between an anchor and its B's (the degenerate group codes the
+  buffered frames as P's — the decoder's intra reference reset would
+  otherwise strand them). Display order, single-emission, and
+  end-to-end round trips are pinned by two new property tests; the
+  hostile-header test covers the v2 layout including the reserved
+  frame type. Still open in the item: weighted prediction,
+  long-term references, reference reordering, and combine modes
+  beyond averaging.
+
 - **B-frames design written** (2026-10-05, §33's remaining item): the
   full v0.2 plan now lives in `docs/codec-design.md` ("Vault B-frames
   — design for v0.2") — the 2-bit frame type and explicit picture

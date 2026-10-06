@@ -1723,18 +1723,19 @@ Not done, and why (left honestly open):
       and because `frames` is the divisor in the bitrate/bpp maths, counting
       packets understated Mote's rate by 25% (496 → 621 kbps on
       talking-head). Pinned by `corpus_counts_decoded_pictures_not_packets`.
-* [ ] B-frames, bi-prediction, weighted prediction, long-term references and
-      reference reordering — design written 2026-10-05
-      (`docs/codec-design.md`, "Vault B-frames — design for v0.2");
-      not started. The headline costs, so nobody starts it casually:
-      a 2-bit frame type replacing the intra flag, display-order
-      signalling (the decoder needs a reordering buffer, and
-      `tpt-web`'s push player and the packet-bound proof both re-derive
-      from "one frame is one packet, in decode order"), two-reference
-      bi-prediction syntax, and B-frames-excluded-from-references
-      bookkeeping in both the encoder's RDO and the decoder's reference
-      store. Rate control (landed) composes cleanly — the bucket just
-      budgets B-frames at their measured cost
+* [x] B-frames with bi-prediction and display-order reordering
+      (2026-10-05, v0.2 scope from the design below): the v2 frame type
+      carries B; `b_frames` (0..=4, default 0) buffers a lookahead
+      group of anchor + B's + future reference, coded in the order
+      anchor, future, B's (decode order) with B leaves carrying four
+      Rice-coded motion-vector deltas against the fixed
+      past/future pair; the prediction is the plain average of the two
+      motion-compensated references. B recons never enter the
+      reference store. The decoder reorders by the per-frame `poc`
+      and emits in display order; flush releases held frames sorted.
+      Still open: weighted prediction, long-term references,
+      reference reordering, per-B combine modes beyond averaging
+      (the design's v0.3 list)
 * [x] frame-level rate control (2026-10-05): `VaultConfig::
       target_bits_per_frame` — a bounded search (at most three encodes
       per frame) around the previous frame's choice, driven by a

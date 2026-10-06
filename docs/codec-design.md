@@ -472,21 +472,23 @@ Known sharp edges, stated plainly:
   (`tpt encode --codec vault --bitrate`), measured at a 60 kbit/s
   target decoding to 61.7 kbit/s measured.
 
-### Vault B-frames — design for v0.2 (written 2026-10-05, not started)
+### Vault B-frames — implemented v0.2 (design written 2026-10-05, coded 2026-10-05)
 
 The design below is what a B-frame implementation must change, worked
 through so the next session starts from a plan. It is deliberately
 conservative: bi-prediction by plain averaging, no weighted prediction,
 no long-term references — those stay in the bullet above for v0.3+.
 
-**Wire format (a v2 bump).** The 1-bit `intra` flag becomes a 2-bit
-frame type (`I` / `P` / `B`); every decoder rejects version 1 vs 2 by
-the existing fail-fast rule. A B-frame header gains the two reference
-indices and two motion vectors per leaf, plus one combine selector
-(`average`, the only v0.2 mode). Display order must be recoverable:
-the cleanest v0.2 choice is an explicit 16-bit *picture order count
-delta* on B and P headers, because "derive it from PTS" would couple
-the codec to container behaviour that `.tpt` does not promise.
+**Wire format (the v2 bump, shipped).** The v1 1-bit `intra` flag
+became a 2-bit frame type (`I` / `P` / `B`, `3` reserved-rejected) and
+every frame gained a 16-bit `poc` — see "Wire format (version 2)"
+above. A B-frame leaf carries four Rice-coded motion-vector deltas
+(past pair, then future pair) against a (0, 0) predictor; the
+references are the fixed pair (past anchor, future reference), so no
+per-leaf reference index is spent. Combine mode is plain averaging
+(weighted prediction is v0.3+). Display order is recovered from the
+explicit `poc` — "derive it from PTS" would couple the codec to
+container behaviour that `.tpt` does not promise.
 
 **Encoder.** A lookahead window of `b_frames` frames (config, default
 2, encoder-only): frames are coded I/P/B/P/B... with the next P (or I)

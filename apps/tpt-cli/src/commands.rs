@@ -924,6 +924,16 @@ fn run_video_encode_job(job: &VideoEncodeJob) -> Result<(Vec<u8>, usize), String
             written += 1;
         }
     }
+    // B-frame encoders hold a lookahead: the flush releases the trailing
+    // frames the last group's B's were waiting on. Codecs without a
+    // lookahead return nothing here.
+    let tail = encoder.flush().map_err(|e| format!("flush failed: {e}"))?;
+    for pkt in tail {
+        muxer
+            .write_packet_raw(&pkt)
+            .map_err(|e| format!("mux failed: {e:?}"))?;
+        written += 1;
+    }
     Ok((muxer.finish(), written))
 }
 

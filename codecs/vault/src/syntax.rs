@@ -41,6 +41,10 @@ pub(crate) enum LeafKind {
     Skip,
     Inter,
     Intra,
+    /// Bi-predictive (B frames only): the average of the motion
+    /// compensated past and future references. No intra mode — a B leaf
+    /// that cannot predict well codes an inter-like residual instead.
+    Bi,
 }
 
 /// One decoded (or about-to-be-encoded) leaf block.
@@ -54,6 +58,8 @@ pub(crate) struct Leaf {
     pub mv: (i32, i32),
     /// Vector minus predictor, as coded (inter only).
     pub mvd: (i32, i32),
+    /// Future-reference vector (Bi leaves; absolute half-pel).
+    pub mv_b: (i32, i32),
     pub mode: IntraMode,
     /// `Y` (`size^2`), then `U`, `V` (`(size/2)^2` each, 4:2:0): tiles in
     /// raster order, each tile's levels in raster order.
@@ -71,6 +77,9 @@ impl Leaf {
 #[derive(Copy, Clone)]
 pub(crate) struct LeafCtx {
     pub intra_frame: bool,
+    /// B frame: leaves carry two motion vectors against the fixed
+    /// reference pair `refs[1]` (past) / `refs[0]` (future).
+    pub b_frame: bool,
     /// Bits of the reference index field.
     pub ref_bits: u32,
     pub nplanes: usize,
@@ -110,6 +119,21 @@ pub(crate) fn write_leaf<W: WriteLike>(
     ctx: &LeafCtx,
     scans: &Scans,
 ) -> Result<(), WriteError> {
+    if ctx.b_frame {
+        // B leaves: skip is the zero-vector bi-average; otherwise four
+        // Rice-coded motion-vector deltas against a (0, 0) predictor
+        // (past, then future). No intra modes, no reference indices —
+        // the reference pair is fixed for the whole frame.
+        let skip = leaf.kind == LeafKind::Skip;
+        w.write_bits(1, u64::from(skip))?;
+        if !skip {
+            encode_riced(w, MVD_K, i64::from(leaf.mv.0))?;
+            encode_riced(w, MVD_K, i64::from(leaf.mv.1))?;
+            encode_riced(w, MVD_K, i64::from(leaf.mv_b.0))?;
+            encode_riced(w, MVD_K, i64::from(leaf.mv_b.1))?;
+        }
+        return Ok(());
+    }
     if !ctx.intra_frame {
         let skip = leaf.kind == LeafKind::Skip;
         w.write_bits(1, u64::from(skip))?;
@@ -126,6 +150,7 @@ pub(crate) fn write_leaf<W: WriteLike>(
             encode_riced(w, MVD_K, i64::from(leaf.mvd.0))?;
             encode_riced(w, MVD_K, i64::from(leaf.mvd.1))?;
         }
+        LeafKind::Bi => unreachable!("bi leaves only exist in b frames"),
         LeafKind::Intra => w.write_bits(2, leaf.mode as u64)?,
         LeafKind::Skip => {}
     }
@@ -152,6 +177,32 @@ pub(crate) fn read_leaf(
     scans: &Scans,
 ) -> CodecResult<Leaf> {
     let bad = |_| CodecError::MalformedPacket;
+    if ctx.b_frame {
+        // B leaves: skip bit, then four Rice-coded motion-vector deltas
+        // against a (0, 0) predictor (past vector, then future vector).
+        let skip = r.read(1).map_err(bad)? == 1;
+        let mut leaf = Leaf {
+            size,
+            kind: LeafKind::Skip,
+            ref_idx: 0,
+            mv: (0, 0),
+            mvd: (0, 0),
+            mv_b: (0, 0),
+            mode: IntraMode::Dc,
+            coefs: Vec::new(),
+        };
+        if skip {
+            return Ok(leaf);
+        }
+        leaf.kind = LeafKind::Bi;
+        let dx0 = decode_riced(r, MVD_K).map_err(bad)?;
+        let dy0 = decode_riced(r, MVD_K).map_err(bad)?;
+        let dx1 = decode_riced(r, MVD_K).map_err(bad)?;
+        let dy1 = decode_riced(r, MVD_K).map_err(bad)?;
+        leaf.mv = (dx0 as i32, dy0 as i32);
+        leaf.mv_b = (dx1 as i32, dy1 as i32);
+        return Ok(leaf);
+    }
     let (skip, intra) = if ctx.intra_frame {
         (false, true)
     } else if r.read(1).map_err(bad)? == 1 {
@@ -165,6 +216,7 @@ pub(crate) fn read_leaf(
         ref_idx: 0,
         mv: pred_mv,
         mvd: (0, 0),
+        mv_b: (0, 0),
         mode: IntraMode::Dc,
         coefs: Vec::new(),
     };
@@ -263,6 +315,7 @@ pub(crate) fn build_pred(
     kind: LeafKind,
     ref_idx: u8,
     mv: (i32, i32),
+    mv_b: (i32, i32),
     mode: IntraMode,
     x: usize,
     y: usize,
@@ -291,6 +344,30 @@ pub(crate) fn build_pred(
                     my,
                     &mut out.p[pl],
                 );
+            }
+            LeafKind::Bi => {
+                // B-frame leaves reference exactly two pictures, stored
+                // most-recent-first: `refs[0]` is the *future* reference,
+                // `refs[1]` the past one. `mv` is the past vector,
+                // `mv_b` the future one; the prediction is their plain
+                // average (the only v0.2 combine mode).
+                let (px0, py0) = if pl == 0 {
+                    mv
+                } else {
+                    (chroma_mv(mv.0), chroma_mv(mv.1))
+                };
+                let (px1, py1) = if pl == 0 {
+                    mv_b
+                } else {
+                    (chroma_mv(mv_b.0), chroma_mv(mv_b.1))
+                };
+                let mut a = alloc::vec![0u8; m * m];
+                let mut b = alloc::vec![0u8; m * m];
+                mc_block(&refs[1].planes[pl], px, py, m, m, px0, py0, &mut a);
+                mc_block(&refs[0].planes[pl], px, py, m, m, px1, py1, &mut b);
+                for (slot, pair) in out.p[pl].iter_mut().zip(a.iter().zip(&b)) {
+                    *slot = ((u16::from(*pair.0) + u16::from(*pair.1)) / 2) as u8;
+                }
             }
         }
     }
