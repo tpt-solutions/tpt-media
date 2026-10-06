@@ -54,10 +54,12 @@
 //! is refused with [`CodecError::Unsupported`]. Width and height are
 //! non-zero multiples of [`MIN_BLOCK`] (8).
 //!
-//! ## Wire format (version 2)
+//! ## Wire format (version 3)
 //!
 //! ```text
 //! 16 bits version | 2 ftype | 6 qp | 5 num_refs | 1 loop_filter | 16 poc
+//!   [+ 2 bits b-weight for B frames: 0 = average, 1 = 1/4 past,
+//!    2 = 3/4 past, 3 reserved]
 //! superblocks in raster order, each a quadtree of `split` flags and leaves
 //! 32 bits CRC-32 (little endian) over everything before it
 //! ```
@@ -113,7 +115,15 @@ pub use transform::ROUND_OFFSET;
 pub const CODEC_ID: [u8; 4] = *b"VAUL";
 
 /// Bitstream version.
-pub const VERSION: u16 = 2;
+///
+/// v3 (2026-10-07) adds the per-frame bi-prediction weight to B-frame
+/// headers — 2 bits after `poc`, B frames only (`0` = plain average,
+/// `1` = 1/4 past + 3/4 future, `2` = 3/4 past + 1/4 future, `3`
+/// reserved-rejected). v2's B-leaf payload was also corrected in the
+/// same unreleased window (B leaves carry their coefficient tiles — see
+/// todo.md Known Issues); a v2 stream decodes nothing here, v1 and v2
+/// are rejected fail-fast per todo.md section 35.
+pub const VERSION: u16 = 3;
 
 /// Size in bytes of the per-packet CRC-32 trailer.
 pub const CRC_TRAILER_BYTES: usize = 4;
@@ -355,7 +365,11 @@ impl VaultConfig {
     ///
     /// Provable, because every term is bounded:
     ///
-    /// - header: 16 + 1 + [`QP_BITS`] + 5 + 1 bits;
+    /// - header: 46 bits (16 version + 2 ftype + [`QP_BITS`] + 5
+    ///   num_refs + 1 loop_filter + 16 poc) plus 2 for a B frame's
+    ///   weight field — charged unconditionally, so I/P frames are
+    ///   over-charged by 2 bits and the bound stays a proof for every
+    ///   frame type;
     /// - per 8x8 unit, charged as if every block were 8x8 (larger blocks
     ///   have strictly fewer headers per unit of area): 2 bits of split
     ///   flags (a quadtree has fewer than 4/3 nodes per leaf unit), 2 bits
@@ -371,7 +385,7 @@ impl VaultConfig {
     /// The encoder checks the finished packet against this and returns
     /// [`CodecError::Internal`] rather than emit an over-bound packet.
     pub fn max_packet_bits(&self) -> usize {
-        let header = 16 + 1 + u64::from(QP_BITS) + 5 + 1;
+        let header = 16 + 2 + u64::from(QP_BITS) + 5 + 1 + 16 + 2;
         let mvd = u64::from(bits::rice_len_signed(2 * MV_LIMIT, syntax::MVD_K));
         let per_unit_syntax = 2 + 2 + 4 + 2 * mvd + 2;
         let token = 2 * u64::from(transform::MAX_RICE_BITS);

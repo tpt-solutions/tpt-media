@@ -162,8 +162,10 @@ absolute patent-free claim is made — patent status is jurisdictional
 | CRC-32 packet trailer | IEEE 802.3 reflected polynomial (public standard), matching the Aura/Cinder/Reed family convention | GREEN | - | 2026-09-28 PT | reviewed |
 
 Deliberately *not* used, so the record above stays complete: sub-pel
-motion estimation, multiple reference frames, bi-prediction, weighted
-prediction, rate-distortion optimisation, adaptive deblocking strength,
+motion estimation, multiple reference frames, per-leaf weight or
+combine-mode signalling, long-term references and reference reordering,
+rate-distortion optimisation (the two knob-guarded exceptions are
+recorded in their rows), adaptive deblocking strength,
 and per-macroblock quantiser adaptation. All appear in the H.26x / MPEG
 literature and are beyond v0.1 scope; revisiting any of them extends
 this table before landing.
@@ -235,6 +237,7 @@ absence of CABAC, long interpolation filters and angular intra modes.
 | 2D DCT-II / DCT-III at 4..32 (separable row+column), via `tpt-dsp-core` | Ahmed, Natarajan & Rao (1984), "Discrete cosine transform" | GREEN | - | 2026-10-05 PT | reviewed |
 | Fast transform path (`tpt-dsp-core::FastDct2dPlan`, std builds): DCT-II/III via a length-`2n` inverse FFT + half-twiddle | the standard FFT-based DCT derivation; the zero-padding formulation is textbook | GREEN | - | 2026-10-05 PT | reviewed |
 | B-frames: bi-predictive leaves (average of two motion-compensated references), lookahead groups, POC reordering | the classical B-frame model of H.261/H.263/H.26x (public recommendations); averaging combine, POC-based reordering | GREEN | - | 2026-10-05 PT | reviewed |
+| Per-frame bi-prediction weight (past reference's share in quarters, signalled in the v3 B-frame header) | H.264 weighted-prediction pictures, public recommendation, restricted to the classical quarter weights and a single luma+chroma weight pair | GREEN | - | 2026-10-07 PT | reviewed |
 | Orthonormal scaling of DCT coefficients before quantisation | Rao & Yip (1990), *Discrete Cosine Transform: Algorithms, Advantages, Applications* (Parseval / orthonormal basis) | GREEN | - | not reviewed | under-review |
 | Uniform dead-zone scalar quantiser, rounding offset below 0.5 | Widrow & Kollár, "Digital Coding of Waveforms" (1984), ch. 4; dead-zone / rounding-offset practice in transform codecs | GREEN | - | not reviewed | under-review |
 | Geometric `qp` step table | the H.26x convention of a `2^(qp/n)` step, tabulated (shared with Thrum) | GREEN | - | not reviewed | under-review |

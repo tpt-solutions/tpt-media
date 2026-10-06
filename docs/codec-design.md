@@ -412,24 +412,27 @@ holds, and is tested, is narrower: each decision is the cheapest among the
 alternatives that were priced, and freeing the partition never does worse
 on `J` than forcing 8×8 on the test frames.
 
-**Wire format (version 2).** v2 (2026-10-05) replaces v1's 1-bit
-`intra` flag with a 2-bit frame type and adds a 16-bit per-frame
-`poc` — the groundwork for B-frames ("Vault B-frames — design for
-v0.2" below); v1 streams are rejected fail-fast. The v2 layout:
+**Wire format (version 3).** v3 (2026-10-07) adds a 2-bit per-frame
+bi-prediction weight to B-frame headers (v0.3 stage 1 below). v2
+(2026-10-05, superseded within its unreleased window when the B-leaf
+payload was corrected — todo.md Known Issues) had replaced v1's 1-bit
+`intra` flag with a 2-bit frame type and added a 16-bit per-frame
+`poc`; v1 and v2 streams are rejected fail-fast. The v3 layout:
 
 | field | bits | meaning |
 | ----- | ---- | ------- |
-| `version` | 16 | bitstream version, `2`; rejected up front if not |
-| `ftype` | 2 | `0` = intra, `1` = predictive, `2` = bi-predictive (reserved for v0.2; `3` rejected as malformed) |
+| `version` | 16 | bitstream version, `3`; rejected up front if not |
+| `ftype` | 2 | `0` = intra, `1` = predictive, `2` = bi-predictive, `3` rejected as malformed |
 | `qp` | 6 | `1..=51` |
 | `num_refs` | 5 | 0 iff intra; else `1..=16`, at most the decoder's `max_refs` and the references it holds |
 | `loop_filter` | 1 | run the loop filter |
-| `poc` | 16 | display position within the current GOP (sequential today; the B-frame reordering key in v0.2) |
+| `poc` | 16 | display position within the current GOP; the B-frame reordering key |
+| `bweight` | 2 | B frames only: the *past* reference's share of the bi-prediction in quarters — `0` = 2/4 (plain average), `1` = 1/4, `2` = 3/4, `3` rejected as malformed |
 | payload | — | superblock partition tree + per-leaf syntax |
 | `crc32` | 32 | IEEE 802.3 CRC-32 (little-endian) over all preceding bytes, verified before parsing |
 
-The v1 layout differed only in the 1-bit `intra` flag and the absent
-`poc`.
+The v2 layout was this minus `bweight`; the v1 layout differed only in
+the 1-bit `intra` flag and the absent `poc`.
 
 | field | bits | meaning |
 | ----- | ---- | ------- |
@@ -549,6 +552,30 @@ I/P/B/P/B sequence; a B-frame whose forward and backward references
 disagree (the averaging path); `max_packet_bits` bound at `b_frames`
 = 2; corruption sweeps over the new header fields; and the tpt-web
 reorder-buffer drain at end of stream.
+
+### Vault B-frames v0.3 stage 1 — per-frame weighted prediction (shipped 2026-10-07)
+
+The first v0.3 item lands as the v3 header's 2-bit `bweight` field: a
+B frame signals the *past* reference's share of the bi-prediction in
+quarters (`2/4`, `1/4` or `3/4`; the future takes the complement), and
+`build_pred`'s combine becomes `(w·past + (4−w)·future + 2) >> 2` — one
+implementation shared by both sides, so they cannot disagree. The
+encoder chooses per B frame by **exact frame `J`**: it encodes the
+frame at the average and both quarter weights (three full encodes —
+the same bounded-search spirit as the rate controller) and keeps the
+cheapest, ties to the average. Measured
+(`measure.rs::b_weight_decisions`): the search fires readily — on an
+ordinary panning clip it picks quarter weights on most B frames at
+both `qp` 30 and 18, because the two motion searches land on different
+vectors and tilting the combine prices cheaper than the residual it
+saves — and it keeps the plain average where that is genuinely
+cheapest (the shallow part of a quadratic exposure ramp at `qp` 30,
+where the residual a tilted weight would remove is sub-step). The
+exposure-ramp test (`tests/weighted_b.rs`) pins the exact case: a B
+frame built as the decoder's own 3/4-past blend is reconstructed
+exactly at 3/4 past. Remaining on the v0.3 list: per-leaf weights and
+explicit forward/backward-only leaves, long-term references and
+reference reordering (wire v4+ material, designed before coded).
 
 
 ## Common Patterns

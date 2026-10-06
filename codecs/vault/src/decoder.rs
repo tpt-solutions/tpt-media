@@ -143,6 +143,10 @@ pub struct FrameStats {
     /// Whether the frame's header bit said to run the loop filter (so a
     /// test can observe a per-frame loop-filter decision).
     pub loop_filter: bool,
+    /// The frame's bi-prediction weight in quarters of the past
+    /// reference (`2` = plain average; `0` outside B frames) — so a test
+    /// can observe the per-frame weight search's choice.
+    pub b_weight_past: u8,
 }
 
 /// Everything one frame's parse needs.
@@ -221,6 +225,7 @@ impl FrameDec<'_> {
             leaf.mv,
             leaf.mv_b,
             leaf.mode,
+            self.ctx.b_weight_past,
             x,
             y,
             s,
@@ -289,6 +294,19 @@ impl Decoder for VaultDecoder {
         let lf = r.read(1).map_err(bad)? == 1;
         // Display position within the GOP: the reorder key.
         let poc = r.read(16).map_err(bad)? as u16;
+        // The v3 header's per-frame bi-prediction weight (B frames only):
+        // the past reference's share in quarters, encoded as 0 = 2/4
+        // (plain average), 1 = 1/4, 2 = 3/4; 3 is reserved-rejected.
+        let b_weight_past = if ftype == crate::ftype::B {
+            match r.read(2).map_err(bad)? {
+                0 => 2u8,
+                1 => 1,
+                2 => 3,
+                _ => return Err(CodecError::MalformedPacket),
+            }
+        } else {
+            2
+        };
         let intra = ftype == crate::ftype::I;
         if intra != (num_refs == 0) {
             return Err(CodecError::MalformedPacket);
@@ -319,6 +337,7 @@ impl Decoder for VaultDecoder {
             ctx: LeafCtx {
                 intra_frame: intra,
                 b_frame: ftype == crate::ftype::B,
+                b_weight_past,
                 ref_bits: ref_index_bits(num_refs),
                 nplanes: if self.enc.format == tpt_media_core::PixelFormat::Yuv420 {
                     3
@@ -329,6 +348,11 @@ impl Decoder for VaultDecoder {
             num_refs,
             stats: FrameStats {
                 loop_filter: lf,
+                b_weight_past: if ftype == crate::ftype::B {
+                    b_weight_past
+                } else {
+                    0
+                },
                 ..FrameStats::default()
             },
         };

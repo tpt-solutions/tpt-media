@@ -140,7 +140,7 @@ codec: the content is smooth and highly predictable.
 cargo test -p tpt-video-vault
 ```
 
-53 tests: 18 unit tests (Rice lengths against the real writer, coefficient
+56 tests: 18 unit tests (Rice lengths against the real writer, coefficient
 block round trips and the worst-case bound at all four transform sizes,
 transform round trip and a DC known answer, half-pel interpolation known
 answers and off-picture safety, intra availability and a plane-extrapolation
@@ -156,8 +156,9 @@ tests (large blocks where flat and small where busy, half-pel vectors chosen
 on a half-pel shift, older references used and paying off on an A/B/A/B cut,
 near-total skip on a repeated frame), 1 memory test (peak independent of
 stream length), 3 rate-control tests, 2 loop-filter-RD tests, 4 scene-cut
-tests and 1 B-frame quality test (decoded B frames within 3 dB of the
-same clip coded without them); plus `#[ignore]`d measurement harnesses for the tables in
+tests, 1 B-frame quality test (decoded B frames within 3 dB of the
+same clip coded without them), 1 B-frame cadence test and 3 weighted
+bi-prediction tests; plus `#[ignore]`d measurement harnesses for the tables in
 `docs/performance.md`.
 
 ## Known limitations
@@ -166,9 +167,12 @@ same clip coded without them); plus `#[ignore]`d measurement harnesses for the t
   `tpt-dsp-core`'s FFT-backed `FastDct2dPlan` in std builds (bare metal
   keeps the direct path); since 2026-10-05 every §36 corpus scene fits
   the 33.3 ms QCIF frame budget (2.9-22.2 ms/frame, `docs/performance.md`).
-- No weighted prediction, no long-term references or reference reordering
-  (the references are simply the last N pictures), no per-block quantiser
-  adaptation. Rate control (`target_bits_per_frame`), B-frames
+- No per-leaf weight or combine-mode signalling, no long-term references
+  or reference reordering (the references are simply the last N
+  pictures), no per-block quantiser adaptation. Per-*frame* weighted
+  bi-prediction exists (the v3 B-frame header's 2-bit weight, chosen per
+  B frame by exact frame `J` across the average and both quarter
+  weights — at the cost of up to three encodes per B frame). Rate control (`target_bits_per_frame`), B-frames
   (`b_frames`), scene-cut detection (`scene_cut`) and coefficient-level
   RDO (`rdoq`) exist as encoder-only knobs; the scene-cut constants and
   the RDO `λ` are empirical and untuned on real content.

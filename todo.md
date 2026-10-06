@@ -1078,7 +1078,19 @@ All decoders must support bounded resources.
   packet, so a caller who sets `max_recursion_depth` below 4 gets
   `ResourceLimit(RecursionDepth)` (`resource_limits_are_honoured`). No other
   codec has a recursive decode path
-* [ ] maximum decode work where practical — `max_decode_micros` still uncalled (would need a measured loop budget). Thrum's per-packet work is bounded structurally (one pass over a fixed macroblock grid, each block's entropy walk capped at 64 positions), so there is no loop budget to measure — the bound is the frame geometry, which `max_frame_bytes` already covers
+* [x] maximum decode work where practical — **assessed closed
+      2026-10-07**: `max_decode_micros` stays deliberately uncalled. A
+      wall-clock check adds a machine-dependent error path to a decoder
+      whose contract (§39) is to be a pure function of its input, and
+      every decode loop here is already bounded by enforced structural
+      limits, not by convention: Thrum's per-packet work is one pass
+      over a fixed macroblock grid with each block's entropy walk
+      capped at 64 positions, and the bound is the frame geometry,
+      which `max_frame_bytes` already covers. §19 keeps the knob for a
+      caller whose environment genuinely needs a time fuse; wiring it
+      would be a new contract (which clock, which thread, what
+      happens to partial state on abort), and that is a decision to
+      take against a real consumer, not in the abstract
 * [ ] cancellation support — `CodecError::Cancelled` exists but no codec produces/checks a cancellation token yet
 * [x] malformed-input termination guarantees
 
@@ -1774,7 +1786,25 @@ Not done, and why (left honestly open):
       against the bi-average wire — B frames decoded prediction-only,
       7-12 dB below the encoder's belief (Known Issues above);
       `tests/b_frames.rs` now pins B-frame quality against the same
-      clip coded I/P-only
+      clip coded I/P-only. **v0.3 stage 1 followed the same day**
+      (2026-10-07): per-frame weighted bi-prediction as the v3 header's
+      2-bit `bweight` field — the past reference's share in quarters
+      (2/4 plain average, 1/4, 3/4; 3 reserved-rejected), one shared
+      combine in `build_pred`, chosen per B frame by **exact frame
+      `J`** across the average and both quarter weights (three full
+      encodes, ties to the average; up to 3× B-frame encode cost).
+      Measured (`measure.rs::b_weight_decisions`): the search fires on
+      ordinary pans (quarter weights on most B frames at qp 30 and 18 —
+      the two motion searches land on different vectors and tilting the
+      combine prices cheaper) and keeps the average where that is
+      genuinely cheapest. `tests/weighted_b.rs` pins the exact case (a
+      B frame built as the decoder's own 3/4-past blend reconstructs
+      exactly), the weight census, and the reserved value's rejection.
+      v1/v2 streams are rejected fail-fast under v3. Still open
+      (v0.3+): per-leaf weights and explicit forward/backward-only
+      leaves, long-term references, reference reordering — designed
+      before coded. The keyframe schedule also now counts every coded
+      frame (display cadence; see CHANGELOG)
 * [x] frame-level rate control (2026-10-05): `VaultConfig::
       target_bits_per_frame` — a bounded search (at most three encodes
       per frame) around the previous frame's choice, driven by a
@@ -1866,9 +1896,19 @@ Not done, and why (left honestly open):
       track reconstruction. Mote came along in the same change (it had
       the same gap); the rebuilt wasm is ~368 KB and the Node checks
       pass against it
-* [ ] maximum decode work (§19 `max_decode_micros`) — per-packet work is
-      bounded structurally by the frame geometry, but no time budget is
-      checked
+* [x] maximum decode work (§19 `max_decode_micros`) — **assessed
+      closed 2026-10-07**, same decision as §32's Thrum: the knob stays
+      deliberately uncalled. A wall-clock check adds a machine-dependent
+      error path to a decoder whose contract is to be a pure function
+      of its input (§39), and Vault's per-packet work is bounded by
+      enforced structural limits — the partition recursion is capped at
+      [`MAX_PARTITION_DEPTH`], each leaf's entropy walk by its tile
+      size and the level clamp, the packet by `max_packet_bits` and the
+      CRC before any of it runs — so the worst case is computable from
+      the frame geometry, not from a stopwatch. Wiring a real time fuse
+      needs a stated contract (which clock, which thread, partial-state
+      semantics on abort) against a real consumer; §19 keeps the knob
+      for that caller
 
 Initial target:
 

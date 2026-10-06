@@ -81,6 +81,11 @@ pub(crate) struct LeafCtx {
     /// fixed reference pair `refs[1]` (past) / `refs[0]` (future), then
     /// coefficient tiles like any other non-skip leaf.
     pub b_frame: bool,
+    /// Weight of the *past* reference in the B-frame bi-prediction, in
+    /// quarters (`1..=3`; `2` is the plain average). The future gets the
+    /// complement. Signalled once per B frame in the v3 header; ignored
+    /// outside B frames.
+    pub b_weight_past: u8,
     /// Bits of the reference index field.
     pub ref_bits: u32,
     pub nplanes: usize,
@@ -321,6 +326,7 @@ pub(crate) fn build_pred(
     mv: (i32, i32),
     mv_b: (i32, i32),
     mode: IntraMode,
+    b_weight_past: u8,
     x: usize,
     y: usize,
     size: usize,
@@ -369,8 +375,15 @@ pub(crate) fn build_pred(
                 let mut b = alloc::vec![0u8; m * m];
                 mc_block(&refs[1].planes[pl], px, py, m, m, px0, py0, &mut a);
                 mc_block(&refs[0].planes[pl], px, py, m, m, px1, py1, &mut b);
+                // Weighted combine, quarters of the past reference
+                // (`b_weight_past` 1..=3; 2 is the plain average),
+                // rounded to nearest. The weight is the frame's own
+                // header field, so both sides weight identically by
+                // construction.
+                let w = u16::from(b_weight_past.clamp(1, 3));
+                let wf = 4 - w;
                 for (slot, pair) in out.p[pl].iter_mut().zip(a.iter().zip(&b)) {
-                    *slot = ((u16::from(*pair.0) + u16::from(*pair.1)) / 2) as u8;
+                    *slot = ((w * u16::from(*pair.0) + wf * u16::from(*pair.1) + 2) >> 2) as u8;
                 }
             }
         }

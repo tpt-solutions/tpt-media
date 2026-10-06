@@ -559,7 +559,27 @@ impl VaultEncoder {
             target
         };
 
-        let mut out = self.encode_at_qp(&src, qp, ftype, poc, num_refs)?;
+        // B frames choose their bi-prediction weight by exact frame `J`:
+        // the plain average and its two quarter-weight neighbours, each a
+        // full encode (ties keep the average). Later rate-control retries
+        // keep the winner — the weight choice and the quantiser search
+        // are orthogonal, and a B frame costs at most 3x the encodes the
+        // bounded qp search would spend on it.
+        let is_b = ftype == crate::ftype::B;
+        let mut weight = 2u8;
+        let mut out = if is_b {
+            let mut best = self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight)?;
+            for w in [1u8, 3] {
+                let cand = self.encode_at_qp(&src, qp, ftype, poc, num_refs, w)?;
+                if cand.frame_j < best.frame_j {
+                    best = cand;
+                    weight = w;
+                }
+            }
+            best
+        } else {
+            self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight)?
+        };
         let mut bits = out.bits;
         let mut attempts = 1usize;
         if rc {
@@ -570,7 +590,7 @@ impl VaultEncoder {
                     1
                 };
                 qp = (qp + jump).min(MAX_QP);
-                out = self.encode_at_qp(&src, qp, ftype, poc, num_refs)?;
+                out = self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight)?;
                 bits = out.bits;
                 attempts += 1;
             }
@@ -583,7 +603,8 @@ impl VaultEncoder {
             if bits < frame_target * 7 / 8 && self.rc_debt <= 0.0 && qp > 1 && attempts < 3 {
                 let jump = if bits < frame_target / 4 { 2 } else { 1 };
                 let finer_qp = qp.saturating_sub(jump).max(1);
-                let finer = self.encode_at_qp(&src, finer_qp, ftype, poc, num_refs)?;
+                let finer =
+                    self.encode_at_qp(&src, finer_qp, ftype, poc, num_refs, weight)?;
                 let credit = (-self.rc_debt) as u64;
                 if finer.bits <= frame_target + credit.min(frame_target.saturating_mul(2)) {
                     out = finer;
@@ -648,6 +669,7 @@ impl VaultEncoder {
         ftype: u8,
         poc: u16,
         num_refs: usize,
+        b_weight_past: u8,
     ) -> CodecResult<EncodedFrame> {
         let intra = ftype == crate::ftype::I;
         let step = quant_step(qp);
@@ -668,6 +690,7 @@ impl VaultEncoder {
             ctx: LeafCtx {
                 intra_frame: intra,
                 b_frame: ftype == crate::ftype::B,
+                b_weight_past,
                 ref_bits: if ftype == crate::ftype::B {
                     0
                 } else {
@@ -675,6 +698,7 @@ impl VaultEncoder {
                 },
                 nplanes: src.nplanes(),
             },
+            chosen_j: 0.0,
             scratch: Vec::new(),
         };
 
@@ -687,10 +711,21 @@ impl VaultEncoder {
         w.write_bits(1, u64::from(self.enc.loop_filter))
             .map_err(werr)?;
         w.write_bits(16, u64::from(poc)).map_err(werr)?;
+        if ftype == crate::ftype::B {
+            // The v3 header's per-frame bi-prediction weight: the past
+            // reference's share in quarters, encoded as 0 = 2/4 (plain
+            // average), 1 = 1/4, 2 = 3/4; 3 is reserved-rejected.
+            let wire = match b_weight_past {
+                1 => 1u64,
+                3 => 2,
+                _ => 0,
+            };
+            w.write_bits(2, wire).map_err(werr)?;
+        }
 
         for sy in (0..src.height).step_by(SUPERBLOCK) {
             for sx in (0..src.width).step_by(SUPERBLOCK) {
-                fe.rdo_block(sx, sy, SUPERBLOCK, 0);
+                fe.chosen_j += fe.rdo_block(sx, sy, SUPERBLOCK, 0);
                 for sym in fe.syms.drain(..) {
                     match sym {
                         Sym::Split(b) => w.write_bits(1, u64::from(b)).map_err(werr)?,
@@ -710,19 +745,25 @@ impl VaultEncoder {
             field,
             data: w.finish(),
             bits,
+            // The RDO objective summed over the leaves actually chosen:
+            // the frame-level `J` the B-frame weight search compares.
+            frame_j: fe.chosen_j,
         })
     }
 }
 
 /// The output of one [`VaultEncoder::encode_at_qp`] pass: the
 /// reconstruction (which becomes the next reference), its motion field
-/// (for the loop filter), the packet payload without its CRC, and the
-/// payload's bit count (what the rate controller budgets against).
+/// (for the loop filter), the packet payload without its CRC, the
+/// payload's bit count (what the rate controller budgets against), and
+/// the RDO objective `J = D + λ·R` summed over the leaves actually
+/// chosen (what the B-frame weight search compares).
 struct EncodedFrame {
     recon: Picture,
     field: Field,
     data: Vec<u8>,
     bits: u64,
+    frame_j: f64,
 }
 
 /// Rewrite the header's `loop_filter` bit in a finished packet payload.
@@ -768,6 +809,9 @@ struct FrameEnc<'a> {
     max_block: usize,
     search_range: i32,
     ctx: LeafCtx,
+    /// The RDO objective `J` summed over the leaves actually chosen this
+    /// frame — the frame-level figure the B-frame weight search compares.
+    chosen_j: f64,
     /// Motion-compensation scratch (largest block: 64x64).
     scratch: Vec<u8>,
 }
@@ -964,6 +1008,7 @@ impl FrameEnc<'_> {
                 (0, 0),
                 (0, 0),
                 IntraMode::Dc,
+                self.ctx.b_weight_past,
                 x,
                 y,
                 s,
@@ -982,6 +1027,7 @@ impl FrameEnc<'_> {
                 mv,
                 mv_b,
                 IntraMode::Dc,
+                self.ctx.b_weight_past,
                 x,
                 y,
                 s,
@@ -1037,6 +1083,7 @@ impl FrameEnc<'_> {
             (0, 0),
             (0, 0),
             mode,
+            self.ctx.b_weight_past,
             x,
             y,
             s,
@@ -1085,6 +1132,7 @@ impl FrameEnc<'_> {
                 mv,
                 (0, 0),
                 IntraMode::Dc,
+                self.ctx.b_weight_past,
                 x,
                 y,
                 s,
@@ -1106,6 +1154,7 @@ impl FrameEnc<'_> {
             pmv,
             (0, 0),
             IntraMode::Dc,
+            self.ctx.b_weight_past,
             x,
             y,
             s,

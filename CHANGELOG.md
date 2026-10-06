@@ -9,6 +9,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 Added
 
+- **Vault's B frames gain per-frame weighted prediction — the wire's
+  v3 bump, v0.3 stage 1** (2026-10-07): a B frame's header carries a
+  2-bit `bweight` naming the *past* reference's share of the
+  bi-prediction in quarters (plain average, 1/4, or 3/4; the future
+  takes the complement; `3` reserved-rejected), applied by one shared
+  combine in `build_pred` so encoder and decoder weight identically by
+  construction. The encoder chooses per B frame by exact frame `J` —
+  three full encodes (average and both quarter weights), ties to the
+  average, the same bounded-search spirit as the rate controller, up to
+  3× B-frame encode cost. Measured
+  (`measure.rs::b_weight_decisions`): the search fires readily — on an
+  ordinary panning clip it picks quarter weights on most B frames at
+  both qp 30 and 18, because the two motion searches land on different
+  vectors and tilting the combine prices cheaper than the residual it
+  saves — and keeps the plain average where that is genuinely cheapest.
+  `tests/weighted_b.rs` pins the exact-reconstruction case (a B frame
+  built as the decoder's own 3/4-past blend reconstructs perfectly),
+  the weight census, determinism, and the reserved value's rejection.
+  v1/v2 streams are rejected fail-fast under v3 (todo.md §35); nothing
+  released ever emitted v2, whose B-leaf payload was corrected in the
+  same unreleased window. Also fixed here: `VaultConfig::max_packet_bits`
+  still charged the *v1* header (29 bits against the real 46) — the
+  bound is a stated proof, and its header term had been stale since the
+  v2 bump; it now charges the v3 header (48, with the B weight counted
+  unconditionally so I/P frames are over-charged by 2 bits and the
+  proof covers every frame type).
 - **Vault's keyframe schedule counts every coded frame** (2026-10-07):
   `keyframe_interval` is now a display-frame cadence even with
   `b_frames > 0` — B frames and the lookahead's future reference advance

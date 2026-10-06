@@ -444,8 +444,9 @@ fn hostile_headers_are_rejected() {
     let (_, mut dec) = pair(&c);
     dec.decode(&i_pkt).unwrap();
 
-    // Header bit layout (v2): 16 version | 2 ftype | 6 qp | 5 num_refs
-    // | 1 lf | 16 poc.
+    // Header bit layout (v3): 16 version | 2 ftype | 6 qp | 5 num_refs
+    // | 1 lf | 16 poc (B frames add a 2-bit weight after poc; these
+    // crafted headers are all I/P, so they end at 46 bits).
     let build = |version: u16, ftype: u8, qp: u8, refs: u8| {
         let mut bits: u64 = u64::from(version);
         bits = (bits << 2) | u64::from(ftype);
@@ -471,36 +472,46 @@ fn hostile_headers_are_rejected() {
         dec.decode(&build(1, 0, 20, 0)),
         Err(CodecError::Unsupported(_))
     ));
+    // Every superseded version is rejected fail-fast (todo.md 35), and
+    // an out-of-repo future version with it.
+    assert!(matches!(
+        dec.decode(&build(2, 0, 20, 0)),
+        Err(CodecError::Unsupported(_))
+    ));
+    assert!(matches!(
+        dec.decode(&build(4, 0, 20, 0)),
+        Err(CodecError::Unsupported(_))
+    ));
     for qp in [0u8, 52, 63] {
         assert_eq!(
-            dec.decode(&build(2, 0, qp, 0)),
+            dec.decode(&build(3, 0, qp, 0)),
             Err(CodecError::MalformedPacket),
             "qp {qp}"
         );
     }
     // Reserved frame type is malformed, not unsupported.
     assert_eq!(
-        dec.decode(&build(2, 3, 20, 0)),
+        dec.decode(&build(3, 3, 20, 0)),
         Err(CodecError::MalformedPacket),
         "reserved ftype"
     );
     // Intra with references, P without.
     assert_eq!(
-        dec.decode(&build(2, 0, 20, 1)),
+        dec.decode(&build(3, 0, 20, 1)),
         Err(CodecError::MalformedPacket)
     );
     assert_eq!(
-        dec.decode(&build(2, 1, 20, 0)),
+        dec.decode(&build(3, 1, 20, 0)),
         Err(CodecError::MalformedPacket)
     );
     // More references than the codec supports at all.
     assert_eq!(
-        dec.decode(&build(2, 1, 20, 17)),
+        dec.decode(&build(3, 1, 20, 17)),
         Err(CodecError::MalformedPacket)
     );
     // Within the codec's range but beyond the decoder's `max_refs` (4).
     assert_eq!(
-        dec.decode(&build(2, 1, 20, 9)),
+        dec.decode(&build(3, 1, 20, 9)),
         Err(CodecError::ResourceLimit(
             ResourceLimitKind::ReferenceFrames
         ))

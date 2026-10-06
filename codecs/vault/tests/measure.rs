@@ -346,3 +346,74 @@ fn scene_cut_on_and_off() {
         );
     }
 }
+
+/// The per-frame bi-prediction weight (v3): which weight the frame-`J`
+/// search picks on content where averaging is right (the pan clip) and
+/// where a quarter weight is right (an exposure ramp, whose B frame is
+/// exactly 3/4 of one reference). Prints per-B-frame decisions, bytes
+/// and PSNR.
+#[test]
+#[ignore]
+fn b_weight_decisions() {
+    for (name, frames) in [
+        ("pan", panning_clip(3)),
+        ("exposure ramp", (0..9)
+            .map(|i| {
+                let mut f = VideoFrame::alloc(W as u32, H as u32, PixelFormat::Yuv420);
+                for y in 0..H {
+                    for x in 0..W {
+                        // Frame i fades quadratically toward bright: the
+                        // midpoint is NOT the average of its neighbours.
+                        let t = (i * i) as f32 / 64.0;
+                        f.pixels[y * W + x] =
+                            (60.0 + (180.0 - 60.0) * t + (x / 8) as f32) as u8;
+                    }
+                }
+                f.pixels[W * H..].fill(110);
+                f.frame.pts = Timestamp {
+                    ticks: i as i64,
+                    timebase: Timebase::new(1, 30),
+                };
+                f
+            })
+            .collect()),
+    ] {
+        for qp in [30u8, 18] {
+        let cfg = VaultConfig {
+            b_frames: 2,
+            qp,
+            ..base()
+        };
+        let fwc = CodecConfig {
+            limits: ResourceLimits::permissive(),
+            ..CodecConfig::default()
+        };
+        let mut enc = VaultEncoder::new(fwc.clone(), cfg.clone()).unwrap();
+        let mut dec = VaultDecoder::new(fwc, cfg).unwrap();
+        println!("== b weight, clip {name}, qp {qp}");
+        for f in &frames {
+            for p in enc.encode(f).unwrap() {
+                let out = dec.decode(&p).unwrap();
+                let st = dec.last_stats();
+                if st.b_weight_past != 0 {
+                    for o in &out {
+                        let i = o.frame.pts.ticks as usize;
+                        let psnr_v = psnr(&frames[i].pixels[..W * H], &o.pixels[..W * H]);
+                        println!(
+                            "  B@{i}: w_past={}/4, {} B, {:.2} dB",
+                            st.b_weight_past,
+                            p.data.len(),
+                            psnr_v
+                        );
+                    }
+                }
+            }
+        }
+        for p in enc.flush().unwrap() {
+            for o in dec.decode(&p).unwrap() {
+                let _ = o;
+            }
+        }
+        }
+    }
+}
