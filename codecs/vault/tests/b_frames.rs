@@ -126,3 +126,45 @@ fn b_frames_decode_at_reference_quality() {
         );
     }
 }
+
+/// The keyframe schedule counts every coded frame, so `keyframe_interval`
+/// is a display-frame cadence even with B frames in the stream: with
+/// `b_frames = 1` (groups of three: anchor, B, future) and
+/// `keyframe_interval = 4`, the first implementation's counter advanced
+/// only on anchors and quietly produced a 9-frame GOP where 4 was
+/// configured (this 9-frame clip saw exactly one intra). A due keyframe
+/// inside a buffered group fires through the degenerate path and lands
+/// on the group's first display frame, so landing points quantise to
+/// group boundaries: 0, then 4 — a B position, taken by the degenerate
+/// drain. (The next due point is display 8; the next anchor is 9, past
+/// this clip's end.)
+#[test]
+fn keyframe_interval_is_display_frame_cadence_with_b_frames() {
+    let cfg = VaultConfig {
+        width: W as u32,
+        height: H as u32,
+        format: PixelFormat::Yuv420,
+        b_frames: 1,
+        ..VaultConfig::default()
+    };
+    let fw = CodecConfig::default();
+    let mut enc = VaultEncoder::with_keyframe_interval(fw, cfg, 4).unwrap();
+    let mut key_pts = Vec::new();
+    for f in clip() {
+        for p in Encoder::encode(&mut enc, &f).unwrap() {
+            if p.flags.contains(tpt_media_core::PacketFlags::KEYFRAME) {
+                key_pts.push(p.pts.ticks);
+            }
+        }
+    }
+    for p in Encoder::flush(&mut enc).unwrap() {
+        if p.flags.contains(tpt_media_core::PacketFlags::KEYFRAME) {
+            key_pts.push(p.pts.ticks);
+        }
+    }
+    assert_eq!(
+        key_pts,
+        vec![0, 4],
+        "keyframes every 4 display frames, quantised to group boundaries"
+    );
+}

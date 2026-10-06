@@ -135,7 +135,11 @@ pub const MAX_PARTITION_DEPTH: u8 = 3;
 /// `todo.md` section 33 target).
 pub const MAX_REFERENCE_FRAMES: u8 = 16;
 
-/// Default I-frame interval: an I-frame this often, and always the first.
+/// Default I-frame interval: an I-frame this often, and always the
+/// first. The cadence counts **display frames** — B frames and lookahead
+/// futures included — so a `b_frames` stream honours the same interval
+/// an I/P stream would; a due keyframe that would land inside a buffered
+/// B-group is pulled to the group's first display frame instead.
 pub const KEYFRAME_INTERVAL: u64 = 60;
 
 /// Smallest legal quantiser index.

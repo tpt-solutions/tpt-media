@@ -133,12 +133,12 @@ pub struct VaultEncoder {
     scans: Scans,
     frames: u64,
     keyframe_interval: u64,
-    /// Reference frames coded since the last intra (saturating). The
-    /// scheduled-keyframe phase: an I is due when this has reached
-    /// `keyframe_interval - 1`, so exactly `keyframe_interval` reference
-    /// frames — counting the I — lie between scheduled intras. It mirrors
-    /// `frames` (the lookahead's future reference does not advance it,
-    /// matching the schedule the modulo form produced).
+    /// Frames coded since the last intra (saturating) — *every* coded
+    /// frame, B frames and lookahead futures included, so the scheduled
+    /// keyframe cadence is the configured interval in **display frames**
+    /// (the same reading as every encoder's key-interval setting; a due
+    /// keyframe that would land mid-group takes the degenerate path and
+    /// lands on the group's first display frame instead).
     since_intra: u64,
     /// Rate-control bucket: cumulative bits spent minus the per-frame
     /// targets, clamped below so one early overspend cannot starve the
@@ -209,9 +209,11 @@ impl VaultEncoder {
     }
 
     /// Whether the next *scheduled* reference frame would be coded as an
-    /// I-frame. A scene-cut detection ([`VaultConfig::scene_cut`]) can
-    /// make a frame intra before its turn; this reports the schedule
-    /// only.
+    /// I-frame. The cadence counts every coded frame (display frames); a
+    /// scene-cut detection ([`VaultConfig::scene_cut`]) can make a frame
+    /// intra before its turn, and a due keyframe inside a buffered
+    /// B-group fires through the degenerate path at the group's first
+    /// display frame.
     pub fn next_is_keyframe(&self) -> bool {
         self.keyframe_interval == 0 || self.since_intra >= self.keyframe_interval - 1
     }
@@ -411,6 +413,8 @@ impl Encoder for VaultEncoder {
                     pts,
                 )?;
                 self.refs.insert(0, recon);
+                self.frames += 1;
+                self.since_intra = self.since_intra.saturating_add(1);
                 packets.push(pkt);
                 // The B's, in display order, against the fixed pair
                 // refs[1] = past anchor, refs[0] = future.
@@ -419,6 +423,8 @@ impl Encoder for VaultEncoder {
                     let pts = b.frame.pts;
                     let poc = anchor_poc + bi as u16 + 1;
                     let (pkt, _) = self.encode_frame_rc(&b, crate::ftype::B, poc, 2, pts)?;
+                    self.frames += 1;
+                    self.since_intra = self.since_intra.saturating_add(1);
                     packets.push(pkt);
                 }
                 self.b_awaiting_future = false;

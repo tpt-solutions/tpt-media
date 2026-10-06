@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 Added
 
+- **Vault's keyframe schedule counts every coded frame** (2026-10-07):
+  `keyframe_interval` is now a display-frame cadence even with
+  `b_frames > 0` — B frames and the lookahead's future reference advance
+  it, and a due keyframe inside a buffered B-group fires through the
+  degenerate path at the group's first display frame. The first
+  implementation advanced the counter on group anchors only, so a
+  `b_frames = 2` stream quietly ran a four-times-longer GOP than
+  configured (240 display frames against a configured 60). I/P streams
+  are unchanged — there every coded frame is a reference frame — pinned
+  by `tests/b_frames.rs`'s cadence test (keyframes at displays 0 and 4
+  for `b_frames = 1`, `keyframe_interval = 4`, where the old counter
+  produced only the cold-start intra).
 - **Vault's loop filter can be rate–distortion decided, and scene cuts
   break the keyframe schedule** (2026-10-07, two of todo.md §33's open
   encoder items): `VaultConfig::loop_filter_rdo` decides the per-frame
