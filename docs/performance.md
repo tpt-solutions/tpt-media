@@ -406,28 +406,32 @@ a clean reference for the frames after. The detector's constants
 empirical, and the knob ships default-off pending content that would
 justify a default.
 
-Bi-prediction weights (`bweight`, v3; `measure.rs::b_weight_decisions`:
+Bi-prediction weights (`bweight`; `measure.rs::b_weight_decisions`:
 which weight the exact-frame-`J` search picks per B frame, and what it
-cost):
+cost). Re-measured after the v4 combine modes landed, because the two
+mechanisms share the work: single-sided leaves absorb the "one
+reference is wrong" cases, and the weight then stays at the plain
+average wherever both references are merely *unevenly* useful:
 
 | clip | `qp` | B-frame weights (display: w/4) | B bytes | B PSNR |
 | --- | ---: | --- | ---: | ---: |
-| panning, noisy | 30 | 1: 3, 2: 3, 3: 3, 5: 3, 6: 1, 7: 1 | 137-156 | 37.7-38.5 dB |
-| panning, noisy | 18 | 1: 3, 2: 1, 3: 1, 5: 3, 6: 3, 7: 3 | 452-706 | 44.6-44.9 dB |
-| quadratic exposure ramp | 30 | 1: 3, 2: 2, 3: 2, 5: 3, 6: 1, 7: 1 | 106-192 | 51.5-53.2 dB |
-| quadratic exposure ramp | 18 | 1: 3, 2: 2, 3: 2, 5: 3, 6: 1, 7: 1 | 175-268 | 57.8-61.0 dB |
+| panning, noisy | 30 | 1: 1, 2: 3, 3: 3, 5: 2, 6: 1, 7: 1 | 113-129 | 37.7-38.6 dB |
+| panning, noisy | 18 | all 2/4 | 263-601 | 44.6-45.0 dB |
+| quadratic exposure ramp | 30 | 1: 2, 2: 2, 3: 2, 5: 3, 6: 2, 7: 2 | 133-209 | 51.3-53.1 dB |
+| quadratic exposure ramp | 18 | 1: 2, 2: 2, 3: 2, 5: 3, 6: 2, 7: 2 | 135-286 | 58.0-61.0 dB |
 
-The recorded finding: the search fires readily — on an ordinary pan it
-picks quarter weights on most B frames at both quantisers, because the
-past and future motion searches land on *different* vectors and tilting
-the combine prices cheaper than the residual it would save. Where the
-average survives, it is because J says so (the shallow part of the
-quadratic ramp, where the residual a tilted weight would remove is
-sub-step at `qp` 30). The cost is up to three encodes per B frame; B
-frames are the cheapest type, so this is an offline-codec trade, not a
-real-time claim. `tests/weighted_b.rs` pins the exact case: a B frame
-constructed as the decoder's own 3/4-past blend of its references
-reconstructs perfectly when the search picks 3.
+For the record, the same table under v3 — before per-leaf combine
+modes existed — had the weight search firing quarter weights on most B
+frames of the pan clip at both quantisers, because tilting the average
+was then the only way to lean toward the better reference. The v4
+reading: the weight handles genuine *blends* (the ramp's mid-fade
+frame at 3/4, the pan's coarser-quantised frames), while the combine
+mode handles *selection*. The cost is unchanged: up to three encodes
+per B frame; B frames are the cheapest type, so this is an
+offline-codec trade, not a real-time claim. `tests/weighted_b.rs`
+pins the exact case: a B frame constructed as the decoder's own
+3/4-past blend of its references reconstructs perfectly when the
+search picks 3.
 
 References (panning noisy clip, default `qp`): `max_refs` 1, 4, 16 gave 126,
 132 and 129 B/frame at 36.64, 36.98 and 36.83 dB. **A pan gains nothing from
