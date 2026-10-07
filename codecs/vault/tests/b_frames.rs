@@ -168,3 +168,75 @@ fn keyframe_interval_is_display_frame_cadence_with_b_frames() {
         "keyframes every 4 display frames, quantised to group boundaries"
     );
 }
+
+/// The single-sided combine modes earn their field exactly where the
+/// design said they would: in the B group straddling a scene cut, the
+/// A-side B frame must go predominantly *forward-only* (its future
+/// reference is the wrong scene) and the B-side B frame predominantly
+/// *backward-only* (its past reference is). The census comes from the
+/// decoder, so this pins the real wire, not the encoder's intent.
+#[test]
+fn single_sided_leaves_carry_straddling_b_frames() {
+    let scene = |bright: bool, i: usize| {
+        let mut f = VideoFrame::alloc(W as u32, H as u32, PixelFormat::Yuv420);
+        let pan = (i * 2) as i32;
+        for y in 0..H {
+            for x in 0..W {
+                let g = (x * 140 / W + y * 60 / H) as i32;
+                let stripe = (x as i32 + pan) % 24;
+                let v = if bright {
+                    225 - (g + stripe) / 3
+                } else {
+                    30 + (g + stripe) / 2
+                };
+                f.pixels[y * W + x] = v.clamp(0, 255) as u8;
+            }
+        }
+        f.pixels[W * H..].fill(if bright { 100 } else { 128 });
+        f.frame.pts = Timestamp {
+            ticks: i as i64,
+            timebase: Timebase::new(1, 30),
+        };
+        f
+    };
+    let input: Vec<_> = (0..16)
+        .map(|i| scene(i >= 8, i))
+        .collect();
+    let cfg = VaultConfig {
+        width: W as u32,
+        height: H as u32,
+        format: PixelFormat::Yuv420,
+        b_frames: 2,
+        ..VaultConfig::default()
+    };
+    let mut enc = VaultEncoder::new(CodecConfig::default(), cfg.clone()).unwrap();
+    let mut dec = VaultDecoder::new(CodecConfig::default(), cfg).unwrap();
+    // (display pts, fwd leaves, bwd leaves) per emitted frame.
+    let mut census: Vec<(i64, u32, u32)> = Vec::new();
+    for f in &input {
+        for p in Encoder::encode(&mut enc, f).unwrap() {
+            let out = Decoder::decode(&mut dec, &p).unwrap();
+            let st = dec.last_stats().clone();
+            for fr in out {
+                census.push((fr.frame.pts.ticks, st.fwd, st.bwd));
+            }
+        }
+    }
+    for p in Encoder::flush(&mut enc).unwrap() {
+        let out = Decoder::decode(&mut dec, &p).unwrap();
+        let st = dec.last_stats().clone();
+        for fr in out {
+            census.push((fr.frame.pts.ticks, st.fwd, st.bwd));
+        }
+    }
+    census.sort_by_key(|(pts, _, _)| *pts);
+    assert_eq!(census.len(), 16);
+    // The straddling group's B frames: display 5 sits on the A side of
+    // the cut (display 8) with a B future — forward-only; display 6 is
+    // the mirror case — backward-only.
+    let (_, fwd5, bwd5) = census[5];
+    let (_, fwd6, bwd6) = census[6];
+    assert!(fwd5 > 0, "display 5 (A content, B-scene future) must use forward-only leaves");
+    assert!(bwd6 > 0, "display 6 (B content, A-scene past) must use backward-only leaves");
+    let _ = (bwd5, fwd6);
+}

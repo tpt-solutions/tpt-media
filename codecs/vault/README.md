@@ -157,9 +157,11 @@ on a half-pel shift, older references used and paying off on an A/B/A/B cut,
 near-total skip on a repeated frame), 1 memory test (peak independent of
 stream length), 3 rate-control tests, 2 loop-filter-RD tests, 4 scene-cut
 tests, 1 B-frame quality test (decoded B frames within 3 dB of the
-same clip coded without them), 1 B-frame cadence test and 3 weighted
-bi-prediction tests; plus `#[ignore]`d measurement harnesses for the tables in
-`docs/performance.md`.
+same clip coded without them), 1 B-frame cadence test, 3 weighted
+bi-prediction tests and 1 single-sided-census test (the straddling
+cut's A-side B frame goes forward-only, its B-side twin
+backward-only); plus `#[ignore]`d measurement harnesses for the tables
+in `docs/performance.md`.
 
 ## Known limitations
 

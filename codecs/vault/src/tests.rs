@@ -486,3 +486,68 @@ fn set_loop_filter_bit_targets_the_bit_the_decoder_reads() {
     let (_, _, _, _, lf, _) = parse(&data);
     assert_eq!(lf, 1, "and back on");
 }
+
+/// A B leaf whose combine mode reads 3 (reserved) is malformed, and the
+/// single-sided modes parse exactly the vectors the writer sent.
+#[test]
+fn b_leaf_combine_modes_parse_and_reject_reserved() {
+    use crate::syntax::{read_leaf, LeafCtx, LeafKind};
+    use crate::syntax::MVD_K;
+    use crate::MV_LIMIT;
+    use tpt_media_bitstream::rice::{encode_riced, WriteLike};
+
+    let ctx = LeafCtx {
+        intra_frame: false,
+        b_frame: true,
+        b_weight_past: 2,
+        ref_bits: 0,
+        nplanes: 1,
+    };
+    let scans = Scans::new();
+    let write = |mode: u64, mv: (i32, i32), mv_b: (i32, i32)| {
+        let mut w = PacketBits::new();
+        w.write_bits(1, 0).unwrap(); // not skip
+        w.write_bits(2, mode).unwrap();
+        let vs: &[(i32, i32)] = match mode {
+            0 => &[mv, mv_b],
+            1 => &[mv],
+            2 => &[mv_b],
+            _ => &[],
+        };
+        for v in vs {
+            encode_riced(&mut w, MVD_K, i64::from(v.0)).unwrap();
+            encode_riced(&mut w, MVD_K, i64::from(v.1)).unwrap();
+        }
+        w.finish()
+    };
+
+    // Reserved mode 3 is rejected before any vector is read.
+    let mut bad = PacketBits::new();
+    bad.write_bits(1, 0).unwrap();
+    bad.write_bits(2, 3).unwrap();
+    let bad = bad.finish();
+    let mut r = BitReader::new(&bad);
+    assert!(read_leaf(&mut r, 8, &ctx, 2, (0, 0), &scans).is_err());
+
+    // Forward-only: mode 1, one vector; decodes as Fwd with mv set and
+    // the future vector zero.
+    let data = write(1, (10, -4), (0, 0));
+    let mut r = BitReader::new(&data);
+    let leaf = read_leaf(&mut r, 8, &ctx, 2, (0, 0), &scans).unwrap();
+    assert_eq!(leaf.kind, LeafKind::Fwd);
+    assert_eq!(leaf.mv, (10, -4));
+    assert_eq!(leaf.mv_b, (0, 0));
+
+    // Backward-only: mode 2.
+    let data = write(2, (0, 0), (-6, 8));
+    let mut r = BitReader::new(&data);
+    let leaf = read_leaf(&mut r, 8, &ctx, 2, (0, 0), &scans).unwrap();
+    assert_eq!(leaf.kind, LeafKind::Bwd);
+    assert_eq!(leaf.mv, (0, 0));
+    assert_eq!(leaf.mv_b, (-6, 8));
+
+    // A vector beyond MV_LIMIT is hostile, mode or no mode.
+    let data = write(1, (MV_LIMIT + 2, 0), (0, 0));
+    let mut r = BitReader::new(&data);
+    assert!(read_leaf(&mut r, 8, &ctx, 2, (0, 0), &scans).is_err());
+}

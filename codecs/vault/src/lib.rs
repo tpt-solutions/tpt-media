@@ -54,13 +54,15 @@
 //! is refused with [`CodecError::Unsupported`]. Width and height are
 //! non-zero multiples of [`MIN_BLOCK`] (8).
 //!
-//! ## Wire format (version 3)
+//! ## Wire format (version 4)
 //!
 //! ```text
 //! 16 bits version | 2 ftype | 6 qp | 5 num_refs | 1 loop_filter | 16 poc
 //!   [+ 2 bits b-weight for B frames: 0 = average, 1 = 1/4 past,
 //!    2 = 3/4 past, 3 reserved]
 //! superblocks in raster order, each a quadtree of `split` flags and leaves
+//!   (a non-skip B leaf adds a 2-bit combine mode: 0 = weighted bi,
+//!    1 = forward-only, 2 = backward-only, 3 reserved)
 //! 32 bits CRC-32 (little endian) over everything before it
 //! ```
 //!
@@ -116,14 +118,18 @@ pub const CODEC_ID: [u8; 4] = *b"VAUL";
 
 /// Bitstream version.
 ///
-/// v3 (2026-10-07) adds the per-frame bi-prediction weight to B-frame
-/// headers — 2 bits after `poc`, B frames only (`0` = plain average,
-/// `1` = 1/4 past + 3/4 future, `2` = 3/4 past + 1/4 future, `3`
-/// reserved-rejected). v2's B-leaf payload was also corrected in the
-/// same unreleased window (B leaves carry their coefficient tiles — see
-/// todo.md Known Issues); a v2 stream decodes nothing here, v1 and v2
-/// are rejected fail-fast per todo.md section 35.
-pub const VERSION: u16 = 3;
+/// v4 (2026-10-07) gives non-skip B leaves a 2-bit combine mode
+/// (`0` = weighted bi, `1` = forward-only, `2` = backward-only, `3`
+/// reserved-rejected) replacing the two always-written motion vectors
+/// of the single-sided modes. v3 (earlier the same day) had added the
+/// per-frame bi-prediction weight to B-frame headers — 2 bits after
+/// `poc`, B frames only (`0` = plain average, `1` = 1/4 past + 3/4
+/// future, `2` = 3/4 past + 1/4 future, `3` reserved-rejected) — and
+/// corrected v2's B-leaf payload (B leaves carry their coefficient
+/// tiles — see todo.md Known Issues). v1-v3 streams are rejected
+/// fail-fast per todo.md section 35; nothing released ever emitted
+/// anything but the current version.
+pub const VERSION: u16 = 4;
 
 /// Size in bytes of the per-packet CRC-32 trailer.
 pub const CRC_TRAILER_BYTES: usize = 4;
@@ -371,11 +377,17 @@ impl VaultConfig {
     ///   over-charged by 2 bits and the bound stays a proof for every
     ///   frame type;
     /// - per 8x8 unit, charged as if every block were 8x8 (larger blocks
-    ///   have strictly fewer headers per unit of area): 2 bits of split
-    ///   flags (a quadtree has fewer than 4/3 nodes per leaf unit), 2 bits
-    ///   skip/intra, 4 bits reference index, two motion-vector differences
-    ///   of at most `2 * MV_LIMIT` (signed Rice at `k = 1`), 2 bits intra
-    ///   mode, and the per-tile `coded`/`k`/`last` fields (10 bits per
+    ///   have strictly fewer headers per unit of area) and as if every
+    ///   unit were the *worst* frame type: 2 bits of split flags (a
+    ///   quadtree has fewer than 4/3 nodes per leaf unit), 3 bits of
+    ///   leaf-type fields (an I/P leaf's skip+intra flags, or a B leaf's
+    ///   skip + combine mode), 4 bits reference index (I/P only, but
+    ///   charged for B too), the motion vectors — a P leaf writes two
+    ///   differences of at most `2 * MV_LIMIT` (2 · 67 bits at `k = 1`)
+    ///   while a B leaf writes *four* absolute vectors of at most
+    ///   `MV_LIMIT` (4 · 67 bits — the four-code case dominates, and it
+    ///   was the under-charge here before v4), and 2 bits intra mode,
+    ///   plus the per-tile `coded`/`k`/`last` fields (10 bits per
     ///   8x8 luma tile, 8 bits per 4x4 chroma tile);
     /// - per sample, one run token and one level token, each at most
     ///   `MAX_RICE_BITS` (136): the encoder picks the cheapest `k`, so a
@@ -386,8 +398,12 @@ impl VaultConfig {
     /// [`CodecError::Internal`] rather than emit an over-bound packet.
     pub fn max_packet_bits(&self) -> usize {
         let header = 16 + 2 + u64::from(QP_BITS) + 5 + 1 + 16 + 2;
-        let mvd = u64::from(bits::rice_len_signed(2 * MV_LIMIT, syntax::MVD_K));
-        let per_unit_syntax = 2 + 2 + 4 + 2 * mvd + 2;
+        // A P leaf's two deltas of ±2·MV_LIMIT against a B leaf's four
+        // absolute vectors of ±MV_LIMIT — the B case is the larger, and
+        // it is charged for every unit of every frame type.
+        let mvd_p = u64::from(bits::rice_len_signed(2 * MV_LIMIT, syntax::MVD_K));
+        let mvd_b = 4 * u64::from(bits::rice_len_signed(MV_LIMIT, syntax::MVD_K));
+        let per_unit_syntax = 2 + 3 + 4 + mvd_p.max(mvd_b) + 2;
         let token = 2 * u64::from(transform::MAX_RICE_BITS);
         let (tile_hdr, samples) = if self.format == PixelFormat::Yuv420 {
             (10 + 2 * 8, 64 + 32)

@@ -1800,13 +1800,23 @@ Not done, and why (left honestly open):
       genuinely cheapest. `tests/weighted_b.rs` pins the exact case (a
       B frame built as the decoder's own 3/4-past blend reconstructs
       exactly), the weight census, and the reserved value's rejection.
-      v1/v2 streams are rejected fail-fast under v3. Still open
-      (v0.3+): per-leaf weights and explicit forward/backward-only
-      leaves (stage 2), long-term references (stage 3; reference
-      reordering deliberately folded into it) — **designed
-      2026-10-07**, `docs/codec-design.md`'s "v0.3 remainder" section,
-      coded next. The keyframe schedule also now counts every coded
-      frame (display cadence; see CHANGELOG)
+      v1-v3 streams are rejected fail-fast under v4. **Stage 2
+      followed the same day**: per-leaf forward-only/backward-only B
+      leaves as the v4 wire's 2-bit combine mode — measured before
+      landing (the design's own sharp edge demanded it) by pricing the
+      candidates at v4 cost behind a crate-private switch: **42% fewer
+      B bits at +0.54 dB** on the cut-straddling group and, the
+      surprise, **24% fewer at +1.4 dB** on an ordinary pan, because
+      v3's only single-sided candidates averaged in a zero-vector block
+      from the other reference and ghosted on any motion. The
+      `max_packet_bits` derivation gained the B-leaf motion accounting
+      it had missed since v2 (a B leaf writes four absolute vectors,
+      4 · 67 bits, against the charged two P deltas) and its bound test
+      now runs at `b_frames = 2`. Still open (v0.3+): long-term
+      references (stage 3; reference reordering folded into it),
+      designed in `docs/codec-design.md`'s "v0.3 remainder" section.
+      The keyframe schedule also now counts every coded frame (display
+      cadence; see CHANGELOG)
 * [x] frame-level rate control (2026-10-05): `VaultConfig::
       target_bits_per_frame` — a bounded search (at most three encodes
       per frame) around the previous frame's choice, driven by a

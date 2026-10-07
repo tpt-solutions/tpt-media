@@ -328,6 +328,30 @@ fn packets_never_exceed_the_derived_bound() {
             dec.decode(&p).unwrap();
         }
     }
+    // The same at the B-frame worst case: b_frames = 2 with a lookahead
+    // means every packet in the stream is B-priced on the wire (skip +
+    // combine mode + up to four absolute motion vectors per leaf), so
+    // the derivation must hold for it too — the B-leaf motion terms
+    // were exactly the under-charge this bound carried before v4.
+    for format in [PixelFormat::Gray8, PixelFormat::Yuv420] {
+        let c = VaultConfig {
+            qp: 1,
+            b_frames: 2,
+            ..cfg(64, 64, format)
+        };
+        let bound = c.max_packet_bits().div_ceil(8) + CRC_TRAILER_BYTES;
+        let (mut enc, mut dec) = pair(&c);
+        for i in 0..8 {
+            let f = noise(64, 64, format, i as u64 + 1);
+            for p in enc.encode(&f).unwrap() {
+                assert!(p.data.len() <= bound, "{} > {bound}", p.data.len());
+                dec.decode(&p).unwrap();
+            }
+        }
+        for p in enc.flush().unwrap() {
+            dec.decode(&p).unwrap();
+        }
+    }
 }
 
 fn valid_packet(c: &VaultConfig) -> (Packet, Packet) {
@@ -444,9 +468,10 @@ fn hostile_headers_are_rejected() {
     let (_, mut dec) = pair(&c);
     dec.decode(&i_pkt).unwrap();
 
-    // Header bit layout (v3): 16 version | 2 ftype | 6 qp | 5 num_refs
-    // | 1 lf | 16 poc (B frames add a 2-bit weight after poc; these
-    // crafted headers are all I/P, so they end at 46 bits).
+    // Header bit layout (v4): 16 version | 2 ftype | 6 qp | 5 num_refs
+    // | 1 lf | 16 poc (B frames add a 2-bit weight after poc and a
+    // 2-bit combine mode per non-skip leaf; these crafted headers are
+    // all I/P, so they end at 46 bits).
     let build = |version: u16, ftype: u8, qp: u8, refs: u8| {
         let mut bits: u64 = u64::from(version);
         bits = (bits << 2) | u64::from(ftype);
@@ -479,39 +504,43 @@ fn hostile_headers_are_rejected() {
         Err(CodecError::Unsupported(_))
     ));
     assert!(matches!(
-        dec.decode(&build(4, 0, 20, 0)),
+        dec.decode(&build(3, 0, 20, 0)),
+        Err(CodecError::Unsupported(_))
+    ));
+    assert!(matches!(
+        dec.decode(&build(5, 0, 20, 0)),
         Err(CodecError::Unsupported(_))
     ));
     for qp in [0u8, 52, 63] {
         assert_eq!(
-            dec.decode(&build(3, 0, qp, 0)),
+            dec.decode(&build(4, 0, qp, 0)),
             Err(CodecError::MalformedPacket),
             "qp {qp}"
         );
     }
     // Reserved frame type is malformed, not unsupported.
     assert_eq!(
-        dec.decode(&build(3, 3, 20, 0)),
+        dec.decode(&build(4, 3, 20, 0)),
         Err(CodecError::MalformedPacket),
         "reserved ftype"
     );
     // Intra with references, P without.
     assert_eq!(
-        dec.decode(&build(3, 0, 20, 1)),
+        dec.decode(&build(4, 0, 20, 1)),
         Err(CodecError::MalformedPacket)
     );
     assert_eq!(
-        dec.decode(&build(3, 1, 20, 0)),
+        dec.decode(&build(4, 1, 20, 0)),
         Err(CodecError::MalformedPacket)
     );
     // More references than the codec supports at all.
     assert_eq!(
-        dec.decode(&build(3, 1, 20, 17)),
+        dec.decode(&build(4, 1, 20, 17)),
         Err(CodecError::MalformedPacket)
     );
     // Within the codec's range but beyond the decoder's `max_refs` (4).
     assert_eq!(
-        dec.decode(&build(3, 1, 20, 9)),
+        dec.decode(&build(4, 1, 20, 9)),
         Err(CodecError::ResourceLimit(
             ResourceLimitKind::ReferenceFrames
         ))

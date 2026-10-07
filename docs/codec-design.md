@@ -412,27 +412,30 @@ holds, and is tested, is narrower: each decision is the cheapest among the
 alternatives that were priced, and freeing the partition never does worse
 on `J` than forcing 8×8 on the test frames.
 
-**Wire format (version 3).** v3 (2026-10-07) adds a 2-bit per-frame
-bi-prediction weight to B-frame headers (v0.3 stage 1 below). v2
-(2026-10-05, superseded within its unreleased window when the B-leaf
-payload was corrected — todo.md Known Issues) had replaced v1's 1-bit
-`intra` flag with a 2-bit frame type and added a 16-bit per-frame
-`poc`; v1 and v2 streams are rejected fail-fast. The v3 layout:
+**Wire format (version 4).** v4 (2026-10-07) gives non-skip B leaves a
+2-bit combine mode (v0.3 stage 2 below). v3 (earlier the same day)
+added a 2-bit per-frame bi-prediction weight to B-frame headers
+(v0.3 stage 1 below). v2 (2026-10-05, superseded within its
+unreleased window when the B-leaf payload was corrected — todo.md
+Known Issues) had replaced v1's 1-bit `intra` flag with a 2-bit frame
+type and added a 16-bit per-frame `poc`; v1-v3 streams are rejected
+fail-fast. The v4 layout:
 
 | field | bits | meaning |
 | ----- | ---- | ------- |
-| `version` | 16 | bitstream version, `3`; rejected up front if not |
+| `version` | 16 | bitstream version, `4`; rejected up front if not |
 | `ftype` | 2 | `0` = intra, `1` = predictive, `2` = bi-predictive, `3` rejected as malformed |
 | `qp` | 6 | `1..=51` |
 | `num_refs` | 5 | 0 iff intra; else `1..=16`, at most the decoder's `max_refs` and the references it holds |
 | `loop_filter` | 1 | run the loop filter |
 | `poc` | 16 | display position within the current GOP; the B-frame reordering key |
 | `bweight` | 2 | B frames only: the *past* reference's share of the bi-prediction in quarters — `0` = 2/4 (plain average), `1` = 1/4, `2` = 3/4, `3` rejected as malformed |
-| payload | — | superblock partition tree + per-leaf syntax |
+| payload | — | superblock partition tree + per-leaf syntax; a non-skip B leaf begins with a 2-bit combine mode (`0` = weighted bi, `1` = forward-only, `2` = backward-only, `3` rejected as malformed) and carries only that mode's motion vectors |
 | `crc32` | 32 | IEEE 802.3 CRC-32 (little-endian) over all preceding bytes, verified before parsing |
 
-The v2 layout was this minus `bweight`; the v1 layout differed only in
-the 1-bit `intra` flag and the absent `poc`.
+The v3 layout was this minus the per-leaf combine mode; the v2 layout
+minus `bweight`; the v1 layout differed only in the 1-bit `intra` flag
+and the absent `poc`.
 
 | field | bits | meaning |
 | ----- | ---- | ------- |
@@ -573,37 +576,42 @@ cheapest (the shallow part of a quadratic exposure ramp at `qp` 30,
 where the residual a tilted weight would remove is sub-step). The
 exposure-ramp test (`tests/weighted_b.rs`) pins the exact case: a B
 frame built as the decoder's own 3/4-past blend is reconstructed
-exactly at 3/4 past. Remaining on the v0.3 list: per-leaf weights and
-explicit forward/backward-only leaves, long-term references and
-reference reordering (wire v4+ material, designed before coded).
+exactly at 3/4 past. Remaining on the v0.3 list: long-term references (stage 3 below) —
+per-leaf combine modes shipped as stage 2.
 
 ### Vault B-frames v0.3 remainder — design (written 2026-10-07, coded next)
 
 What is left after stage 1, worked through so the next session starts
 from a plan. Ordered by value per unit of wire and encoder complexity.
 
-**Stage 2 — per-leaf combine modes (wire v4).** A "forward-only" B leaf
-is today only expressible as a bi leaf with the other vector at zero,
-which still averages the other reference's block in. Real
-forward/backward-only leaves need a signalled mode, and they *save*
-wire: a forward-only leaf needs two motion vectors, not four. Design:
-the B leaf's syntax becomes `skip` bit, then (non-skip) a 2-bit combine
-— `0` = weighted bi (both vectors, header weight), `1` = forward-only
-(past vector + coefficients only), `2` = backward-only, `3`
-reserved-rejected. The RDO prices all three per leaf with the existing
-`J = D + λ·R` (the candidates already exist inside `eval_b_leaf`'s
-search; they are just not separately expressible on the wire). The
-header `bweight` keeps applying only to combine `0`. Sharp edge to
-state in the doc: a combine mode per leaf is 2 bits on every non-skip
-B leaf, so content that never uses the new modes pays for them —
-measure before defaulting the mode field in, and consider collapsing
-`1`/`2` into one bit if the third state stays unused. Tests before
-coding: per-leaf mode census on a straddling-cut clip (B's whose
-forward reference is the wrong scene must go backward-only); the
-max_packet_bits bound with the new field; the corruption sweep over
-the mode field.
+**Stage 2 — per-leaf combine modes (wire v4) — shipped 2026-10-07.**
+Measured before landing, as the sharp edge below demanded, by pricing
+the true single-sided candidates at their proposed v4 cost inside the
+RDO behind a crate-private switch (the harness is gone; the mode is
+real): on the B group straddling a scene cut the v4 stream cost **42%
+fewer B bits at +0.54 dB** (53 of 80 leaves single-sided), and — the
+surprise — on an ordinary steady pan **24% fewer B bits at +1.4 dB**
+(16 of 44 leaves). The reason is structural: v3's only single-sided
+candidates averaged in a *zero-vector* motion-compensated block from
+the other reference, which ghosts exactly when the two motion searches
+disagree — that is, on any motion. So the 2-bit mode field pays for
+itself on ordinary content, and no measurement-vs-default tension
+remained. Shipped as designed: `skip` bit, then a 2-bit combine (`0` =
+weighted bi with both vectors and the header weight, `1` =
+forward-only with the past vector, `2` = backward-only with the future
+vector, `3` reserved-rejected), then that mode's vectors and the
+coefficient tiles; the two poisoned bi variants were removed from the
+candidate set (real `Fwd`/`Bwd` dominate them). The `max_packet_bits`
+derivation also gained the per-unit B-leaf motion accounting it had
+been missing since v2 — a B leaf writes *four* absolute vectors (4 · 67
+bits at `k = 1`), where the formula charged a P leaf's two deltas
+(134 bits) — and its bound test now runs at `b_frames = 2` (the
+design's own "tests to add" list called for that in v0.2 and it never
+happened). A decoder-side census test pins real `Fwd` leaves carrying
+the straddling group's A-side B frame and real `Bwd` leaves its
+B-side twin.
 
-**Stage 3 — one long-term reference (wire v4 or v5).** The value case
+**Stage 3 — one long-term reference (wire v5).** The value case
 is the census test's own A/B/A/B content: the last-N-pictures
 reference store forgets the first A by the time the second A arrives,
 and multi-reference only pays when the revisit is recent. Design: one

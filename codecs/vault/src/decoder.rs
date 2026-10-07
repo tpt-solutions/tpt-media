@@ -131,6 +131,12 @@ pub struct FrameStats {
     pub inter: u32,
     /// Bi-predictive leaves (B frames only).
     pub bi: u32,
+    /// Forward-only leaves (B frames only): predicted from the past
+    /// reference alone.
+    pub fwd: u32,
+    /// Backward-only leaves (B frames only): predicted from the future
+    /// reference alone.
+    pub bwd: u32,
     /// Intra leaves.
     pub intra: u32,
     /// Inter or skip leaves whose vector has a half-pel component.
@@ -209,6 +215,8 @@ impl FrameDec<'_> {
                 st.ref_hist[usize::from(leaf.ref_idx) & 15] += 1;
             }
             LeafKind::Bi => st.bi += 1,
+            LeafKind::Fwd => st.fwd += 1,
+            LeafKind::Bwd => st.bwd += 1,
             LeafKind::Intra => st.intra += 1,
         }
         if leaf.kind != LeafKind::Intra && ((leaf.mv.0 | leaf.mv.1) & 1) != 0 {

@@ -41,10 +41,17 @@ pub(crate) enum LeafKind {
     Skip,
     Inter,
     Intra,
-    /// Bi-predictive (B frames only): the average of the motion
-    /// compensated past and future references. No intra mode — a B leaf
-    /// that cannot predict well codes an inter-like residual instead.
+    /// Bi-predictive (B frames only): the weighted average of the
+    /// motion-compensated past and future references (the frame's
+    /// header weight). No intra mode — a B leaf that cannot predict
+    /// well codes a single-sided residual instead.
     Bi,
+    /// Forward-only (B frames only): predicted from the past reference
+    /// (`refs[1]`) alone.
+    Fwd,
+    /// Backward-only (B frames only): predicted from the future
+    /// reference (`refs[0]`) alone.
+    Bwd,
 }
 
 /// One decoded (or about-to-be-encoded) leaf block.
@@ -127,41 +134,65 @@ pub(crate) fn write_leaf<W: WriteLike>(
 ) -> Result<(), WriteError> {
     if ctx.b_frame {
         // B leaves: the skip bit is the zero-vector reference-0 (future)
-        // prediction; otherwise four Rice-coded motion vectors against a
-        // (0, 0) predictor (past vector, then future vector) — and then
-        // the coefficient tiles, exactly like any other non-skip leaf.
-        // No intra modes, no reference indices: the reference pair is
-        // fixed for the whole frame.
+        // prediction; otherwise a 2-bit combine mode — 0 = weighted bi
+        // (both vectors, the frame's header weight), 1 = forward-only
+        // (past vector), 2 = backward-only (future vector); 3 is
+        // reserved and never written — then the mode's motion vectors
+        // against a (0, 0) predictor, then the coefficient tiles exactly
+        // like any other non-skip leaf. No intra modes, no reference
+        // indices: the reference pair is fixed for the whole frame.
         let skip = leaf.kind == LeafKind::Skip;
         w.write_bits(1, u64::from(skip))?;
         if skip {
             return Ok(());
         }
-        encode_riced(w, MVD_K, i64::from(leaf.mv.0))?;
-        encode_riced(w, MVD_K, i64::from(leaf.mv.1))?;
-        encode_riced(w, MVD_K, i64::from(leaf.mv_b.0))?;
-        encode_riced(w, MVD_K, i64::from(leaf.mv_b.1))?;
-    } else if !ctx.intra_frame {
-        let skip = leaf.kind == LeafKind::Skip;
-        w.write_bits(1, u64::from(skip))?;
-        if skip {
-            return Ok(());
-        }
-        w.write_bits(1, u64::from(leaf.kind == LeafKind::Intra))?;
-    }
-    match leaf.kind {
-        LeafKind::Inter => {
-            if ctx.ref_bits > 0 {
-                w.write_bits(ctx.ref_bits, u64::from(leaf.ref_idx))?;
+        let mode = match leaf.kind {
+            LeafKind::Bi => 0u64,
+            LeafKind::Fwd => 1,
+            LeafKind::Bwd => 2,
+            _ => unreachable!("B leaves are skip, bi, forward- or backward-only"),
+        };
+        w.write_bits(2, mode)?;
+        match leaf.kind {
+            LeafKind::Bi => {
+                encode_riced(w, MVD_K, i64::from(leaf.mv.0))?;
+                encode_riced(w, MVD_K, i64::from(leaf.mv.1))?;
+                encode_riced(w, MVD_K, i64::from(leaf.mv_b.0))?;
+                encode_riced(w, MVD_K, i64::from(leaf.mv_b.1))?;
             }
-            encode_riced(w, MVD_K, i64::from(leaf.mvd.0))?;
-            encode_riced(w, MVD_K, i64::from(leaf.mvd.1))?;
+            LeafKind::Fwd => {
+                encode_riced(w, MVD_K, i64::from(leaf.mv.0))?;
+                encode_riced(w, MVD_K, i64::from(leaf.mv.1))?;
+            }
+            LeafKind::Bwd => {
+                encode_riced(w, MVD_K, i64::from(leaf.mv_b.0))?;
+                encode_riced(w, MVD_K, i64::from(leaf.mv_b.1))?;
+            }
+            _ => unreachable!("B leaves are skip, bi, forward- or backward-only"),
         }
-        // A B leaf's vectors are already on the wire; only its
-        // coefficient tiles follow.
-        LeafKind::Bi => {}
-        LeafKind::Intra => w.write_bits(2, leaf.mode as u64)?,
-        LeafKind::Skip => {}
+    } else {
+        if !ctx.intra_frame {
+            let skip = leaf.kind == LeafKind::Skip;
+            w.write_bits(1, u64::from(skip))?;
+            if skip {
+                return Ok(());
+            }
+            w.write_bits(1, u64::from(leaf.kind == LeafKind::Intra))?;
+        }
+        match leaf.kind {
+            LeafKind::Inter => {
+                if ctx.ref_bits > 0 {
+                    w.write_bits(ctx.ref_bits, u64::from(leaf.ref_idx))?;
+                }
+                encode_riced(w, MVD_K, i64::from(leaf.mvd.0))?;
+                encode_riced(w, MVD_K, i64::from(leaf.mvd.1))?;
+            }
+            LeafKind::Intra => w.write_bits(2, leaf.mode as u64)?,
+            LeafKind::Skip => {}
+            LeafKind::Bi | LeafKind::Fwd | LeafKind::Bwd => {
+                unreachable!("B leaves only exist in B frames")
+            }
+        }
     }
     let mut off = 0usize;
     for pl in 0..ctx.nplanes {
@@ -197,9 +228,9 @@ pub(crate) fn read_leaf(
         coefs: Vec::new(),
     };
     if ctx.b_frame {
-        // B leaves: skip bit, then four Rice-coded motion vectors
-        // against a (0, 0) predictor (past vector, then future vector),
-        // then the coefficient tiles like any other non-skip leaf.
+        // B leaves: skip bit, then the 2-bit combine mode with its
+        // motion vectors (absolute, against a (0, 0) predictor), then
+        // the coefficient tiles like any other non-skip leaf.
         if r.read(1).map_err(bad)? == 1 {
             // A B skip decodes as the zero-vector reference-0 (future)
             // prediction — the exact prediction the encoder prices.
@@ -207,19 +238,33 @@ pub(crate) fn read_leaf(
             leaf.mv_b = (0, 0);
             return Ok(leaf);
         }
-        leaf.kind = LeafKind::Bi;
-        let dx0 = decode_riced(r, MVD_K).map_err(bad)?;
-        let dy0 = decode_riced(r, MVD_K).map_err(bad)?;
-        let dx1 = decode_riced(r, MVD_K).map_err(bad)?;
-        let dy1 = decode_riced(r, MVD_K).map_err(bad)?;
         // Absolute vectors, bounded exactly like the I/P ones (the same
         // `MV_LIMIT` the search clamps to); anything wider is hostile.
         let lim = i64::from(MV_LIMIT);
-        if dx0.abs() > lim || dy0.abs() > lim || dx1.abs() > lim || dy1.abs() > lim {
-            return Err(CodecError::MalformedPacket);
+        let read_v = |r: &mut BitReader| -> Result<(i32, i32), CodecError> {
+            let dx = decode_riced(r, MVD_K).map_err(bad)?;
+            let dy = decode_riced(r, MVD_K).map_err(bad)?;
+            if dx.abs() > lim || dy.abs() > lim {
+                return Err(CodecError::MalformedPacket);
+            }
+            Ok((dx as i32, dy as i32))
+        };
+        match r.read(2).map_err(bad)? {
+            0 => {
+                leaf.kind = LeafKind::Bi;
+                leaf.mv = read_v(r)?;
+                leaf.mv_b = read_v(r)?;
+            }
+            1 => {
+                leaf.kind = LeafKind::Fwd;
+                leaf.mv = read_v(r)?;
+            }
+            2 => {
+                leaf.kind = LeafKind::Bwd;
+                leaf.mv_b = read_v(r)?;
+            }
+            _ => return Err(CodecError::MalformedPacket),
         }
-        leaf.mv = (dx0 as i32, dy0 as i32);
-        leaf.mv_b = (dx1 as i32, dy1 as i32);
     } else {
         let (skip, intra) = if ctx.intra_frame {
             (false, true)
@@ -338,6 +383,29 @@ pub(crate) fn build_pred(
         let (px, py) = if pl == 0 { (x, y) } else { (x / 2, y / 2) };
         match kind {
             LeafKind::Intra => intra_predict(&recon.planes[pl], px, py, m, mode, &mut out.p[pl]),
+            // Single-sided B leaves are inter prediction from one fixed
+            // side of the pair: `Fwd` from the past (`refs[1]`), `Bwd`
+            // from the future (`refs[0]`).
+            LeafKind::Fwd | LeafKind::Bwd => {
+                let (mx, my) = if pl == 0 {
+                    if kind == LeafKind::Fwd { mv } else { mv_b }
+                } else if kind == LeafKind::Fwd {
+                    (chroma_mv(mv.0), chroma_mv(mv.1))
+                } else {
+                    (chroma_mv(mv_b.0), chroma_mv(mv_b.1))
+                };
+                let r = if kind == LeafKind::Fwd { 1usize } else { 0usize };
+                mc_block(
+                    &refs[r].planes[pl],
+                    px,
+                    py,
+                    m,
+                    m,
+                    mx,
+                    my,
+                    &mut out.p[pl],
+                );
+            }
             LeafKind::Skip | LeafKind::Inter => {
                 let (mx, my) = if pl == 0 {
                     mv

@@ -1015,14 +1015,50 @@ impl FrameEnc<'_> {
             );
             self.make_cand(leaf, src, pred, flag_bits)
         };
-        for (mv, mv_b) in [(past, future), (past, (0, 0)), ((0, 0), future)] {
+        // Weighted bi-prediction from the searched pair — the combine
+        // the frame's header weight applies to.
+        {
             let mut leaf = Self::base_leaf(s, LeafKind::Bi);
+            leaf.mv = past;
+            leaf.mv_b = future;
+            let pred = build_pred(
+                &self.recon,
+                self.refs,
+                LeafKind::Bi,
+                0,
+                past,
+                future,
+                IntraMode::Dc,
+                self.ctx.b_weight_past,
+                x,
+                y,
+                s,
+            );
+            let c = self.make_cand(leaf, src, pred, flag_bits);
+            if c.j <= best.j {
+                best = c;
+            }
+        }
+        // True single-sided candidates. Where one reference is simply
+        // the wrong scene (a cut between an anchor and its future) or
+        // the two searches disagree sharply, one sharp prediction beats
+        // the ghosted average and costs two motion vectors fewer; the
+        // 2-bit mode field every non-skip B leaf carries is part of
+        // each candidate's price, so the choice pays for the field or
+        // it does not happen.
+        for kind in [LeafKind::Fwd, LeafKind::Bwd] {
+            let (mv, mv_b) = if kind == LeafKind::Fwd {
+                (past, (0, 0))
+            } else {
+                ((0, 0), future)
+            };
+            let mut leaf = Self::base_leaf(s, kind);
             leaf.mv = mv;
             leaf.mv_b = mv_b;
             let pred = build_pred(
                 &self.recon,
                 self.refs,
-                LeafKind::Bi,
+                kind,
                 0,
                 mv,
                 mv_b,

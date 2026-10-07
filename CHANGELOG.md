@@ -9,6 +9,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 Added
 
+- **Vault's B leaves gain forward-only and backward-only combine modes
+  — the v4 wire, v0.3 stage 2, measured before landing** (2026-10-07):
+  a non-skip B leaf now begins with a 2-bit combine mode (`0` = weighted
+  bi with both vectors and the header weight, `1` = forward-only, `2` =
+  backward-only, `3` reserved-rejected) and carries only that mode's
+  vectors. The design's own sharp edge — 2 bits on every non-skip B
+  leaf — demanded a measurement first, so the candidates were priced at
+  their proposed v4 cost behind a crate-private switch: the straddling
+  scene-cut group cost **42% fewer B bits at +0.54 dB** with the modes,
+  and the control — an ordinary steady pan, where no one would have
+  guessed — **24% fewer B bits at +1.4 dB**, because v3's only
+  single-sided candidates averaged in a zero-vector block from the other
+  reference and ghosted on any motion. With the case that strong, the
+  experiment became the wire and the scaffolding came back out. Two
+  accounting debts settled in the same change: `VaultConfig::
+  max_packet_bits` had under-charged B-leaf motion since v2 (a B leaf
+  writes *four* absolute vectors, 4 · 67 bits at `k = 1`, against the
+  two P deltas charged) — the derivation now charges the worst frame
+  type per unit, and its bound test runs at `b_frames = 2`, which the
+  v0.2 design's own "tests to add" list had called for and nothing had
+  done. `FrameStats` gained `fwd`/`bwd` so the decoder-side census pins
+  the real wire: the straddling cut's A-side B frame goes
+  forward-only, its B-side twin backward-only
+  (`tests/b_frames.rs::single_sided_leaves_carry_straddling_b_frames`).
+  v1-v3 streams are rejected fail-fast under v4; nothing released ever
+  emitted v3.
 - **Vault's B frames gain per-frame weighted prediction — the wire's
   v3 bump, v0.3 stage 1** (2026-10-07): a B frame's header carries a
   2-bit `bweight` naming the *past* reference's share of the
