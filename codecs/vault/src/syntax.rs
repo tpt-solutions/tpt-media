@@ -90,9 +90,15 @@ pub(crate) struct LeafCtx {
     pub b_frame: bool,
     /// Weight of the *past* reference in the B-frame bi-prediction, in
     /// quarters (`1..=3`; `2` is the plain average). The future gets the
-    /// complement. Signalled once per B frame in the v3 header; ignored
+    /// complement. Signalled once per B frame in the header; ignored
     /// outside B frames.
     pub b_weight_past: u8,
+    /// The frame's header announced the long-term reference
+    /// (`ltr_used`): the reference-index field addresses one extra
+    /// value — `num_refs` — naming the long-term picture, and the field
+    /// is one bit wider. Signalled per I/P frame, so parsing never
+    /// depends on decoder state.
+    pub has_ltr: bool,
     /// Bits of the reference index field.
     pub ref_bits: u32,
     pub nplanes: usize,
@@ -283,7 +289,10 @@ pub(crate) fn read_leaf(
             leaf.kind = LeafKind::Inter;
             if ctx.ref_bits > 0 {
                 let idx = r.read(ctx.ref_bits).map_err(bad)? as usize;
-                if idx >= num_refs {
+                // `num_refs` short-term references, plus — exactly when
+                // the frame's `ltr_used` flag said so — one more value
+                // naming the long-term picture.
+                if idx >= num_refs + usize::from(ctx.has_ltr) {
                     return Err(CodecError::MalformedPacket);
                 }
                 leaf.ref_idx = idx as u8;
@@ -366,6 +375,7 @@ impl Blk {
 pub(crate) fn build_pred(
     recon: &Picture,
     refs: &[Picture],
+    ltr: Option<&Picture>,
     kind: LeafKind,
     ref_idx: u8,
     mv: (i32, i32),
@@ -407,13 +417,22 @@ pub(crate) fn build_pred(
                 );
             }
             LeafKind::Skip | LeafKind::Inter => {
+                // The caller has validated `ref_idx < refs.len()`, or —
+                // exactly when the frame's `ltr_used` flag widened the
+                // index field — `ref_idx == refs.len()` naming the
+                // long-term picture.
+                let reference = if ref_idx as usize == refs.len() {
+                    ltr.expect("ltr address validated by the frame's ltr_used flag")
+                } else {
+                    &refs[usize::from(ref_idx)]
+                };
                 let (mx, my) = if pl == 0 {
                     mv
                 } else {
                     (chroma_mv(mv.0), chroma_mv(mv.1))
                 };
                 mc_block(
-                    &refs[usize::from(ref_idx)].planes[pl],
+                    &reference.planes[pl],
                     px,
                     py,
                     m,

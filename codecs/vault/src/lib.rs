@@ -54,12 +54,15 @@
 //! is refused with [`CodecError::Unsupported`]. Width and height are
 //! non-zero multiples of [`MIN_BLOCK`] (8).
 //!
-//! ## Wire format (version 4)
+//! ## Wire format (version 5)
 //!
 //! ```text
 //! 16 bits version | 2 ftype | 6 qp | 5 num_refs | 1 loop_filter | 16 poc
 //!   [+ 2 bits b-weight for B frames: 0 = average, 1 = 1/4 past,
 //!    2 = 3/4 past, 3 reserved]
+//!   [+ 2 bits LTR flags for I/P frames: ltr_used (the leaves'
+//!    reference-index field names the long-term picture as value
+//!    `num_refs`), ltr_update (pin this frame as the new LTR)]
 //! superblocks in raster order, each a quadtree of `split` flags and leaves
 //!   (a non-skip B leaf adds a 2-bit combine mode: 0 = weighted bi,
 //!    1 = forward-only, 2 = backward-only, 3 reserved)
@@ -118,18 +121,17 @@ pub const CODEC_ID: [u8; 4] = *b"VAUL";
 
 /// Bitstream version.
 ///
-/// v4 (2026-10-07) gives non-skip B leaves a 2-bit combine mode
-/// (`0` = weighted bi, `1` = forward-only, `2` = backward-only, `3`
-/// reserved-rejected) replacing the two always-written motion vectors
-/// of the single-sided modes. v3 (earlier the same day) had added the
-/// per-frame bi-prediction weight to B-frame headers — 2 bits after
-/// `poc`, B frames only (`0` = plain average, `1` = 1/4 past + 3/4
-/// future, `2` = 3/4 past + 1/4 future, `3` reserved-rejected) — and
-/// corrected v2's B-leaf payload (B leaves carry their coefficient
-/// tiles — see todo.md Known Issues). v1-v3 streams are rejected
-/// fail-fast per todo.md section 35; nothing released ever emitted
-/// anything but the current version.
-pub const VERSION: u16 = 4;
+/// v5 (2026-10-07) adds two 1-bit long-term-reference flags to I/P
+/// headers (`ltr_used` widens the leaves' reference-index field by one
+/// value naming the LTR; `ltr_update` pins the frame's reconstruction
+/// as the new LTR) — both per-frame wire facts, so parsing never
+/// depends on decoder state. v4 (earlier the same day) gave non-skip
+/// B leaves a 2-bit combine mode; v3 the per-frame bi-prediction
+/// weight; v2 the frame type and `poc` (and corrected B leaves'
+/// missing coefficient tiles — todo.md Known Issues). Earlier versions
+/// are rejected fail-fast per todo.md section 35; nothing released
+/// ever emitted anything but the current version.
+pub const VERSION: u16 = 5;
 
 /// Size in bytes of the per-packet CRC-32 trailer.
 pub const CRC_TRAILER_BYTES: usize = 4;
@@ -317,6 +319,18 @@ pub struct VaultConfig {
     /// intra is an intra to the decoder, however it was decided); the
     /// constants are empirical and untuned on real content.
     pub scene_cut: bool,
+    /// Long-term reference cadence: every this-many coded reference
+    /// frames (I/P), the frame's reconstruction is additionally pinned
+    /// as the **long-term reference** — one picture outside the last-N
+    /// pool, addressable by that stream's P-frame leaves (as reference
+    /// index `num_refs`) until the next update, and surviving intra
+    /// pool resets by design. The value case is content that revisits:
+    /// an A/B/A/B cut can keep predicting from the first A after the
+    /// short-term pool has forgotten it. `0` (the default) disables
+    /// the feature entirely; a decoder under a `max_reference_frames`
+    /// limit needs one slot above `max_refs` when a stream pins an LTR,
+    /// and refuses the update explicitly if it cannot.
+    pub long_term_interval: u32,
     /// Decide the per-frame loop-filter flag by rate–distortion
     /// instead of always signalling [`VaultConfig::loop_filter`]:
     /// after the frame is reconstructed the encoder filters a copy,
@@ -342,6 +356,7 @@ impl Default for VaultConfig {
             rdoq: false,
             scene_cut: false,
             loop_filter_rdo: false,
+            long_term_interval: 0,
         }
     }
 }
@@ -373,9 +388,10 @@ impl VaultConfig {
     ///
     /// - header: 46 bits (16 version + 2 ftype + [`QP_BITS`] + 5
     ///   num_refs + 1 loop_filter + 16 poc) plus 2 for a B frame's
-    ///   weight field — charged unconditionally, so I/P frames are
-    ///   over-charged by 2 bits and the bound stays a proof for every
-    ///   frame type;
+    ///   weight field and 2 for an I/P frame's long-term-reference
+    ///   flags — all charged unconditionally, so every frame type is
+    ///   over-charged to the same 50-bit header and the bound stays a
+    ///   proof for every frame type;
     /// - per 8x8 unit, charged as if every block were 8x8 (larger blocks
     ///   have strictly fewer headers per unit of area) and as if every
     ///   unit were the *worst* frame type: 2 bits of split flags (a
@@ -397,7 +413,7 @@ impl VaultConfig {
     /// The encoder checks the finished packet against this and returns
     /// [`CodecError::Internal`] rather than emit an over-bound packet.
     pub fn max_packet_bits(&self) -> usize {
-        let header = 16 + 2 + u64::from(QP_BITS) + 5 + 1 + 16 + 2;
+        let header = 16 + 2 + u64::from(QP_BITS) + 5 + 1 + 16 + 2 + 2;
         // A P leaf's two deltas of ±2·MV_LIMIT against a B leaf's four
         // absolute vectors of ±MV_LIMIT — the B case is the larger, and
         // it is charged for every unit of every frame type.

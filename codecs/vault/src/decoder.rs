@@ -40,8 +40,11 @@ use crate::{
 /// Vault decoder.
 ///
 /// Keeps up to [`VaultConfig::max_refs`] reference pictures (most recent
-/// first; each loop-filtered exactly when its own header bit said so) and
-/// a copy of the last emitted frame for
+/// first; each loop-filtered exactly when its own header bit said so),
+/// optionally one long-term reference outside that pool (pinned by a
+/// frame's `ltr_update` header bit and addressable by that stream's
+/// P-frame leaves until replaced; it survives the intra-frame pool
+/// reset by design), and a copy of the last emitted frame for
 /// [`VaultDecoder::conceal`]. B-frames are held in a reorder buffer until
 /// their display position comes up; everything else is one frame out per
 /// packet in.
@@ -50,6 +53,9 @@ pub struct VaultDecoder {
     cfg: CodecConfig,
     enc: VaultConfig,
     refs: Vec<Picture>,
+    /// The long-term reference, once a frame's `ltr_update` bit has
+    /// pinned one.
+    ltr: Option<Picture>,
     scans: Scans,
     xf: Xform,
     stats: FrameStats,
@@ -81,6 +87,7 @@ impl VaultDecoder {
             cfg: codec_cfg,
             enc,
             refs: Vec::new(),
+            ltr: None,
             scans: Scans::new(),
             xf: Xform::new(),
             reorder: Vec::new(),
@@ -131,6 +138,9 @@ pub struct FrameStats {
     pub inter: u32,
     /// Bi-predictive leaves (B frames only).
     pub bi: u32,
+    /// Leaves naming the long-term reference (P frames, while the
+    /// stream holds one).
+    pub ltr: u32,
     /// Forward-only leaves (B frames only): predicted from the past
     /// reference alone.
     pub fwd: u32,
@@ -158,6 +168,7 @@ pub struct FrameStats {
 /// Everything one frame's parse needs.
 struct FrameDec<'a> {
     refs: &'a [Picture],
+    ltr: Option<&'a Picture>,
     scans: &'a Scans,
     xf: &'a mut Xform,
     recon: Picture,
@@ -225,9 +236,13 @@ impl FrameDec<'_> {
         if leaf.coded() {
             st.coded += 1;
         }
+        if leaf.kind == LeafKind::Inter && self.ctx.has_ltr && leaf.ref_idx as usize == self.num_refs {
+            self.stats.ltr += 1;
+        }
         let pred = build_pred(
             &self.recon,
             self.refs,
+            self.ltr,
             leaf.kind,
             leaf.ref_idx,
             leaf.mv,
@@ -272,7 +287,9 @@ impl Decoder for VaultDecoder {
         limits.check_recursion_depth(MAX_PARTITION_DEPTH + 1)?;
         let frame_bytes = self.enc.frame_bytes();
         limits.check_frame_bytes(frame_bytes)?;
-        limits.check_allocation(frame_bytes.saturating_mul(usize::from(self.enc.max_refs) + 2))?;
+        // Short-term pool + the output picture + the long-term slot a
+        // stream may pin at any packet.
+        limits.check_allocation(frame_bytes.saturating_mul(usize::from(self.enc.max_refs) + 3))?;
 
         if packet.data.len() < CRC_TRAILER_BYTES {
             return Err(CodecError::MalformedPacket);
@@ -302,19 +319,33 @@ impl Decoder for VaultDecoder {
         let lf = r.read(1).map_err(bad)? == 1;
         // Display position within the GOP: the reorder key.
         let poc = r.read(16).map_err(bad)? as u16;
-        // The v3 header's per-frame bi-prediction weight (B frames only):
-        // the past reference's share in quarters, encoded as 0 = 2/4
-        // (plain average), 1 = 1/4, 2 = 3/4; 3 is reserved-rejected.
-        let b_weight_past = if ftype == crate::ftype::B {
-            match r.read(2).map_err(bad)? {
+        // After the display position, the frame-type-specific fields:
+        // B frames carry the bi-prediction weight (the past reference's
+        // share in quarters, 0 = 2/4 plain average, 1 = 1/4, 2 = 3/4,
+        // 3 reserved-rejected); I/P frames carry the two long-term
+        // reference flags. `ltr_used` widens this frame's leaf
+        // reference-index field by one value naming the LTR; `ltr_update`
+        // pins this frame's reconstruction as the new LTR once it
+        // decodes. Both are per-frame wire facts, so parsing never
+        // depends on decoder state.
+        let (b_weight_past, ltr_used, ltr_update) = if ftype == crate::ftype::B {
+            let w = match r.read(2).map_err(bad)? {
                 0 => 2u8,
                 1 => 1,
                 2 => 3,
                 _ => return Err(CodecError::MalformedPacket),
-            }
+            };
+            (w, false, false)
         } else {
-            2
+            let used = r.read(1).map_err(bad)? == 1;
+            let update = r.read(1).map_err(bad)? == 1;
+            (2, used, update)
         };
+        // A frame naming the long-term reference at a decoder that has
+        // none is the joined-mid-stream case: undecodable, not damaged.
+        if ltr_used && self.ltr.is_none() {
+            return Err(CodecError::NeedMoreInput);
+        }
         let intra = ftype == crate::ftype::I;
         if intra != (num_refs == 0) {
             return Err(CodecError::MalformedPacket);
@@ -337,6 +368,7 @@ impl Decoder for VaultDecoder {
         let (w, h) = (self.enc.width as usize, self.enc.height as usize);
         let mut fd = FrameDec {
             refs: &self.refs[..num_refs],
+            ltr: self.ltr.as_ref().filter(|_| ltr_used),
             scans: &self.scans,
             xf: &mut self.xf,
             recon: Picture::new(w, h, self.enc.format, 0),
@@ -346,7 +378,8 @@ impl Decoder for VaultDecoder {
                 intra_frame: intra,
                 b_frame: ftype == crate::ftype::B,
                 b_weight_past,
-                ref_bits: ref_index_bits(num_refs),
+                has_ltr: ltr_used,
+                ref_bits: ref_index_bits(num_refs + usize::from(ltr_used)),
                 nplanes: if self.enc.format == tpt_media_core::PixelFormat::Yuv420 {
                     3
                 } else {
@@ -377,8 +410,19 @@ impl Decoder for VaultDecoder {
         }
 
         self.stats = stats;
+        let ltr_pin = if ltr_update { Some(recon.clone()) } else { None };
         let frame = picture_to_frame(&recon, packet.pts);
+        // The LTR is one reference frame beyond the short-term pool:
+        // pinning one is refused by the same knob before any state
+        // changes, so a decoder under a tight limit fails explicitly
+        // instead of over-holding.
+        if ltr_update {
+            limits.check_reference_frames(self.enc.max_refs + 1)?;
+        }
         if intra {
+            // The short-term pool resets on an intra frame; the
+            // long-term reference deliberately survives it — surviving
+            // scene changes is the reason it exists.
             self.refs.clear();
             self.next_poc = 0;
         }
@@ -387,6 +431,9 @@ impl Decoder for VaultDecoder {
         if ftype != crate::ftype::B {
             self.refs.insert(0, recon);
             self.refs.truncate(usize::from(self.enc.max_refs));
+        }
+        if ltr_update {
+            self.ltr = ltr_pin;
         }
 
         // Display-order emission: a frame whose poc is next emits
@@ -409,6 +456,7 @@ impl Decoder for VaultDecoder {
         self.reorder.clear();
         self.next_poc = 0;
         self.refs.clear();
+        self.ltr = None;
         Ok(out)
     }
 }

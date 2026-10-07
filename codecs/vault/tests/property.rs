@@ -468,19 +468,21 @@ fn hostile_headers_are_rejected() {
     let (_, mut dec) = pair(&c);
     dec.decode(&i_pkt).unwrap();
 
-    // Header bit layout (v4): 16 version | 2 ftype | 6 qp | 5 num_refs
-    // | 1 lf | 16 poc (B frames add a 2-bit weight after poc and a
-    // 2-bit combine mode per non-skip leaf; these crafted headers are
-    // all I/P, so they end at 46 bits).
-    let build = |version: u16, ftype: u8, qp: u8, refs: u8| {
+    // Header bit layout (v5): 16 version | 2 ftype | 6 qp | 5 num_refs
+    // | 1 lf | 16 poc | 2 LTR flags on I/P frames (B frames carry a
+    // 2-bit weight instead; these crafted headers are all I/P, so they
+    // end at 48 bits with both LTR flags clear).
+    let build = |version: u16, ftype: u8, qp: u8, refs: u8, ltr_used: bool| {
         let mut bits: u64 = u64::from(version);
         bits = (bits << 2) | u64::from(ftype);
         bits = (bits << 6) | u64::from(qp);
         bits = (bits << 5) | u64::from(refs);
         bits = (bits << 1) | 1;
         bits <<= 16; // poc
-                     // 46 bits total -> left-align in the byte stream.
-        let v = bits << (64 - 46);
+        bits = (bits << 1) | u64::from(ltr_used);
+        bits <<= 1; // ltr_update = 0
+                    // 48 bits total -> left-align in the byte stream.
+        let v = bits << (64 - 48);
         let mut data = v.to_be_bytes().to_vec();
         data.truncate(6);
         data.extend_from_slice(&[0u8; 16]);
@@ -494,53 +496,64 @@ fn hostile_headers_are_rejected() {
     };
 
     assert!(matches!(
-        dec.decode(&build(1, 0, 20, 0)),
+        dec.decode(&build(1, 0, 20, 0, false)),
         Err(CodecError::Unsupported(_))
     ));
     // Every superseded version is rejected fail-fast (todo.md 35), and
     // an out-of-repo future version with it.
     assert!(matches!(
-        dec.decode(&build(2, 0, 20, 0)),
+        dec.decode(&build(2, 0, 20, 0, false)),
         Err(CodecError::Unsupported(_))
     ));
     assert!(matches!(
-        dec.decode(&build(3, 0, 20, 0)),
+        dec.decode(&build(3, 0, 20, 0, false)),
         Err(CodecError::Unsupported(_))
     ));
     assert!(matches!(
-        dec.decode(&build(5, 0, 20, 0)),
+        dec.decode(&build(4, 0, 20, 0, false)),
         Err(CodecError::Unsupported(_))
     ));
+    assert!(matches!(
+        dec.decode(&build(6, 0, 20, 0, false)),
+        Err(CodecError::Unsupported(_))
+    ));
+    // `ltr_used` on a decoder holding no long-term reference is the
+    // joined-mid-stream case: undecodable, not damaged.
+    assert_eq!(
+        dec.decode(&build(5, 1, 20, 1, true)),
+        Err(CodecError::NeedMoreInput),
+        "ltr_used without an LTR"
+    );
     for qp in [0u8, 52, 63] {
         assert_eq!(
-            dec.decode(&build(4, 0, qp, 0)),
+            dec.decode(&build(5, 0, qp, 0, false)),
             Err(CodecError::MalformedPacket),
             "qp {qp}"
         );
     }
     // Reserved frame type is malformed, not unsupported.
     assert_eq!(
-        dec.decode(&build(4, 3, 20, 0)),
+        dec.decode(&build(5, 3, 20, 0, false)),
         Err(CodecError::MalformedPacket),
         "reserved ftype"
     );
     // Intra with references, P without.
     assert_eq!(
-        dec.decode(&build(4, 0, 20, 1)),
+        dec.decode(&build(5, 0, 20, 1, false)),
         Err(CodecError::MalformedPacket)
     );
     assert_eq!(
-        dec.decode(&build(4, 1, 20, 0)),
+        dec.decode(&build(5, 1, 20, 0, false)),
         Err(CodecError::MalformedPacket)
     );
     // More references than the codec supports at all.
     assert_eq!(
-        dec.decode(&build(4, 1, 20, 17)),
+        dec.decode(&build(5, 1, 20, 17, false)),
         Err(CodecError::MalformedPacket)
     );
     // Within the codec's range but beyond the decoder's `max_refs` (4).
     assert_eq!(
-        dec.decode(&build(4, 1, 20, 9)),
+        dec.decode(&build(5, 1, 20, 9, false)),
         Err(CodecError::ResourceLimit(
             ResourceLimitKind::ReferenceFrames
         ))

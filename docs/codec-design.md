@@ -412,30 +412,31 @@ holds, and is tested, is narrower: each decision is the cheapest among the
 alternatives that were priced, and freeing the partition never does worse
 on `J` than forcing 8×8 on the test frames.
 
-**Wire format (version 4).** v4 (2026-10-07) gives non-skip B leaves a
-2-bit combine mode (v0.3 stage 2 below). v3 (earlier the same day)
-added a 2-bit per-frame bi-prediction weight to B-frame headers
-(v0.3 stage 1 below). v2 (2026-10-05, superseded within its
-unreleased window when the B-leaf payload was corrected — todo.md
-Known Issues) had replaced v1's 1-bit `intra` flag with a 2-bit frame
-type and added a 16-bit per-frame `poc`; v1-v3 streams are rejected
-fail-fast. The v4 layout:
+**Wire format (version 5).** v5 (2026-10-07) adds two 1-bit
+long-term-reference flags to I/P headers (v0.3 stage 3 below). v4
+(earlier the same day) gave non-skip B leaves a 2-bit combine mode
+(stage 2); v3 a 2-bit per-frame bi-prediction weight (stage 1); v2
+(2026-10-05, superseded within its unreleased window when the B-leaf
+payload was corrected — todo.md Known Issues) had replaced v1's 1-bit
+`intra` flag with a 2-bit frame type and added a 16-bit per-frame
+`poc`; v1-v4 streams are rejected fail-fast. The v5 layout:
 
 | field | bits | meaning |
 | ----- | ---- | ------- |
-| `version` | 16 | bitstream version, `4`; rejected up front if not |
+| `version` | 16 | bitstream version, `5`; rejected up front if not |
 | `ftype` | 2 | `0` = intra, `1` = predictive, `2` = bi-predictive, `3` rejected as malformed |
 | `qp` | 6 | `1..=51` |
 | `num_refs` | 5 | 0 iff intra; else `1..=16`, at most the decoder's `max_refs` and the references it holds |
 | `loop_filter` | 1 | run the loop filter |
 | `poc` | 16 | display position within the current GOP; the B-frame reordering key |
 | `bweight` | 2 | B frames only: the *past* reference's share of the bi-prediction in quarters — `0` = 2/4 (plain average), `1` = 1/4, `2` = 3/4, `3` rejected as malformed |
+| `ltr_used`, `ltr_update` | 1+1 | I/P frames only: `ltr_used` widens this frame's leaf reference-index field by one value (`num_refs`) naming the long-term picture; `ltr_update` pins this frame's reconstruction as the new LTR once it decodes |
 | payload | — | superblock partition tree + per-leaf syntax; a non-skip B leaf begins with a 2-bit combine mode (`0` = weighted bi, `1` = forward-only, `2` = backward-only, `3` rejected as malformed) and carries only that mode's motion vectors |
 | `crc32` | 32 | IEEE 802.3 CRC-32 (little-endian) over all preceding bytes, verified before parsing |
 
-The v3 layout was this minus the per-leaf combine mode; the v2 layout
-minus `bweight`; the v1 layout differed only in the 1-bit `intra` flag
-and the absent `poc`.
+The v4 layout was this minus the LTR flags; v3 minus the combine mode;
+v2 minus `bweight`; the v1 layout differed only in the 1-bit `intra`
+flag and the absent `poc`.
 
 | field | bits | meaning |
 | ----- | ---- | ------- |
@@ -611,26 +612,30 @@ happened). A decoder-side census test pins real `Fwd` leaves carrying
 the straddling group's A-side B frame and real `Bwd` leaves its
 B-side twin.
 
-**Stage 3 — one long-term reference (wire v5).** The value case
-is the census test's own A/B/A/B content: the last-N-pictures
-reference store forgets the first A by the time the second A arrives,
-and multi-reference only pays when the revisit is recent. Design: one
-extra decoder slot outside the short-term pool. Frame header gains
-`ltr_update` (1 bit: "make this frame's reconstruction the long-term
-picture", valid on I/P frames only) and the per-leaf reference index
-space extends by one address naming that slot (5-bit `num_refs` field
-stays the short-term count; the leaf-level index grows a 6th "long-term"
-value — cheapest as one extra wire value on the existing field, not a
-second field). The decoder's `max_reference_frames` limit accounts for
-the extra slot. The encoder prices the long-term picture as one more
-candidate reference in the existing search. Sharp edges: an LTR
-survives intra refreshes (it must, or it is pointless) — the I-frame
-reference-store reset keeps the LTR, which changes the cold-start
-invariant the hostile-input tests rely on; and a stream joining
-mid-GOP hits `NeedMoreInput` naming the LTR. Tests before coding:
-A/B/A/B rate with and without LTR (the value case must show), hostile
-headers over the new flag, drift-freedom with LTR + B frames + scene
-cut together.
+**Stage 3 — one long-term reference (wire v5) — shipped 2026-10-07.**
+The value case is the census test's own A/B/A/B content: the
+last-N-pictures reference store forgets the first A by the time the
+second A arrives. Shipped as designed, with one deviation the design's
+own sharp edge forced: the leaf index field's *width* must never
+depend on decoder state, or a decoder that missed the LTR-setting
+packet would misparse every later P frame — so the I/P header carries
+an explicit `ltr_used` flag announcing the widened index (plus
+`ltr_update` for the pin), and a frame naming the LTR at a decoder
+without one fails at the header with `NeedMoreInput`, the same
+graceful joined-mid-stream answer the short-term pool gets. The
+encoder selects LTR frames by the `long_term_interval` knob (0 = off,
+the default; every N coded reference frames, I and P alike). The LTR
+is one slot outside the short-term pool: P leaves address it as index
+`num_refs` when the flag says the field widened, the intra pool reset
+deliberately leaves it standing, `max_reference_frames` is checked
+against `max_refs + 1` at the moment a stream pins an update (so a
+decoder under a tight limit fails explicitly instead of
+over-holding), and the decoder-side census counts leaves that name
+it. Tests as the design listed: the A/B/A/B value case shows the
+second A measurably cheaper with the LTR than without and the census
+proving use (`tests/ltr.rs`); the hostile-header case pins
+`ltr_used`-without-an-LTR as `NeedMoreInput`; drift-freedom holds
+through LTR updates, scene cuts, and the B-frame path together.
 
 **Not planned: reference reordering as a standalone feature.** Every
 inter leaf already names its reference explicitly, so reordering the

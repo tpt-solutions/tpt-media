@@ -159,6 +159,14 @@ pub struct VaultEncoder {
     /// `true` while an anchor is coded and its B's await the future
     /// reference that closes the group.
     b_awaiting_future: bool,
+    /// The long-term reference: a reconstruction pinned outside the
+    /// last-N pool so content that revisits (an A/B/A/B cut) can keep
+    /// predicting from its own scene. Selected by
+    /// [`VaultConfig::long_term_interval`]; addressable as reference
+    /// index `num_refs` by P-frame leaves while it exists.
+    ltr: Option<Picture>,
+    /// Reference frames (I/P) coded since the last long-term update.
+    since_ltr: u64,
 }
 
 impl VaultEncoder {
@@ -190,6 +198,7 @@ impl VaultEncoder {
                 ..Capabilities::default()
             },
         );
+        let long_term_interval = enc.long_term_interval;
         Ok(VaultEncoder {
             info,
             cfg: codec_cfg,
@@ -205,6 +214,8 @@ impl VaultEncoder {
             gop_poc: 0,
             pending: alloc::collections::VecDeque::new(),
             b_awaiting_future: false,
+            ltr: None,
+            since_ltr: u64::from(long_term_interval),
         })
     }
 
@@ -540,6 +551,18 @@ impl VaultEncoder {
         pts: Timestamp,
     ) -> CodecResult<(Packet, Picture)> {
         let src = picture_from_frame(frame)?;
+        let is_b = ftype == crate::ftype::B;
+        // Long-term-reference cadence: every `long_term_interval`
+        // coded reference frames (I/P — B frames are never references
+        // and never addressable as the LTR), the frame's reconstruction
+        // is additionally pinned as the LTR, and P-frame leaves may
+        // name the existing one while it exists. Both facts travel in
+        // the frame header (`ltr_used` / `ltr_update`), so a decoder
+        // parses without depending on its own state.
+        let ltr_update = !is_b
+            && self.enc.long_term_interval > 0
+            && self.since_ltr + 1 >= u64::from(self.enc.long_term_interval);
+        let ltr_used = !is_b && !matches!(ftype, crate::ftype::I) && num_refs > 0 && self.ltr.is_some();
         let rc = self.enc.target_bits_per_frame.is_some();
         let target = self.enc.target_bits_per_frame.unwrap_or(0) as u64;
         let mut qp = self.rc_qp.clamp(1, i32::from(MAX_QP)) as u8;
@@ -568,9 +591,11 @@ impl VaultEncoder {
         let is_b = ftype == crate::ftype::B;
         let mut weight = 2u8;
         let mut out = if is_b {
-            let mut best = self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight)?;
+            let mut best =
+                self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight, false, false)?;
             for w in [1u8, 3] {
-                let cand = self.encode_at_qp(&src, qp, ftype, poc, num_refs, w)?;
+                let cand =
+                    self.encode_at_qp(&src, qp, ftype, poc, num_refs, w, false, false)?;
                 if cand.frame_j < best.frame_j {
                     best = cand;
                     weight = w;
@@ -578,7 +603,7 @@ impl VaultEncoder {
             }
             best
         } else {
-            self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight)?
+            self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight, ltr_used, ltr_update)?
         };
         let mut bits = out.bits;
         let mut attempts = 1usize;
@@ -590,7 +615,8 @@ impl VaultEncoder {
                     1
                 };
                 qp = (qp + jump).min(MAX_QP);
-                out = self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight)?;
+                out =
+                    self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight, ltr_used, ltr_update)?;
                 bits = out.bits;
                 attempts += 1;
             }
@@ -603,8 +629,16 @@ impl VaultEncoder {
             if bits < frame_target * 7 / 8 && self.rc_debt <= 0.0 && qp > 1 && attempts < 3 {
                 let jump = if bits < frame_target / 4 { 2 } else { 1 };
                 let finer_qp = qp.saturating_sub(jump).max(1);
-                let finer =
-                    self.encode_at_qp(&src, finer_qp, ftype, poc, num_refs, weight)?;
+                let finer = self.encode_at_qp(
+                    &src,
+                    finer_qp,
+                    ftype,
+                    poc,
+                    num_refs,
+                    weight,
+                    ltr_used,
+                    ltr_update,
+                )?;
                 let credit = (-self.rc_debt) as u64;
                 if finer.bits <= frame_target + credit.min(frame_target.saturating_mul(2)) {
                     out = finer;
@@ -647,6 +681,14 @@ impl VaultEncoder {
         data.extend_from_slice(&crc.to_le_bytes());
         debug_assert!(data.len() <= self.enc.max_packet_bits().div_ceil(8) + CRC_TRAILER_BYTES);
 
+        if is_b {
+            self.since_ltr += 1;
+        } else if ltr_update {
+            self.ltr = Some(recon.clone());
+            self.since_ltr = 0;
+        } else {
+            self.since_ltr += 1;
+        }
         let pkt = Packet {
             data,
             pts,
@@ -670,6 +712,8 @@ impl VaultEncoder {
         poc: u16,
         num_refs: usize,
         b_weight_past: u8,
+        ltr_used: bool,
+        ltr_update: bool,
     ) -> CodecResult<EncodedFrame> {
         let intra = ftype == crate::ftype::I;
         let step = quant_step(qp);
@@ -687,14 +731,16 @@ impl VaultEncoder {
             lambda_sad: LAMBDA_SAD_SCALE * step,
             max_block: self.enc.max_block_size,
             search_range: i32::from(self.enc.search_range),
+            ltr: self.ltr.as_ref().filter(|_| ltr_used),
             ctx: LeafCtx {
                 intra_frame: intra,
                 b_frame: ftype == crate::ftype::B,
                 b_weight_past,
+                has_ltr: ltr_used,
                 ref_bits: if ftype == crate::ftype::B {
                     0
                 } else {
-                    ref_index_bits(num_refs)
+                    ref_index_bits(num_refs + usize::from(ltr_used))
                 },
                 nplanes: src.nplanes(),
             },
@@ -712,15 +758,22 @@ impl VaultEncoder {
             .map_err(werr)?;
         w.write_bits(16, u64::from(poc)).map_err(werr)?;
         if ftype == crate::ftype::B {
-            // The v3 header's per-frame bi-prediction weight: the past
-            // reference's share in quarters, encoded as 0 = 2/4 (plain
-            // average), 1 = 1/4, 2 = 3/4; 3 is reserved-rejected.
+            // The per-frame bi-prediction weight: the past reference's
+            // share in quarters, encoded as 0 = 2/4 (plain average),
+            // 1 = 1/4, 2 = 3/4; 3 is reserved-rejected.
             let wire = match b_weight_past {
                 1 => 1u64,
                 3 => 2,
                 _ => 0,
             };
             w.write_bits(2, wire).map_err(werr)?;
+        } else {
+            // The long-term-reference flags, I/P frames only: `ltr_used`
+            // widens the leaves' reference-index field by one value
+            // naming the LTR, `ltr_update` pins this frame's
+            // reconstruction as the new LTR after it decodes.
+            w.write_bits(1, u64::from(ltr_used)).map_err(werr)?;
+            w.write_bits(1, u64::from(ltr_update)).map_err(werr)?;
         }
 
         for sy in (0..src.height).step_by(SUPERBLOCK) {
@@ -797,6 +850,9 @@ fn picture_ssd(a: &Picture, b: &Picture) -> u64 {
 struct FrameEnc<'a> {
     src: &'a Picture,
     refs: &'a [Picture],
+    /// The long-term reference, when this frame's `ltr_used` flag
+    /// widened the index field to name it (address `refs.len()`).
+    ltr: Option<&'a Picture>,
     scans: &'a Scans,
     xf: Xform,
     recon: Picture,
@@ -1003,6 +1059,7 @@ impl FrameEnc<'_> {
             let pred = build_pred(
                 &self.recon,
                 self.refs,
+                self.ltr,
                 LeafKind::Skip,
                 0,
                 (0, 0),
@@ -1024,6 +1081,7 @@ impl FrameEnc<'_> {
             let pred = build_pred(
                 &self.recon,
                 self.refs,
+                self.ltr,
                 LeafKind::Bi,
                 0,
                 past,
@@ -1058,6 +1116,7 @@ impl FrameEnc<'_> {
             let pred = build_pred(
                 &self.recon,
                 self.refs,
+                self.ltr,
                 kind,
                 0,
                 mv,
@@ -1114,6 +1173,7 @@ impl FrameEnc<'_> {
         let pred = build_pred(
             &self.recon,
             self.refs,
+            self.ltr,
             LeafKind::Intra,
             0,
             (0, 0),
@@ -1135,11 +1195,16 @@ impl FrameEnc<'_> {
         }
         let mut pick: Option<(u8, (i32, i32), f32)> = None;
         let refs = self.refs;
-        for (r, rp) in refs.iter().enumerate() {
-            let ref_cost = self.lambda_sad * ref_index_bits(refs.len()) as f32;
+        let n_addressable = refs.len() + usize::from(self.ltr.is_some());
+        let ref_cost = self.lambda_sad * ref_index_bits(n_addressable) as f32;
+        for r in 0..n_addressable {
+            let plane = match self.ltr {
+                Some(l) if r == refs.len() => &l.planes[0],
+                _ => &refs[r].planes[0],
+            };
             let (mv, cost) = {
                 let mut se = Searcher {
-                    plane: &rp.planes[0],
+                    plane,
                     src: &src.p[0],
                     x,
                     y,
@@ -1163,6 +1228,7 @@ impl FrameEnc<'_> {
             let pred = build_pred(
                 &self.recon,
                 self.refs,
+                self.ltr,
                 LeafKind::Inter,
                 r,
                 mv,
@@ -1185,6 +1251,7 @@ impl FrameEnc<'_> {
         let pred = build_pred(
             &self.recon,
             self.refs,
+            self.ltr,
             LeafKind::Skip,
             0,
             pmv,

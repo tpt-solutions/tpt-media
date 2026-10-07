@@ -500,6 +500,7 @@ fn b_leaf_combine_modes_parse_and_reject_reserved() {
         intra_frame: false,
         b_frame: true,
         b_weight_past: 2,
+        has_ltr: false,
         ref_bits: 0,
         nplanes: 1,
     };
