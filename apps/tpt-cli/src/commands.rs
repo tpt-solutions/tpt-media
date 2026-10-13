@@ -2084,7 +2084,22 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     let mut decode_ms = Vec::new();
     let mut last_pass: Option<(Vec<tpt_media_core::Packet>, Vec<tpt_media_core::AudioFrame>)> =
         None;
+    let version = encoder.info().version;
     for run in 0..=runs {
+        // Overlap-add codecs (Cinder v2) carry state across a pass, so a
+        // reused pair would start every measured pass mid-stream and report
+        // garbage quality. The warm-up pass keeps the pair built above;
+        // each measured pass gets a fresh one.
+        if run > 0 {
+            encoder = match build_encoder(codec, rate, bits_per_coef) {
+                Ok(e) => e,
+                Err(e) => return Outcome::fail(1, e),
+            };
+            decoder = match make_decoder(codec, rate, version, &private) {
+                Ok(d) => d,
+                Err(e) => return Outcome::fail(1, e),
+            };
+        }
         match bench_pass(encoder.as_mut(), decoder.as_mut(), &blocks) {
             Ok((e, d, packets, frames)) => {
                 if run > 0 {
