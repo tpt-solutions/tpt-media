@@ -1854,8 +1854,12 @@ fn benchmark_video(spec: &OpSpec, input: &[u8], codec: VideoCodec) -> Outcome {
         0.0
     };
     let bpp = crate::quality::bits_per_pixel(payload_bytes, count as u64, pixels);
-    let bitrate =
-        crate::quality::video_bitrate_bits_per_second(payload_bytes, count as u64, params.fps_num);
+    let bitrate = crate::quality::video_bitrate_bits_per_second_rational(
+        payload_bytes,
+        count as u64,
+        params.fps_num,
+        params.fps_den,
+    );
 
     if spec.json {
         let mut j = crate::json::J::new();

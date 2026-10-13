@@ -187,6 +187,23 @@ pub fn video_bitrate_bits_per_second(
     Some((encoded_bytes * 8).checked_mul(u64::from(fps))? / frame_count)
 }
 
+/// [`video_bitrate_bits_per_second`] for a rational frame rate
+/// (`fps_num / fps_den`, e.g. 30000/1001): `bytes*8 * fps_num /
+/// (frame_count * fps_den)`. Returns `None` for a zero frame count or a
+/// zero denominator, and on overflow.
+pub fn video_bitrate_bits_per_second_rational(
+    encoded_bytes: u64,
+    frame_count: u64,
+    fps_num: u32,
+    fps_den: u32,
+) -> Option<u64> {
+    let denom = frame_count.checked_mul(u64::from(fps_den))?;
+    if denom == 0 {
+        return None;
+    }
+    Some((encoded_bytes * 8).checked_mul(u64::from(fps_num))? / denom)
+}
+
 /// Bits per pixel, the standard way video rate is normalised across
 /// resolutions: `bytes * 8 / (frames * pixels_per_frame)`.
 ///
@@ -717,6 +734,14 @@ mod tests {
         // 25 frames/s of that is 2500 bytes/s = 20 000 bit/s.
         assert_eq!(video_bitrate_bits_per_second(1000, 10, 25), Some(20_000));
         assert_eq!(video_bitrate_bits_per_second(1000, 0, 25), None);
+        // NTSC 30000/1001: 100 frames is 3.337 s, so 86 122 bytes is
+        // ~206.5 kbit/s, not 1000x that (the benchmark once passed the
+        // numerator alone).
+        let bps = video_bitrate_bits_per_second_rational(86_122, 100, 30_000, 1001).unwrap();
+        assert!((206_000..207_000).contains(&bps), "{bps}");
+        assert_eq!(video_bitrate_bits_per_second_rational(1000, 10, 25, 1), Some(20_000));
+        assert_eq!(video_bitrate_bits_per_second_rational(1000, 0, 25, 1), None);
+        assert_eq!(video_bitrate_bits_per_second_rational(1000, 10, 25, 0), None);
         // 1000 bytes over 10 frames of 320x240 = 8000 / (10*76800) bpp.
         let bpp = bits_per_pixel(1000, 10, 320 * 240).expect("defined");
         assert!((bpp - 0.010_416_666_666_666_666).abs() < 1e-12, "{bpp}");

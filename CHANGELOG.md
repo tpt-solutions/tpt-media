@@ -546,6 +546,13 @@ Added
 
 ### Fixed
 
+- **`tpt benchmark` (video) reported its bitrate ~1000× too high for
+  fractional frame rates** (2026-10-14, found by the new `benchmarks/run.py`
+  harness cross-checking `payload_bytes`): the bitrate was computed with the
+  frame-rate *numerator* alone, so a 30000/1001 clip was treated as 30000 fps
+  (206 kbit/s printed as 206 692 800). Now computed from the full rational
+  rate (`video_bitrate_bits_per_second_rational`); integer-rate clips were
+  never affected.
 - **Vault's B frames coded no residual at all, and priced candidates the
   decoder never renders** (2026-10-07, found by a per-frame PSNR probe two
   days after the B-frames landed - not by the display-order tests that
