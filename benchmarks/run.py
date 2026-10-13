@@ -9,8 +9,8 @@
 Video: Thrum and Vault (quality sweep) vs x264 / x265 / SVT-AV1 (CRF sweep),
 all scored by the same ffmpeg PSNR/SSIM filters on decoded output, rate taken
 from the raw payload (no container overhead on either side).
-Audio: Aura (lossless) vs FLAC and an LPC-residual entropy estimate.
-Cinder is deliberately excluded until the v2 overlap-add redesign lands.
+Audio: Aura (lossless) vs FLAC and an LPC-residual entropy estimate; Cinder
+(lossy) and Opus against a Gaussian rate-distortion bound.
 """
 import datetime, json, math, os, re, subprocess, sys, tempfile, time
 from pathlib import Path
@@ -174,6 +174,118 @@ def lpc_entropy_bits(x, order=32, block=4096):
     return total
 
 
+# Cinder's quality setting maps to bits via 4 + floor(8q/100). These are the
+# quality values that land exactly on each bit depth 4..=12.
+CINDER_BITS = list(range(4, 13))
+CINDER_QUALITY = [0, 13, 25, 38, 50, 63, 75, 88, 100]
+# Per-band step, half-octave grid from the wire's minimum (1/1024) to its maximum (64).
+CINDER_STEPS = [2 ** (k / 2) for k in range(-20, 12)]
+OPUS_KBPS = [12, 16, 24, 32, 48, 64, 96, 128]
+SNR_TARGETS = [10, 15, 20, 25, 30]
+
+
+def wav_samples(path):
+    import wave
+    with wave.open(str(path)) as w:
+        return np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(np.float64)
+
+
+def snr_db(ref, test):
+    n = min(len(ref), len(test))
+    err = ((ref[:n] - test[:n]) ** 2).sum()
+    return 10 * math.log10((ref[:n] ** 2).sum() / max(err, 1e-12))
+
+
+def cinder_sweep(wav, tmp):
+    """Every (bit depth, step) pair on the grid. Cinder's rate is fixed by its
+    bit depth alone (no entropy coding), so the step is the only free choice
+    at each rate; the envelope over the grid is what a perfect rate control
+    could reach."""
+    ref = wav_samples(wav)
+    pts = []
+    seconds = len(ref) / 48000
+    for bits, q in zip(CINDER_BITS, CINDER_QUALITY):
+        for step in CINDER_STEPS:
+            out, dec = tmp / "c.tpt", tmp / "c.wav"
+            sh([TPT, "encode", "--codec", "cinder", "--quality", q, "--band-step", f"{step:.6f}", wav, out])
+            sh([TPT, "decode", "--codec", "cinder", "--container", "wav", out, dec])
+            pts.append(dict(bits=bits, step=round(step, 6), kbps=kbps(out.stat().st_size, seconds),
+                            snr_db=snr_db(ref, wav_samples(dec))))
+        best = max((p for p in pts if p["bits"] == bits), key=lambda p: p["snr_db"])
+        print(f"   cinder {bits} bits: best step {best['step']} -> {best['kbps']:.0f} kbps, {best['snr_db']:.2f} dB", flush=True)
+    return pts
+
+
+def opus_points(wav, tmp):
+    ref = wav_samples(wav)
+    seconds = len(ref) / 48000
+    pts = []
+    for k in OPUS_KBPS:
+        out, dec = tmp / "o.opus", tmp / "o.wav"
+        ff("-i", wav, "-c:a", "libopus", "-b:a", f"{k}k", "-ac", 1, "-ar", 48000, out)
+        ff("-i", out, "-ac", 1, "-ar", 48000, "-c:a", "pcm_s16le", dec)
+        pts.append(dict(setting=k, kbps=kbps(out.stat().st_size, seconds), snr_db=snr_db(ref, wav_samples(dec))))
+        print(f"   opus {k}k: {pts[-1]['kbps']:.1f} kbps, {pts[-1]['snr_db']:.2f} dB", flush=True)
+    return pts
+
+
+def dct_matrix(n):
+    k = np.arange(n)[:, None]
+    i = np.arange(n)[None, :]
+    m = np.cos(np.pi / n * (i + 0.5) * k) * math.sqrt(2 / n)
+    m[0] /= math.sqrt(2)
+    return m
+
+
+def _box(a, r0, r1):
+    """Mean over a (2*r0+1) x (2*r1+1) neighbourhood, edge-clamped."""
+    h, w = a.shape
+    padded = np.pad(a, ((r0, r0), (r1, r1)), mode="edge")
+    out = np.zeros_like(a)
+    for di in range(2 * r0 + 1):
+        for dj in range(2 * r1 + 1):
+            out += padded[di:di + h, dj:dj + w]
+    return out / ((2 * r0 + 1) * (2 * r1 + 1))
+
+
+def rd_bound(wav, block=256):
+    """Gaussian rate-distortion bound (reverse water-filling) for the clip.
+
+    The signal is split into orthonormal DCT-II blocks. Each coefficient's
+    variance is estimated from the clip itself (its local average power over
+    +-2 blocks and +-2 bins), then reverse water-filling gives the minimum
+    rate at each SNR. This is an estimate: the variance model is fitted to the
+    same data it is scored on, so it is a bound for that model rather than a
+    proven bound on every source."""
+    x = wav_samples(wav)
+    n = len(x) // block * block
+    coefs = x[:n].reshape(-1, block) @ dct_matrix(block).T
+    var = _box(coefs ** 2, 2, 2) + 1e-12
+    p_sig = (x[:n] ** 2).mean()
+    seconds = n / 48000
+    out = []
+    for snr in range(0, 61, 5):
+        budget = p_sig / 10 ** (snr / 10) * n  # total squared error allowed
+        lo, hi = math.log(1e-12), math.log(var.max())
+        for _ in range(80):  # find the water level theta with D(theta) = budget
+            mid = (lo + hi) / 2
+            theta = math.exp(mid)
+            if np.minimum(theta, var).sum() > budget:
+                hi = mid
+            else:
+                lo = mid
+        theta = math.exp(lo)
+        bits = np.maximum(0.0, 0.5 * np.log2(var / theta)).sum()
+        out.append(dict(snr_db=snr, kbps=bits / seconds / 1000))
+    return out
+
+
+def rate_for_snr(points, target):
+    """Lowest rate among points that reach `target` dB, or None."""
+    ok = [p["kbps"] for p in points if p["snr_db"] >= target]
+    return min(ok) if ok else None
+
+
 def run_audio():
     out = {}
     with tempfile.TemporaryDirectory() as t:
@@ -193,14 +305,14 @@ def run_audio():
                 res[f"flac-{lvl}"] = dict(bytes=f.stat().st_size, encode_x_realtime=AUDIO_SECONDS / (time.perf_counter() - t0))
             pcm = np.frombuffer(wav.read_bytes()[44:], dtype="<i2")
             res["lpc_estimate"] = dict(bytes=int(lpc_entropy_bits(pcm) / 8))
+            res["cinder"] = cinder_sweep(wav, tmp)
+            res["opus"] = opus_points(wav, tmp)
+            res["rd_bound"] = rd_bound(wav)
             out[name] = res
-            print("  ", {k: v.get("bytes", v) if isinstance(v, dict) else v for k, v in res.items()}, flush=True)
+            print("  rd bound:", [(p["snr_db"], round(p["kbps"])) for p in res["rd_bound"][::2]], flush=True)
     return out
 
 
-# --------------------------------------------------------------------------
-# run / report
-# --------------------------------------------------------------------------
 def git(*a):
     return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True).stdout.strip()
 
@@ -241,20 +353,31 @@ def report():
          f"{m['ffmpeg'].split(' Copyright')[0]}.", "",
          "## Method", "",
          "- **Corpus:** Xiph.org derf CIF sequences (akiyo = low motion, foreman = medium, mobile = high), first "
-         f"{m['frames']} frames, 4:2:0; audio is 30 s mono 48 kHz excerpts of Sintel's trailer mix and Elephants Dream's music.",
+         f"{m['frames']} frames, 4:2:0. Audio is 30 s mono 48 kHz excerpts of the Sintel trailer audio and Elephants Dream's "
+         "music (ED-CM stereo, downmixed).",
          "- **Video metric:** every codec's output is decoded and scored by the *same* ffmpeg PSNR and SSIM filters "
          "against the source. Rate is the raw payload, with no container overhead on either side. Each codec is swept over "
          "its quality setting; a single point means little, the curve is the result.",
-         "- **Reference ceiling:** no true rate-distortion bound exists for natural video, so the practical ceiling is the "
-         "best of x264 `veryslow`, x265 `veryslow` and SVT-AV1 preset 4.",
-         "- **Equal-quality column:** how many times *larger* the tpt stream is than the best reference at the same luma "
+         "- **Video reference ceiling:** no true rate-distortion bound exists for natural video, so the practical ceiling is the "
+         "best of x264 `veryslow`, x265 `veryslow` and SVT-AV1 preset 4, at default tuning.",
+         "- **Video equal-quality column:** how many times *larger* the tpt stream is than the best reference at the same luma "
          "PSNR (log-linear interpolation). `>1` means tpt is worse; `n/a` means the PSNR is outside the reference's range.",
-         "- **Audio:** Aura is lossless, so the comparison is size against FLAC and against an *estimate* of an ideal "
-         "predictor (order-32 LPC per 4096-sample block, ideal Laplace entropy coder, side info ignored). It is an "
-         "estimate, not a proven bound.",
-         "- **Cinder (lossy audio) is not benchmarked yet.** It has a known ≈3 dB SNR ceiling until the v2 overlap-add "
-         "redesign lands (see `docs/codec-design.md`); once it does, the plan is rate-quality vs Opus plus the Gaussian "
-         "reverse-water-filling bound on the MDCT coefficients.", ""]
+         "- **Audio, lossless:** Aura is compared by size against FLAC and against an *estimate* of an ideal predictor "
+         "(order-32 LPC per 4096-sample block, ideal Laplace entropy coder, side info ignored). It is an estimate, not a proven bound.",
+         "- **Audio, lossy:** Cinder is swept over bit depth (4–12, via `--quality`) and per-band step (`--band-step`, "
+         "half-octave grid from 1/1024 to about 45). Cinder codes every coefficient at a fixed width with no entropy coding, so its "
+         "rate depends only on the bit depth; the step is the only free choice at each rate. The Cinder rows therefore use the "
+         "best step found for each rate, which is an oracle choice: a shipped encoder would need rate control to find it.",
+         "- **Audio, lossy reference:** Opus (libopus via ffmpeg, mono 48 kHz) at 12–128 kbps. Opus is perceptually tuned and "
+         "SNR is a waveform metric, so Opus is expected to look worse here than it sounds; read the SNR columns as "
+         "a waveform-fidelity comparison, not a listening test.",
+         "- **Audio, bound:** the Gaussian rate-distortion bound from reverse water-filling over DCT coefficients whose variance "
+         "is estimated from the clip itself (local power over ±2 blocks and ±2 bins). It is a bound for that variance model, "
+         "not a proven bound on every source. A sanity check on white Gaussian noise matches the textbook 6.02 dB per bit.",
+         "- **Cinder's wire step:** version 3 carries steps in 1/1024 units. Version 2 wrote whole numbers only, which made every "
+         "step below 1.0 decode to near silence; the rows below post-date that fix.",
+         "- **Cinder's loudest peaks clip at fine steps.** At 12 bits the range is about ±2048 × step, so a step of 0.001 clips "
+         "coefficients above about 2. The sweep includes those points; the SNR column shows the cost.", ""]
 
     L += ["## Video", ""]
     for clip, res in cur["video"].items():
@@ -272,7 +395,7 @@ def report():
                          f"{p['encode_x_realtime']:.2f} | {eq} |")
         L.append("")
 
-    L += ["## Audio (lossless)", "", "| clip | PCM | Aura | FLAC-5 | FLAC-8 | FLAC-12 | LPC estimate | Aura vs FLAC-8 | Aura bit-exact |",
+    L += ["## Audio, lossless", "", "| clip | PCM | Aura | FLAC-5 | FLAC-8 | FLAC-12 | LPC estimate | Aura vs FLAC-8 | Aura bit-exact |",
           "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: |"]
     for name, r in cur["audio"].items():
         k = lambda b: f"{b / 1000:.0f} kB"
@@ -282,10 +405,35 @@ def report():
                  f"{'yes' if r['aura']['bit_exact'] else '**NO**'} |")
     L.append("")
 
-    L += ["## Progress", "", "One row per recorded run: video rate at roughly equal quality is hard to summarise in one number, "
-          "so this tracks each tpt codec's size relative to the best reference at the same luma PSNR (median over the "
-          "points where it is defined), plus Aura vs FLAC-8.", "",
-          "| date | commit | Thrum (×ref) | Vault (×ref) | Aura/FLAC-8 |", "| --- | --- | ---: | ---: | ---: |"]
+    L += ["## Audio, lossy: rate needed for a given SNR", "",
+          "Lowest kbps that reaches each SNR (oracle choice over each codec's own sweep). Ratios are against the Gaussian bound.", ""]
+    for name, r in cur["audio"].items():
+        if "cinder" not in r:
+            continue
+        L += [f"### {name}", "", "| SNR (dB) | Cinder kbps | Opus kbps | Gaussian bound kbps | Cinder ÷ bound | Opus ÷ bound |",
+              "| ---: | ---: | ---: | ---: | ---: | ---: |"]
+        for t in SNR_TARGETS:
+            c, o = rate_for_snr(r["cinder"], t), rate_for_snr(r["opus"], t)
+            b = next((p["kbps"] for p in r["rd_bound"] if p["snr_db"] >= t), None)
+            f = lambda v: "n/a" if v is None else f"{v:.0f}"
+            ratio = lambda v: "n/a" if (v is None or b is None) else f"{v / b:.2f}×"
+            L.append(f"| {t} | {f(c)} | {f(o)} | {f(b)} | {ratio(c)} | {ratio(o)} |")
+        L.append("")
+        L += ["Cinder points (best step per bit depth):", "", "| bits | step | kbps | SNR dB |", "| ---: | ---: | ---: | ---: |"]
+        for bits in CINDER_BITS:
+            best = max((p for p in r["cinder"] if p["bits"] == bits), key=lambda p: p["snr_db"])
+            L.append(f"| {bits} | {best['step']} | {best['kbps']:.0f} | {best['snr_db']:.2f} |")
+        L.append("")
+        L += ["Opus points:", "", "| bitrate | kbps | SNR dB |", "| ---: | ---: | ---: |"]
+        for p in r["opus"]:
+            L.append(f"| {p['setting']} | {p['kbps']:.1f} | {p['snr_db']:.2f} |")
+        L.append("")
+
+    L += ["## Progress", "", "One row per recorded run. Video: each tpt codec's size relative to the best reference at the same "
+          "luma PSNR (median over the points where it is defined). Audio: Aura vs FLAC-8 (lossless); Cinder and Opus vs the "
+          "Gaussian bound at 20 dB (lossy; n/a for runs made before that codec was measured).", "",
+          "| date | commit | Thrum (×ref) | Vault (×ref) | Aura/FLAC-8 | Cinder @20 dB ÷ bound | Opus @20 dB ÷ bound |",
+          "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
     for r in runs:
         cells = []
         for codec in ("thrum", "vault"):
@@ -298,8 +446,19 @@ def report():
                         vals.append(p["kbps"] / min(best))
             cells.append(f"{np.median(vals):.1f}×" if vals else "n/a")
         a = np.mean([v["aura"]["bytes"] / v["flac-8"]["bytes"] for v in r["audio"].values()])
+        lossy = []
+        for key in ("cinder", "opus"):
+            vals = []
+            for v in r["audio"].values():
+                if key not in v:
+                    continue
+                c = rate_for_snr(v[key], 20)
+                b = next((p["kbps"] for p in v["rd_bound"] if p["snr_db"] >= 20), None)
+                if c is not None and b:
+                    vals.append(c / b)
+            lossy.append(f"{np.mean(vals):.2f}×" if vals else "n/a")
         L.append(f"| {r['meta']['date'][:10]} | `{r['meta']['commit']}`{'*' if r['meta']['dirty'] else ''} | "
-                 f"{cells[0]} | {cells[1]} | {a:.2f}× |")
+                 f"{cells[0]} | {cells[1]} | {a:.2f}× | {lossy[0]} | {lossy[1]} |")
     L += ["", "`*` = run on a tree with uncommitted changes.", ""]
     REPORT.write_text("\n".join(L), encoding="utf-8")
     print("wrote", REPORT)

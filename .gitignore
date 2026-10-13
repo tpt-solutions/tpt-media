@@ -22,3 +22,4 @@ Thumbs.db
 
 # Benchmark corpus (downloaded by benchmarks/run.py fetch)
 /benchmarks/corpus/
+__pycache__/
