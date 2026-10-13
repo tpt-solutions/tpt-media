@@ -3,11 +3,26 @@
 //! ## Algorithm
 //!
 //! - Frame sizes: 128 or 256 samples (default 256).
-//! - Transform: MDCT with sine window.
+//! - Transform: MDCT with sine window, hop `frame_size` (50% overlap). The
+//!   decoder overlap-adds consecutive inverse blocks, so time-domain
+//!   aliasing cancels (TDAC) and the reconstruction is not limited by the
+//!   window edges (see `docs/codec-design.md`, "Cinder v2").
 //! - Quantisation: uniform scalar with per-band step size, with an
 //!   optional perceptual reweighting (see [`CinderEncoderConfig::perceptual_weighting`]).
 //! - Entropy: fixed-width bit fields (uniform quantiser index).
 //! - PLC: phase-randomised sign perturbation of previous frame's MDCT.
+//!
+//! ## Framing and latency
+//!
+//! One packet carries one `frame_size`-coefficient spectrum and is emitted
+//! for every `frame_size` input samples. The decoder completes a block only
+//! when the packet after it arrives, so the first packet of a stream emits
+//! no samples and the stream has one block of latency. Each packet is
+//! stamped with the start of the output it yields, so a decoded frame's
+//! timestamp is its packet's timestamp. The encoder's [`Encoder::drain`]
+//! zero-pads the last block and appends the silent blocks needed to
+//! complete every received sample, so decoded output has exactly the input
+//! length, up to the zero padding of the final block.
 //!
 //! ## Optional perceptual weighting
 //!
@@ -54,8 +69,14 @@ pub const FRAME_256: u16 = 256;
 /// Codec id for Cinder.
 pub const CODEC_ID: [u8; 4] = *b"CIND";
 
-/// Bitstream version.
-pub const VERSION: u16 = 1;
+/// Bitstream version. Version 2 keeps the version 1 packet layout but
+/// changes its meaning: packets are hop-`frame_size` MDCT blocks that the
+/// decoder overlap-adds. A version 1 packet decoded as version 2 would be
+/// misreconstructed, so version 1 is rejected rather than guessed at.
+pub const VERSION: u16 = 2;
+
+/// Inclusive range of supported `bits_per_coef` values.
+const BITS_PER_COEF: core::ops::RangeInclusive<u8> = 4..=12;
 
 fn static_info(caps: Capabilities) -> CodecInfo {
     CodecInfo {
@@ -100,11 +121,52 @@ fn dequantize(q: i32, step: f32) -> f32 {
     q as f32 * step
 }
 
+/// Timestamp `samples` after (`forward`) or before `ts`, on the sample
+/// timeline at `rate`. Exact for the usual `1/rate` timebase; other
+/// timebases are converted with truncating division.
+fn shift_by_samples(ts: Timestamp, samples: u64, rate: u32, forward: bool) -> Timestamp {
+    let tb = ts.timebase;
+    let delta = (u128::from(samples) * u128::from(tb.den))
+        / (u128::from(tb.num.max(1)) * u128::from(rate.max(1)));
+    let delta = delta as i64;
+    let ticks = if forward {
+        ts.ticks.saturating_add(delta)
+    } else {
+        ts.ticks.saturating_sub(delta)
+    };
+    Timestamp {
+        ticks,
+        timebase: tb,
+    }
+}
+
+/// Build an S16 mono frame from float samples in `[-1, 1]`, clamped.
+fn audio_frame(samples: &[f32], pts: Timestamp, sample_rate: u32) -> AudioFrame {
+    let mut bytes = vec![0u8; samples.len() * 2];
+    for (i, &v) in samples.iter().enumerate() {
+        let s = (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        bytes[2 * i..2 * i + 2].copy_from_slice(&s.to_le_bytes());
+    }
+    AudioFrame {
+        frame: Frame {
+            pts,
+            duration: None,
+            side_data: Vec::new(),
+        },
+        samples: bytes,
+        sample_count: samples.len() as u32,
+        format: SampleFormat::S16,
+        channel_layout: ChannelLayout::Mono,
+        sample_rate,
+    }
+}
+
 /// Cinder encoder configuration.
 #[derive(Clone, Debug)]
 pub struct CinderEncoderConfig {
-    /// MDCT window size in samples: 128 or 256. Encode consumes
-    /// `2·frame_size` samples per block (the TDAC window pair).
+    /// MDCT block size in samples: 128 or 256. The encoder emits one packet
+    /// per `frame_size` input samples; each packet's analysis window spans
+    /// `2·frame_size` samples (the current block plus the previous one).
     pub frame_size: u16,
     /// Sample rate in Hz; 44.1/48 kHz per the supported-format table.
     pub sample_rate: u32,
@@ -115,7 +177,8 @@ pub struct CinderEncoderConfig {
     /// Larger = coarser = fewer bits.
     pub band_steps: Vec<f32>,
     /// Fixed bit width per quantised coefficient, 4..=12 (the
-    /// `--quality` mapping target).
+    /// `--quality` mapping target). Levels are clamped to the signed range
+    /// this width can carry.
     pub bits_per_coef: u8,
     /// When `true`, each band's step from `band_steps` is scaled by that
     /// band's absolute threshold of hearing relative to a 1kHz reference
@@ -175,6 +238,10 @@ fn perceptual_band_weights(
 }
 
 /// Cinder encoder.
+///
+/// Hop-`N` analysis: each block windows the previous block's `N` samples
+/// followed by its own `N` new samples, so consecutive windows overlap by
+/// half and the decoder's overlap-add cancels the time-domain aliasing.
 pub struct CinderEncoder {
     info: CodecInfo,
     cfg: CodecConfig,
@@ -186,12 +253,29 @@ pub struct CinderEncoder {
     /// it depends only on the fixed band layout, not per-frame signal
     /// content — see [`perceptual_band_weights`].
     perceptual_weights: Vec<f32>,
+    /// The `2N`-point sine analysis window, built once at construction.
+    window: Vec<f32>,
+    /// The previous block's `N` samples: the first half of the next
+    /// window. Zeros before the first block.
+    history: Vec<f32>,
+    /// Received samples not yet forming a full block (fewer than `N`
+    /// between calls).
+    pending: Vec<f32>,
+    /// Timestamp of the first input sample of the stream, set from the
+    /// first frame received. Packet timestamps are derived from it (see
+    /// [`CinderEncoder::encode_block`]).
+    origin: Option<Timestamp>,
+    /// Blocks emitted since the stream started or was last flushed.
+    blocks: u64,
+    /// Samples received since the stream started or was last flushed,
+    /// excluding flush padding.
+    received: u64,
 }
 
 impl CinderEncoder {
     /// Build an encoder for `enc` under the framework configuration
     /// (`version` + resource limits); validates frame size, band
-    /// count, and step-table length before anything is allocated.
+    /// count, bit depth, and step-table length before anything is allocated.
     pub fn new(codec_cfg: CodecConfig, enc: CinderEncoderConfig) -> CodecResult<Self> {
         if enc.frame_size != 128 && enc.frame_size != 256 {
             return Err(CodecError::InvalidConfig("frame_size must be 128 or 256"));
@@ -201,10 +285,14 @@ impl CinderEncoder {
                 "band_steps length must equal n_bands",
             ));
         }
-        let mdct_plan = FastMdctPlan::new(enc.frame_size as usize);
+        if !BITS_PER_COEF.contains(&enc.bits_per_coef) {
+            return Err(CodecError::InvalidConfig("bits_per_coef must be 4..=12"));
+        }
+        let n = enc.frame_size as usize;
+        let mdct_plan = FastMdctPlan::new(n);
         let perceptual_weights = perceptual_band_weights(
             enc.perceptual_weighting,
-            enc.frame_size as usize,
+            n,
             enc.n_bands as usize,
             enc.sample_rate,
         );
@@ -218,33 +306,46 @@ impl CinderEncoder {
             last_spectrum: Vec::new(),
             mdct_plan,
             perceptual_weights,
+            window: sine_window(2 * n),
+            history: vec![0.0; n],
+            pending: Vec::with_capacity(2 * n),
+            origin: None,
+            blocks: 0,
+            received: 0,
         })
     }
-}
 
-impl Encoder for CinderEncoder {
-    type Frame = AudioFrame;
-    fn info(&self) -> &CodecInfo {
-        &self.info
+    /// Return to the state of a freshly built encoder, ready for a new
+    /// stream. The configuration and precomputed tables are kept.
+    fn reset_stream(&mut self) {
+        self.history.iter_mut().for_each(|s| *s = 0.0);
+        self.pending.clear();
+        self.origin = None;
+        self.blocks = 0;
+        self.received = 0;
     }
-    fn encode(&mut self, frame: &AudioFrame) -> CodecResult<Vec<Packet>> {
-        self.cfg.limits.check_packet(4 * 1024)?;
-        let fs = self.enc.frame_size as usize;
-        let two_n = 2 * fs;
-        if frame.samples.len() < two_n * 2 {
-            return Err(CodecError::InvalidConfig(
-                "not enough samples for one frame",
-            ));
+
+    /// Encode the first `N` pending samples as one block. The caller
+    /// guarantees at least `N` are pending.
+    ///
+    /// The packet is stamped with the start of the output it yields, the
+    /// same convention every codec here uses for output frames. Packet `k`
+    /// completes the samples from `(k - 1)·N`, so it carries
+    /// `origin + (k - 1)·N`. The first packet yields nothing and takes the
+    /// origin itself, which keeps every timestamp non-negative.
+    fn encode_block(&mut self) -> CodecResult<Packet> {
+        let n = self.enc.frame_size as usize;
+        let origin = self.origin.ok_or(CodecError::Internal)?;
+        let completed_from = self.blocks.saturating_sub(1) * n as u64;
+        let pts = shift_by_samples(origin, completed_from, self.enc.sample_rate, true);
+        let mut x = vec![0f32; 2 * n];
+        for i in 0..n {
+            x[i] = self.history[i] * self.window[i];
+            x[n + i] = self.pending[i] * self.window[n + i];
         }
-        let mut x: Vec<f32> = frame.samples[..two_n * 2]
-            .chunks_exact(2)
-            .map(|s| i16::from_le_bytes([s[0], s[1]]) as f32 / i16::MAX as f32)
-            .collect();
-        let w = sine_window(two_n);
-        for (xi, wi) in x.iter_mut().zip(w.iter()) {
-            *xi *= *wi;
-        }
-        let mut spec = vec![0f32; fs];
+        self.history.copy_from_slice(&self.pending[..n]);
+        self.pending.drain(..n);
+        let mut spec = vec![0f32; n];
         self.mdct_plan.forward(&x, &mut spec);
         self.last_spectrum = spec.clone();
         let band_size = (spec.len() / self.enc.n_bands as usize).max(1);
@@ -256,6 +357,10 @@ impl Encoder for CinderEncoder {
             + self.enc.n_bands as usize * (24 + self.enc.bits_per_coef as usize * band_size)
             + 8
             + 16;
+        // Offset-binary levels: `half` is the zero level and the largest
+        // magnitude is `half - 1`, so every level fits `bits_per_coef` bits.
+        let half = 1i32 << (self.enc.bits_per_coef - 1);
+        let max_level = half - 1;
         let mut buf = vec![0u8; max_bits.div_ceil(8)];
         let written = {
             let mut w = BitWriter::new(&mut buf);
@@ -285,8 +390,8 @@ impl Encoder for CinderEncoder {
                 w.write(8, (end - start) as u64)
                     .map_err(|_| CodecError::Internal)?;
                 for &s in &spec[start..end] {
-                    let q = quantize(s, effective_step.max(1e-9)).clamp(-127, 127);
-                    w.write(self.enc.bits_per_coef as u32, (q + 128) as u64)
+                    let q = quantize(s, effective_step.max(1e-9)).clamp(-max_level, max_level);
+                    w.write(self.enc.bits_per_coef as u32, (q + half) as u64)
                         .map_err(|_| CodecError::Internal)?;
                 }
             }
@@ -294,15 +399,77 @@ impl Encoder for CinderEncoder {
             w.finish().map_err(|_| CodecError::Internal)?
         };
         buf.truncate(written);
-        let pkt = Packet {
+
+        self.blocks += 1;
+        Ok(Packet {
             data: buf,
-            pts: frame.frame.pts,
-            dts: frame.frame.pts,
+            pts,
+            dts: pts,
             flags: PacketFlags::KEYFRAME,
             track_id: 0,
             duration: None,
-        };
-        Ok(vec![pkt])
+        })
+    }
+}
+
+impl Encoder for CinderEncoder {
+    type Frame = AudioFrame;
+    fn info(&self) -> &CodecInfo {
+        &self.info
+    }
+    fn encode(&mut self, frame: &AudioFrame) -> CodecResult<Vec<Packet>> {
+        self.cfg.limits.check_packet(4 * 1024)?;
+        let count = frame.sample_count as usize;
+        if frame.samples.len() < 2 * count {
+            return Err(CodecError::InvalidConfig(
+                "frame has fewer bytes than its sample_count",
+            ));
+        }
+        if self.origin.is_none() {
+            self.origin = Some(frame.frame.pts);
+        }
+        self.pending.extend(
+            frame.samples[..2 * count]
+                .chunks_exact(2)
+                .map(|s| i16::from_le_bytes([s[0], s[1]]) as f32 / i16::MAX as f32),
+        );
+        self.received += count as u64;
+        let n = self.enc.frame_size as usize;
+        let mut packets = Vec::new();
+        while self.pending.len() >= n {
+            packets.push(self.encode_block()?);
+        }
+        Ok(packets)
+    }
+
+    /// End the stream gracefully: the partial last block is zero-padded,
+    /// then silent blocks are appended until the decoder has completed
+    /// every received sample (it completes block `j - 1` only when packet
+    /// `j` arrives). Encoder state is kept, so a repeated call emits
+    /// nothing new.
+    fn drain(&mut self) -> CodecResult<Vec<Packet>> {
+        let mut packets = Vec::new();
+        if self.received == 0 {
+            return Ok(packets);
+        }
+        let n = self.enc.frame_size as usize;
+        if !self.pending.is_empty() {
+            self.pending.resize(n, 0.0);
+            packets.push(self.encode_block()?);
+        }
+        while self.blocks.saturating_sub(1) * (n as u64) < self.received {
+            self.pending.resize(n, 0.0);
+            packets.push(self.encode_block()?);
+        }
+        Ok(packets)
+    }
+
+    /// Hard reset: emit the same tail as [`Encoder::drain`], then discard
+    /// the stream state so the encoder can start an unrelated stream.
+    fn flush(&mut self) -> CodecResult<Vec<Packet>> {
+        let packets = Encoder::drain(self)?;
+        self.reset_stream();
+        Ok(packets)
     }
 }
 
@@ -321,6 +488,12 @@ pub struct CinderDecoder {
     plc_phase: u32,
     mdct_plan_128: FastMdctPlan,
     mdct_plan_256: FastMdctPlan,
+    /// Second half of the previous windowed inverse block, overlap-added
+    /// into the next block's first half. Zeros before the first packet.
+    tail: Vec<f32>,
+    /// Whether a packet has been decoded. The first packet's block lies
+    /// before the stream, so it completes nothing and emits no samples.
+    primed: bool,
 }
 
 impl CinderDecoder {
@@ -332,17 +505,22 @@ impl CinderDecoder {
         if enc.frame_size != 128 && enc.frame_size != 256 {
             return Err(CodecError::InvalidConfig("frame_size must be 128 or 256"));
         }
+        if !BITS_PER_COEF.contains(&enc.bits_per_coef) {
+            return Err(CodecError::InvalidConfig("bits_per_coef must be 4..=12"));
+        }
         Ok(CinderDecoder {
             info: static_info(Capabilities {
                 real_time_decoder: true,
                 ..Capabilities::default()
             }),
             cfg: codec_cfg,
+            tail: vec![0.0; enc.frame_size as usize],
             enc,
             last_spectrum: Vec::new(),
             plc_phase: 0,
             mdct_plan_128: FastMdctPlan::new(FRAME_128 as usize),
             mdct_plan_256: FastMdctPlan::new(FRAME_256 as usize),
+            primed: false,
         })
     }
 
@@ -355,13 +533,42 @@ impl CinderDecoder {
         }
     }
 
-    /// Packet-loss concealment: synthesise a plausible frame.
+    /// Windowed inverse of one spectrum: `2N` samples, ready to overlap-add.
+    fn synthesize(&mut self, spec: &[f32]) -> Vec<f32> {
+        let two_n = 2 * spec.len();
+        let mut x = vec![0f32; two_n];
+        self.mdct_plan_for(spec.len()).inverse(spec, &mut x);
+        let w = sine_window(two_n);
+        for (xi, wi) in x.iter_mut().zip(w.iter()) {
+            *xi *= *wi;
+        }
+        x
+    }
+
+    /// Overlap-add one windowed inverse block (`2N` samples). Returns the
+    /// completed block of `N` samples and keeps the second half as the next
+    /// tail. A change of frame size restarts the overlap from silence.
+    fn overlap_add(&mut self, y: &[f32]) -> Vec<f32> {
+        let n = y.len() / 2;
+        if self.tail.len() != n {
+            self.tail = vec![0.0; n];
+        }
+        let block: Vec<f32> = (0..n).map(|i| y[i] + self.tail[i]).collect();
+        self.tail.copy_from_slice(&y[n..]);
+        block
+    }
+
+    /// Packet-loss concealment for the packet timestamped `pts`: synthesise
+    /// the block that packet would have carried, from the last decoded
+    /// spectrum, and overlap-add it so the stream continues without a
+    /// seam. The returned frame carries `pts`, as a received packet's frame
+    /// would.
     pub fn conceal(&mut self, pts: Timestamp) -> CodecResult<AudioFrame> {
         let fs = self.enc.frame_size;
-        let two_n = 2 * fs as usize;
+        let n = fs as usize;
         let mut spec = self.last_spectrum.clone();
         if spec.is_empty() {
-            spec = alloc::vec![0.0; fs as usize];
+            spec = alloc::vec![0.0; n];
         }
         for (i, s) in spec.iter_mut().enumerate() {
             let phase = self.plc_phase.wrapping_add(i as u32);
@@ -370,29 +577,11 @@ impl CinderDecoder {
             }
         }
         self.plc_phase = self.plc_phase.wrapping_add(1);
-        let mut x = vec![0f32; two_n];
-        self.mdct_plan_for(fs as usize).inverse(&spec, &mut x);
-        let w = sine_window(two_n);
-        for i in 0..two_n {
-            x[i] *= w[i];
-        }
-        let mut samples = vec![0u8; two_n * 2];
-        for i in 0..two_n {
-            let v = (x[i].clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            samples[2 * i..2 * i + 2].copy_from_slice(&v.to_le_bytes());
-        }
-        Ok(AudioFrame {
-            frame: Frame {
-                pts,
-                duration: None,
-                side_data: Vec::new(),
-            },
-            samples,
-            sample_count: two_n as u32,
-            format: SampleFormat::S16,
-            channel_layout: ChannelLayout::Mono,
-            sample_rate: self.enc.sample_rate,
-        })
+        let y = self.synthesize(&spec);
+        let block = self.overlap_add(&y);
+        self.primed = true;
+        let rate = self.enc.sample_rate;
+        Ok(audio_frame(&block, pts, rate))
     }
 }
 
@@ -405,6 +594,14 @@ impl Decoder for CinderDecoder {
     fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
         self.cfg.limits.check_packet(packet.data.len())?;
         self.decode_inner(packet)
+    }
+
+    /// Hard reset: discard the overlap tail so the next packet starts a new
+    /// stream. Nothing is held back, so there is nothing to drain.
+    fn flush(&mut self) -> CodecResult<Vec<AudioFrame>> {
+        self.tail.iter_mut().for_each(|s| *s = 0.0);
+        self.primed = false;
+        Ok(Vec::new())
     }
 }
 
@@ -431,6 +628,7 @@ impl CinderDecoder {
             return Err(CodecError::MalformedPacket);
         }
         let band_size = (frame_size as usize / n_bands as usize).max(1);
+        let half = 1i32 << (self.enc.bits_per_coef - 1);
         let mut spec = vec![0f32; frame_size as usize];
         for band in 0..n_bands as usize {
             let step_bits = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
@@ -453,36 +651,21 @@ impl CinderDecoder {
                 let q = r
                     .read(self.enc.bits_per_coef as u32)
                     .map_err(|_| CodecError::MalformedPacket)? as i32;
-                spec[start + i] = dequantize(q - 128, step.max(1e-9));
+                spec[start + i] = dequantize(q - half, step.max(1e-9));
             }
         }
         let _keyframe = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
         self.last_spectrum = spec.clone();
-        let two_n = 2 * frame_size as usize;
-        let mut x = vec![0f32; two_n];
-        self.mdct_plan_for(frame_size as usize)
-            .inverse(&spec, &mut x);
-        let w = sine_window(two_n);
-        for i in 0..two_n {
-            x[i] *= w[i];
+        let y = self.synthesize(&spec);
+        let block = self.overlap_add(&y);
+        if !self.primed {
+            self.primed = true;
+            return Ok(Vec::new());
         }
-        let mut samples = vec![0u8; two_n * 2];
-        for i in 0..two_n {
-            let v = (x[i].clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            samples[2 * i..2 * i + 2].copy_from_slice(&v.to_le_bytes());
-        }
-        Ok(vec![AudioFrame {
-            frame: Frame {
-                pts: packet.pts,
-                duration: None,
-                side_data: Vec::new(),
-            },
-            samples,
-            sample_count: two_n as u32,
-            format: SampleFormat::S16,
-            channel_layout: ChannelLayout::Mono,
-            sample_rate: self.enc.sample_rate,
-        }])
+        // The packet's timestamp is the start of the block it completes
+        // (see `CinderEncoder::encode_block`), so the output frame takes it
+        // directly and its stamp depends only on this packet.
+        Ok(vec![audio_frame(&block, packet.pts, self.enc.sample_rate)])
     }
 }
 
@@ -533,6 +716,7 @@ impl DynDecoder for CinderDynDecoder {
             .collect())
     }
     fn flush(&mut self) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
+        Decoder::flush(&mut self.inner)?;
         Ok(Vec::new())
     }
     fn drain(&mut self) -> CodecResult<Vec<tpt_media_codec::DynFrame>> {
@@ -623,6 +807,36 @@ mod tests {
         f
     }
 
+    /// Decode every packet in arrival order, collecting the frames emitted.
+    fn decode_all(dec: &mut CinderDecoder, packets: &[Packet]) -> Vec<AudioFrame> {
+        packets
+            .iter()
+            .flat_map(|p| dec.decode(p).expect("decode"))
+            .collect()
+    }
+
+    fn total_samples(frames: &[AudioFrame]) -> usize {
+        frames.iter().map(|f| f.sample_count as usize).sum()
+    }
+
+    /// SNR in dB of `test` against `reference`, both S16 mono frames
+    /// concatenated in order, compared over the shorter of the two.
+    fn snr_against(reference: &[i16], test: &[AudioFrame]) -> f64 {
+        let decoded: Vec<f64> = test
+            .iter()
+            .flat_map(|f| (0..f.sample_count as usize).map(move |i| f.s16(0, i).unwrap() as f64))
+            .collect();
+        let n = reference.len().min(decoded.len());
+        let mut sig = 0.0;
+        let mut err = 0.0;
+        for i in 0..n {
+            let r = reference[i] as f64;
+            sig += r * r;
+            err += (r - decoded[i]).powi(2);
+        }
+        10.0 * (sig / err.max(1e-12)).log10()
+    }
+
     #[test]
     fn encode_decode_round_trip_silence() {
         let cfg = CodecConfig::default();
@@ -637,11 +851,14 @@ mod tests {
         let mut frame = make_silence_frame(256);
         frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
         let packets = enc.encode(&frame).unwrap();
-        assert_eq!(packets.len(), 1);
+        assert_eq!(packets.len(), 2, "one packet per 128-sample hop");
         assert!(packets[0].is_keyframe());
-        let decoded = dec.decode(&packets[0]).unwrap();
+        // The first packet completes nothing; the second completes block 0.
+        assert!(dec.decode(&packets[0]).unwrap().is_empty());
+        let decoded = dec.decode(&packets[1]).unwrap();
         assert_eq!(decoded.len(), 1);
-        assert_eq!(decoded[0].sample_count, 256);
+        assert_eq!(decoded[0].sample_count, 128);
+        assert_eq!(frame_s16_energy(&decoded[0]), 0);
     }
 
     #[test]
@@ -662,29 +879,42 @@ mod tests {
         let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
         let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
 
-        let n = 256usize;
-        let mut frame = AudioFrame::alloc(n as u32, SampleFormat::S16, ChannelLayout::Mono, 48_000);
-        for (i, s) in frame.samples.chunks_mut(2).enumerate() {
-            let v = (0.5 * (i as f32 * 0.2).sin() * i16::MAX as f32) as i16;
-            s.copy_from_slice(&v.to_le_bytes());
-        }
-        frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
-
+        let frame = make_tone_audio_frame(1024, 0);
         let packets = enc.encode(&frame).unwrap();
         assert!(
-            !packets[0].data.is_empty(),
-            "encoded packet must not be empty"
+            packets.iter().all(|p| !p.data.is_empty()),
+            "encoded packets must not be empty"
         );
 
-        let decoded = dec.decode(&packets[0]).unwrap();
-        let out = &decoded[0];
-        let energy: i64 = (0..out.sample_count as usize)
-            .map(|i| {
-                let v = out.s16(0, i).unwrap() as i64;
-                v * v
-            })
-            .sum();
+        let decoded = decode_all(&mut dec, &packets);
+        let energy: i64 = decoded.iter().map(frame_s16_energy).sum();
         assert!(energy > 0, "decoded tone must not be silent");
+    }
+
+    #[test]
+    fn overlap_add_beats_the_old_three_db_ceiling() {
+        // The v1 decoder had no overlap-add, so every input decoded at about
+        // 3 dB regardless of quantization. A tone at a fine step must now
+        // reconstruct well above that ceiling.
+        let cfg = CodecConfig::default();
+        let enc_cfg = CinderEncoderConfig {
+            frame_size: 256,
+            n_bands: 16,
+            band_steps: alloc::vec![1.0; 16],
+            bits_per_coef: 10,
+            ..Default::default()
+        };
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
+        let frame = make_tone_audio_frame(16_384, 0);
+        let reference: Vec<i16> = (0..16_384).map(|i| frame.s16(0, i).unwrap()).collect();
+        let packets = enc.encode(&frame).unwrap();
+        let mut all = packets.clone();
+        all.extend(enc.flush().unwrap());
+        let frames = decode_all(&mut dec, &all);
+        // The stream's first block is the first `N` reference samples.
+        let snr = snr_against(&reference, &frames);
+        assert!(snr > 10.0, "overlap-add SNR {snr:.2} dB must clear 10 dB");
     }
 
     #[test]
@@ -694,7 +924,7 @@ mod tests {
         let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
         let pts = Timestamp::zero(Timebase::new(1, 48_000));
         let f = dec.conceal(pts).unwrap();
-        assert_eq!(f.sample_count, 512);
+        assert_eq!(f.sample_count, 256);
     }
 
     #[test]
@@ -707,7 +937,7 @@ mod tests {
         let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
         let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
 
-        let mut frame = AudioFrame::alloc(512, SampleFormat::S16, ChannelLayout::Mono, 48_000);
+        let mut frame = AudioFrame::alloc(1024, SampleFormat::S16, ChannelLayout::Mono, 48_000);
         for (i, s) in frame.samples.chunks_mut(2).enumerate() {
             let v = (0.4 * (i as f32 * 0.07).sin() * i16::MAX as f32) as i16;
             s.copy_from_slice(&v.to_le_bytes());
@@ -715,10 +945,16 @@ mod tests {
         frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
 
         let packets = enc.encode(&frame).unwrap();
-        assert_eq!(packets.len(), 1);
-        let decoded = dec.decode(&packets[0]).unwrap();
-        assert_eq!(decoded.len(), 1);
-        assert_eq!(decoded[0].sample_count, 512);
+        assert_eq!(packets.len(), 4, "one packet per 256-sample hop");
+        // Packet k yields the block from (k - 1) hops, so the first two
+        // packets share the origin: packet 0 yields nothing.
+        for (k, p) in packets.iter().enumerate() {
+            let yields_from = k.max(1) - 1;
+            assert_eq!(p.pts.ticks, (yields_from * 256) as i64, "packet {k} pts");
+        }
+        let decoded = decode_all(&mut dec, &packets);
+        assert_eq!(decoded.len(), 3, "the first packet completes no block");
+        assert!(decoded.iter().all(|f| f.sample_count == 256));
     }
 
     #[test]
@@ -729,6 +965,24 @@ mod tests {
             ..Default::default()
         };
         assert!(CinderEncoder::new(cfg.clone(), enc_cfg.clone()).is_err());
+    }
+
+    #[test]
+    fn rejects_bits_per_coef_outside_4_to_12() {
+        for bits in [0u8, 3, 13, 255] {
+            let enc_cfg = CinderEncoderConfig {
+                bits_per_coef: bits,
+                ..Default::default()
+            };
+            assert!(
+                CinderEncoder::new(CodecConfig::default(), enc_cfg.clone()).is_err(),
+                "encoder must reject {bits} bits"
+            );
+            assert!(
+                CinderDecoder::new(CodecConfig::default(), enc_cfg).is_err(),
+                "decoder must reject {bits} bits"
+            );
+        }
     }
 
     #[test]
@@ -754,7 +1008,7 @@ mod tests {
         let mut frame = make_silence_frame(256);
         frame.frame.pts = Timestamp::zero(Timebase::new(1, 48_000));
         let packets = encoder.encode(&frame).unwrap();
-        assert_eq!(packets.len(), 1);
+        assert_eq!(packets.len(), 2);
 
         let tight = CodecConfig {
             limits: tpt_media_codec::ResourceLimits {
@@ -805,11 +1059,11 @@ mod tests {
 
     #[test]
     fn plc_conceals_mid_stream_packet_loss() {
-        // End-to-end drop-and-conceal: encode a steady tone, lose the
-        // middle packet, substitute `conceal()` at its slot, and confirm
-        // the stream survives — concealed frame has the right size/PTS and
-        // carries energy (it reuses the last decoded spectrum), and both
-        // the packet before and after the gap still decode cleanly.
+        // End-to-end drop-and-conceal: encode a steady tone, lose one
+        // packet, substitute `conceal()` at its slot, and confirm the stream
+        // survives — the concealed frame carries the lost packet's timestamp
+        // and energy (it reuses the last decoded spectrum), and the packet
+        // after the gap still decodes cleanly with its own timestamp.
         let cfg = CodecConfig::default();
         let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
@@ -829,39 +1083,44 @@ mod tests {
             let frame = make_tone_audio_frame(frame_len, pts);
             packets.extend(encoder.encode(&frame).unwrap());
         }
-        assert_eq!(packets.len(), 4);
+        assert_eq!(packets.len(), 8);
 
+        let lost = 3usize;
+        let mut decoded = Vec::new();
         for (idx, pkt) in packets.iter().enumerate() {
-            if idx == 1 {
+            if idx == lost {
                 continue;
             }
-            let decoded = dec.decode(pkt).unwrap();
-            assert_eq!(decoded.len(), 1);
-            assert_eq!(decoded[0].sample_count as usize, frame_len);
-            assert_eq!(decoded[0].frame.pts, pkt.pts);
+            let frames = dec.decode(pkt).unwrap();
+            for f in &frames {
+                assert_eq!(f.sample_count as usize, fs);
+                assert_eq!(f.frame.pts, pkt.pts);
+            }
+            decoded.extend(frames);
         }
+        assert_eq!(decoded.len(), 6, "the first packet completes nothing");
 
-        let lost_pts = packets[1].pts;
+        let lost_pts = packets[lost].pts;
         let concealed = dec.conceal(lost_pts).unwrap();
-        assert_eq!(concealed.sample_count as usize, frame_len);
+        assert_eq!(concealed.sample_count as usize, fs);
         assert_eq!(concealed.frame.pts, lost_pts);
         assert!(
             frame_s16_energy(&concealed) > 0,
             "concealed frame must carry energy (realised from last decoded spectrum)"
         );
 
-        let tail = dec.decode(&packets[2]).unwrap();
+        let tail = dec.decode(&packets[lost + 1]).unwrap();
         assert_eq!(tail.len(), 1);
-        assert_eq!(tail[0].sample_count as usize, frame_len);
-        assert_eq!(tail[0].frame.pts, packets[2].pts);
+        assert_eq!(tail[0].sample_count as usize, fs);
+        assert_eq!(tail[0].frame.pts, packets[lost + 1].pts);
     }
 
     #[test]
     fn jittered_pts_are_preserved_not_reordered() {
         // Deliver valid packets out of PTS order (arrival: 0, 2, 3, 1) as a
         // jitter-bound real-time transport might. The decoder must not
-        // panic, must not reorder or drop on its own, and must echo each
-        // packet's own PTS back on its output frame.
+        // panic. Each emitted frame is stamped from the packet that carried
+        // it, so the stamps do not depend on arrival order.
         let cfg = CodecConfig::default();
         let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
@@ -884,13 +1143,13 @@ mod tests {
         let arrival_order = [0usize, 2, 3, 1];
         for &idx in &arrival_order {
             let decoded = dec.decode(&packets[idx]).unwrap();
+            if idx == 0 {
+                assert!(decoded.is_empty(), "the first packet completes nothing");
+                continue;
+            }
             assert_eq!(decoded.len(), 1);
             assert_eq!(decoded[0].frame.pts, packets[idx].pts);
-            assert_eq!(decoded[0].sample_count as usize, frame_len);
-            assert!(
-                frame_s16_energy(&decoded[0]) > 0,
-                "frame {idx} must decode with energy despite out-of-order arrival"
-            );
+            assert_eq!(decoded[0].sample_count as usize, fs);
         }
     }
 
@@ -979,14 +1238,39 @@ mod tests {
         };
         let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
         let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
-        let frame = make_tone_audio_frame(256, 0);
-        let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
-        let decoded = dec.decode(&packet).unwrap();
-        assert_eq!(decoded.len(), 1);
+        let frame = make_tone_audio_frame(1024, 0);
+        let packets = enc.encode(&frame).unwrap();
+        let decoded = decode_all(&mut dec, &packets);
+        let energy: i64 = decoded.iter().map(frame_s16_energy).sum();
         assert!(
-            frame_s16_energy(&decoded[0]) > 0,
+            energy > 0,
             "decoded tone must not be silent with perceptual weighting enabled"
         );
+    }
+
+    #[test]
+    fn low_bit_depth_round_trips_with_clamped_levels() {
+        // Regression: the offset-binary level was written as `q + 128` into
+        // `bits_per_coef` bits, so any depth below 8 wrapped and decoded to
+        // garbage (negative SNR). Levels now clamp to the range the width
+        // can carry, so a 4-bit tone must still reconstruct as a tone.
+        let cfg = CodecConfig::default();
+        let enc_cfg = CinderEncoderConfig {
+            frame_size: 256,
+            n_bands: 16,
+            band_steps: alloc::vec![1.0; 16],
+            bits_per_coef: 4,
+            ..Default::default()
+        };
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
+        let frame = make_tone_audio_frame(4096, 0);
+        let reference: Vec<i16> = (0..4096).map(|i| frame.s16(0, i).unwrap()).collect();
+        let mut all = enc.encode(&frame).unwrap();
+        all.extend(enc.flush().unwrap());
+        let frames = decode_all(&mut dec, &all);
+        let snr = snr_against(&reference, &frames);
+        assert!(snr > 0.0, "4-bit SNR {snr:.2} dB must be positive");
     }
 
     #[test]
@@ -1017,6 +1301,32 @@ mod tests {
             dec.decode(&pkt).unwrap_err(),
             CodecError::Unsupported("unsupported Cinder packet version")
         );
+    }
+
+    #[test]
+    fn decode_rejects_version_1_packets() {
+        // Version 1 used the same layout with non-overlapping blocks. Its
+        // packets must be refused, not overlap-added as if they were v2.
+        let mut buf = alloc::vec![0u8; 4];
+        let written = {
+            let mut w = BitWriter::new(&mut buf);
+            w.write(16, 1).unwrap();
+            w.write(1, 0).unwrap();
+            w.write(8, 1).unwrap();
+            w.finish().unwrap()
+        };
+        buf.truncate(written);
+        let pkt = Packet {
+            data: buf,
+            pts: Timestamp::zero(timebase_48k()),
+            dts: Timestamp::zero(timebase_48k()),
+            flags: PacketFlags::KEYFRAME,
+            track_id: 0,
+            duration: None,
+        };
+        let mut dec =
+            CinderDecoder::new(CodecConfig::default(), CinderEncoderConfig::default()).unwrap();
+        assert!(matches!(dec.decode(&pkt), Err(CodecError::Unsupported(_))));
     }
 
     #[test]
@@ -1074,6 +1384,66 @@ mod tests {
         let mut dec =
             CinderDecoder::new(CodecConfig::default(), CinderEncoderConfig::default()).unwrap();
         assert_eq!(dec.decode(&pkt).unwrap_err(), CodecError::MalformedPacket);
+    }
+
+    #[test]
+    fn packet_count_and_length_are_exact_after_flush() {
+        // One packet per hop, and once flushed the decoder returns every
+        // received sample. Lengths that are not a multiple of the hop get
+        // up to one hop of zero padding at the end, never less than input.
+        for &len in &[512usize, 1000, 1024] {
+            let cfg = CodecConfig::default();
+            let enc_cfg = CinderEncoderConfig {
+                frame_size: 128,
+                n_bands: 8,
+                band_steps: alloc::vec![4.0; 8],
+                bits_per_coef: 10,
+                ..Default::default()
+            };
+            let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+            let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
+            let frame = make_tone_audio_frame(len, 0);
+            let mut packets = enc.encode(&frame).unwrap();
+            packets.extend(enc.flush().unwrap());
+            let frames = decode_all(&mut dec, &packets);
+            let out = total_samples(&frames);
+            assert!(out >= len, "len {len}: decoded {out} < input");
+            assert!(
+                out < len + 128,
+                "len {len}: decoded {out} exceeds input by a hop"
+            );
+            if len % 128 == 0 {
+                assert_eq!(out, len, "exact multiple of the hop must not pad");
+            }
+        }
+    }
+
+    #[test]
+    fn flush_restarts_the_stream_cleanly() {
+        // After a flush the encoder is a fresh stream: the same input must
+        // give the same packets as a newly built encoder.
+        let cfg = CodecConfig::default();
+        let enc_cfg = CinderEncoderConfig {
+            frame_size: 128,
+            n_bands: 8,
+            band_steps: alloc::vec![4.0; 8],
+            bits_per_coef: 10,
+            ..Default::default()
+        };
+        let frame = make_tone_audio_frame(700, 0);
+        let mut fresh = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut reused = CinderEncoder::new(cfg, enc_cfg).unwrap();
+        let mut expected = fresh.encode(&frame).unwrap();
+        expected.extend(fresh.flush().unwrap());
+        let _ = reused.encode(&frame).unwrap();
+        let _ = reused.flush().unwrap();
+        let mut actual = reused.encode(&frame).unwrap();
+        actual.extend(reused.flush().unwrap());
+        assert_eq!(actual.len(), expected.len());
+        for (a, e) in actual.iter().zip(expected.iter()) {
+            assert_eq!(a.data, e.data);
+            assert_eq!(a.pts, e.pts);
+        }
     }
 
     #[test]

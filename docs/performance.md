@@ -81,8 +81,8 @@ same machine when judging a change.
 
 | bench | median | per-item | realtime factor |
 | --- | ---: | ---: | ---: |
-| `cinder/encode` (64×512 samples = 0.68 s audio) | 604 µs | 9.4 µs/block | ≥1000× |
-| `cinder/decode` (64 packets) | 676 µs | 10.6 µs/packet | ≥1000× |
+| `cinder/encode` (64×512 samples = 0.68 s audio) | 606 µs | 9.5 µs/block | ≥1000× |
+| `cinder/decode/128_packets` (the 128 hop-256 packets of those blocks) | 673 µs | 5.3 µs/packet | ≥1000× |
 | `aura_lossless/encode` (32×1024 samples = 0.68 s audio) | 1.80 ms | 56 µs/block | ~380× |
 | `aura_lossless/decode` (32 packets) | 2.37 ms | 74 µs/packet | ~290× |
 | `reed/encode` (64×320 samples = 1.28 s audio, alternating voiced/noise) | 17.0 ms | 266 µs/frame | ~75× |
@@ -108,7 +108,7 @@ same machine when judging a change.
 Readings worth recording honestly:
 
 * **Cinder clears its real-time frame budget by ~3 orders of magnitude**
-  (encode+decode ≈ 20 µs against a 5.3 ms frame budget at 256/48 kHz) —
+  (encode+decode ≈ 15 µs per 256-sample hop against a 5.3 ms frame budget at 256/48 kHz; figures are Cinder version 2, 2026-10-14) —
   consistent with §5.2's ≤10% target and the FFT-backed MDCT switch.
 * **Aura lossless decode is ~4× more expensive than Cinder decode** —
   expected: LPC synthesis + Exp-Golomb per residual vs. band-quantized

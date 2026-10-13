@@ -286,10 +286,14 @@ impl StreamParser {
             MAX_TRAK_BYTES
         } else {
             // Not a chunk this parser interprets: skip it without buffering,
-            // whatever size it claims.
-            self.start = body_start;
+            // whatever size it claims. Only the body bytes already received
+            // are consumed here; `Skip` discards the rest as it arrives. The
+            // body may not have arrived yet, so `start` must not run past
+            // the buffer.
+            let buffered_body = self.buf.len().saturating_sub(body_start).min(size);
+            self.start = body_start + buffered_body;
             self.stats.skipped_chunks += 1;
-            self.state = State::Skip(size as u64);
+            self.state = State::Skip((size - buffered_body) as u64);
             return Ok(Step::Continue);
         };
         if size > cap {
@@ -306,7 +310,11 @@ impl StreamParser {
             return Ok(Step::NeedInput);
         }
         let step = self.handle_chunk(id, body_start, body_end);
-        self.start = body_end;
+        // A failed chunk has already released the buffer (`fail`), so the
+        // offset must not be advanced into it.
+        if step.is_ok() {
+            self.start = body_end;
+        }
         step
     }
 

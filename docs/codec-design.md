@@ -50,19 +50,19 @@ convention): 90 bits of coded parameters = 4.5 kbps; the wire-rounded
   vowels can lock onto formant ringing near half the true period (the
   tests assert periodicity at the transmitted lag instead).
 
-### Cinder v1 — wire format
+### Cinder v2 — wire format (layout unchanged from v1)
 
-`codecs/cinder/src/lib.rs` (`VERSION = 1`). One packet = one frame;
-fixed-width fields, bit-packed via `BitWriter` in this order:
+`codecs/cinder/src/lib.rs` (`VERSION = 2`). Version 1 used the same layout with non-overlapping blocks and is rejected. One packet = one hop of `frame_size` samples (the MDCT block; the decoder overlap-adds it, see "Cinder v2 — overlap-add redesign" below).
+Fixed-width fields, bit-packed via `BitWriter`, in this order:
 
 | Field | Width | Contents |
 | ----- | ----- | -------- |
-| `version` | 16 bits | bitstream version, `1`; a mismatching decoder rejects with `CodecError::Unsupported` before any further parse |
+| `version` | 16 bits | bitstream version, `2`; a mismatching decoder rejects with `CodecError::Unsupported` before any further parse |
 | `frame_size` | 1 bit | `0` = 128 samples, `1` = 256 — self-described per packet, so a decoder configured for one size inverts the other correctly |
 | `n_bands` | 8 bits | number of spectral bands that follow |
 | per band: `step` | 16 bits | integer quantization step (the band's effective step after optional perceptual weighting; integer by wire definition, so weighting can only coarsen) |
 | per band: `n_coeffs` | 8 bits | coefficient count for the band |
-| per band: levels | `bits_per_coef` bits each | quantized MDCT levels, offset binary (wire value = level + 128, source clamped to ±127) |
+| per band: levels | `bits_per_coef` bits each | quantized MDCT levels, offset binary (wire value = level + 2^(bits−1); level clamped to ±(2^(bits−1) − 1), so every width from 4 to 12 bits round-trips. At 8 bits this is the version 1 mapping: +128, clamped to ±127) |
 | `keyframe` | 1 bit | always `1` in v1 — every Cinder packet is self-contained (`PacketFlags::KEYFRAME` is set on every emitted packet) |
 
 No entropy coder and no integrity trailer in v1 — each level is stored
@@ -70,6 +70,138 @@ at its full configured width, and packet integrity is the container's
 job at this layer. The per-packet bit budget is
 `16 + n_bands·(24 + bits_per_coef·band_size) + 8 + 16`, which bounds
 the encoder's allocation exactly.
+
+### Cinder v2 — overlap-add redesign (planned and implemented 2026-10-14)
+
+Fixes the structural ≈3 dB SNR ceiling recorded in `todo.md` Known Issues
+(2026-09-14). Written as a plan first so the wire and framing decisions
+could be reviewed; implemented the same day as wire version 2.
+
+**As built.** Decisions 1–8 below held, with three refinements found in
+implementation:
+
+- **Timestamps (decision 4/5 refined).** Packet `k` carries the start of
+  the output it yields, `origin + (k−1)·N`, and the first packet takes the
+  origin. A decoded frame's pts is therefore its packet's pts, the
+  convention the FFI and the web player already assume. The first version
+  of this design stamped the packet with its *new* region's start and
+  subtracted `N` at the decoder. That was wrong for players that anchor on
+  packet pts, which then started one block late. The fix moves the offset
+  to the encoder, so no timestamp is negative.
+- **Decoder `flush` is a hard reset** (it clears the overlap tail). Encoder
+  `drain` emits the tail without touching state, and `flush` is `drain` plus
+  a reset, per the trait contract.
+- **Bit depth below 8 (not in the plan).** The offset-binary level was
+  `q + 128` in `bits_per_coef` bits, so depths 4–7 wrapped and decoded to
+  negative SNR in version 1. Levels now clamp to `±(2^(bits−1) − 1)` with
+  offset `2^(bits−1)`, identical to version 1 at 8 bits. This was needed for
+  any fair rate comparison, since the low-rate operating points do not exist
+  without it.
+
+**Results** (§37 corpus, 1 s, `band_steps` 1.0, 16 bands, 8 bits; v1 values
+from the same harness before the change):
+
+| signal | v1 | v2 |
+| --- | ---: | ---: |
+| sine 1 kHz | 3.01 dB | 34.30 dB |
+| square 220 Hz | 3.03 dB | 26.79 dB |
+| sweep 100 Hz–8 kHz | 2.93 dB | 34.85 dB |
+| noise | 2.95 dB | 21.08 dB |
+| clicks | 1.59 dB | 17.49 dB |
+| mixed | 3.00 dB | 20.72 dB |
+| DC (full scale) | 2.67 dB | 50.46 dB |
+| alternating (full scale) | 2.69 dB | 50.29 dB |
+
+Rate at a given bit depth doubles, as decision 8 predicted (231.6 → 465.7
+kbit/s at 8 bits, 16 bands). **Matched rate** (about 218 kbit/s, 4 bands,
+4 bits): v1 cannot reach this point at all, since its 4-bit mode was broken,
+and its 8-bit point at 231.6 kbit/s is flat at ~3 dB. v2 at this rate reaches
+8–31 dB across the corpus. The best step differs per signal (tones and sweep
+prefer 16, noise prefers 1, DC prefers 64), so these are post-hoc choices,
+not a tuned default. A step-selection rule is a separate change.
+
+**Not changed by design.** Noise and mixed content plateau near 21 dB at
+every depth from 5 to 10 bits with `band_steps` 1.0. That is the ±127 level
+clamp at step 1.0, a tuning limit and not the overlap bug. The CLI's default
+steps have the same limit.
+
+The following is the original plan, kept for the record.
+
+**Root cause.** `CinderEncoder::encode` windows `2N` samples and advances
+by `2N` (`codecs/cinder/src/lib.rs`, the `two_n * 2` slice), so the
+blocks do not overlap. `CinderDecoder::decode_inner` IMDCTs each packet
+and emits its full `2N` windowed samples with no overlap-add. Without the
+overlap, time-domain aliasing never cancels, and every input decodes at
+the same ≈3 dB ceiling regardless of quantization quality.
+
+**Evidence the fix is sound.** `tpt-dsp-core`'s
+`overlap_add_round_trip_reconstructs_signal` already proves that hop-`N`
+analysis of `2N`-sample sine-windowed blocks, IMDCT, windowed
+overlap-add, reconstructs the interior to `1e-6` at this normalization.
+Cinder's `FastMdctPlan` is checked against the direct reference
+(`fast_matches_reference_forward`/`_inverse`), so the same identity holds
+for the plan Cinder calls. The end-to-end codec SNR is *not* yet measured;
+that is step 4 below.
+
+**Decisions.**
+
+1. **Packet payload is unchanged.** Each packet still carries one spectrum
+   of `N` coefficients in the v1 bit layout. Only the analysis hop (`N`,
+   not `2N`) and the synthesis (overlap-add) change.
+2. **Bump `VERSION` to 2.** The payload layout is the same, but its
+   *meaning* changes: a v1 packet decoded by an OLA decoder produces
+   wrong audio, and a v2 packet decoded by a v1 decoder would be silently
+   misread. Per §35 this must fail fast, not guess, so v1 packets are
+   rejected with `CodecError::Unsupported`.
+3. **Encoder keeps `N` samples of history.** Each `encode` call consumes
+   `N` new samples, windows `history ++ new` (`2N`), emits one packet, and
+   keeps the newest `N` as history. The first block is primed with zeros.
+   The history buffer is allocated at construction, so the real-time
+   allocation contract (`tests/realtime_alloc.rs`) holds.
+4. **Decoder keeps an `N`-sample overlap tail.** Each packet is IMDCT'd,
+   windowed, summed with the stored tail; the first `N` results are
+   emitted and the second `N` become the next tail. A packet therefore
+   completes the *previous* block, so the first packet produces no output
+   and the stream has one block (`N` samples) of latency.
+5. **Output frames are `N` samples, not `2N`.** `sample_count` becomes `N`.
+   The output `pts` of a completed block is the pts of its first sample.
+6. **Flush pads.** `flush` on the encoder emits one zero-padded final block
+   so the decoder can complete every real sample. The decoder's `flush`
+   emits the remaining tail and nothing else.
+7. **Concealment continues the tail.** `conceal` synthesises `N` samples
+   from `last_spectrum` and adds the stored overlap tail, so a concealed
+   packet does not click at the seam.
+8. **Rate doubles at a given quantizer.** Packets now arrive every `N`
+   samples instead of every `2N`, so bits per second roughly double at
+   identical band steps and `bits_per_coef`. This is a real trade, not a
+   bug: every rate-quality comparison (the §37 corpus floors and any
+   bitrate claim) must be redone at matched bitrate, not matched step.
+   If a fixed bitrate is wanted, the step tables are retuned, not the hop.
+
+**Tests that change.** The §29 tests that assert `2N` samples in, one
+packet, `2N` samples out must be rewritten for `N`-in / `N`-out with
+one-block latency. `tests/property.rs` and `tests/realtime_alloc.rs` use
+`BLOCK` sized for the old hop and need the same update. The §37 corpus
+floors (pinned at the measured ≈3 dB values as regression guards) must be
+re-measured and raised; the guards exist exactly so this change shows up.
+
+**Steps, each a separate, testable change.**
+
+1. Add the `N`-sample history and overlap tail in pure helper code, with a
+   unit test that a hop-`N` encode followed by an overlap-add decode
+   reconstructs a sine and a noise input above the old ceiling.
+2. Switch the encoder and decoder to hop `N`, bump `VERSION` to `2`, and
+   add the v1-rejection test (fail fast, per §35).
+3. Update the packet-count, latency, and flush tests (decision 6), and the
+   `property`/`realtime_alloc` sizing.
+4. Re-measure the §37 corpus (sine, square, sweep, noise, clicks, mixed,
+   DC, alternating) and record the new floors. Keep the old values in the
+   changelog so the improvement is visible.
+5. Measure rate-quality at matched bitrate against v1 and record it in
+   `CHANGELOG.md`. Only then close the Known Issues entry.
+
+**Not in scope.** Entropy coding, the Rice-coding item, and a
+cancellation token are separate open items; this change touches neither.
 
 ### Aura v1 — wire format
 
@@ -577,8 +709,9 @@ cheapest (the shallow part of a quadratic exposure ramp at `qp` 30,
 where the residual a tilted weight would remove is sub-step). The
 exposure-ramp test (`tests/weighted_b.rs`) pins the exact case: a B
 frame built as the decoder's own 3/4-past blend is reconstructed
-exactly at 3/4 past. Remaining on the v0.3 list: long-term references (stage 3 below) —
-per-leaf combine modes shipped as stage 2.
+exactly at 3/4 past. Per-leaf combine modes shipped as stage 2 and
+long-term references as stage 3 (below), so the v0.3 list is complete;
+reference reordering was not planned as a standalone feature.
 
 ### Vault B-frames v0.3 remainder — design (written 2026-10-07, coded next)
 
@@ -704,7 +837,7 @@ The current versions, and where each layout is specified:
 
 | Codec | Crate | `VERSION` | Layout specified | Integrity |
 | ----- | ----- | --------- | ---------------- | --------- |
-| Cinder | `tpt-audio-cinder` | 1 | above, "Cinder v1 — wire format" | none in v1 (documented limitation) |
+| Cinder | `tpt-audio-cinder` | 2 | above, "Cinder v2 — wire format" and "Cinder v2 — overlap-add redesign" | none in v2 (documented limitation) |
 | Aura | `tpt-audio-aura` | 1 | above, "Aura v1 — wire format" | CRC-32 trailer |
 | Reed | `tpt-audio-reed` | 1 | above, "Reed v0.1 — implemented design" | CRC-32 trailer |
 | Thrum | `tpt-video-thrum` | 1 | above, "Thrum v0.1 — implemented design" | CRC-32 trailer |

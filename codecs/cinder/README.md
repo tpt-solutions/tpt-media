@@ -51,10 +51,17 @@ let cfg = CodecConfig::new(*b"CIND", 1);
 let enc_cfg = CinderEncoderConfig::default(); // 256-sample frames, 48 kHz
 
 let mut enc = CinderEncoder::new(cfg, enc_cfg.clone())?;
-let packets: Vec<Packet> = enc.encode(&audio_frame)?;
-
 let mut dec = CinderDecoder::new(cfg, enc_cfg)?;
-let frames = dec.decode(&packets[0])?;
+
+// One packet per 256 input samples; the last block is held back until drain.
+let mut packets: Vec<Packet> = enc.encode(&audio_frame)?;
+packets.extend(enc.drain()?);
+
+let mut frames = Vec::new();
+for pkt in &packets {
+    // The first packet completes no output: the decoder has one block of latency.
+    frames.extend(dec.decode(pkt)?);
+}
 ```
 
 Quality maps to `CinderEncoderConfig::bits_per_coef` (4–12) through the CLI's
@@ -70,6 +77,11 @@ field in [`docs/codec-design.md`](../../docs/codec-design.md).
 Wire-format changes that have shipped (recorded here because they change
 what bytes are valid, not just the API):
 
+- Version 2 (2026-10-14): overlap-add. The packet layout is unchanged, but
+  each packet is now a hop-`frame_size` block that the decoder overlap-adds.
+  Version 1 packets are rejected. Bit depths 4–7 were also corrected: levels
+  now clamp to the width's signed range. See `CHANGELOG.md`.
+
 - The CRC-32 trailer (`CRC_TRAILER_BYTES = 4`) was added over all preceding
   payload bytes; packets encoded before it are rejected.
 - The 16-bit bitstream version field was added; pre-version packets are
@@ -81,17 +93,20 @@ what bytes are valid, not just the API):
 cargo bench -p tpt-audio-cinder
 ```
 
-`benches/codec_bench.rs` — encode/decode of 64 × 512-sample blocks at 48 kHz.
-On the recorded machine (2026-09-14, release profile, criterion):
+`benches/codec_bench.rs` — encode of 64 × 512-sample blocks, and decode of
+the 128 packets they produce, at 48 kHz. Release profile, criterion `--quick`,
+2026-10-14 (version 2). Version 1 measured 604 µs and 676 µs.
 
 | bench | median | per-item | real-time factor |
 |---|---:|---:|---:|
-| `cinder/encode` (64 × 512 samples = 0.68 s) | 604 µs | 9.4 µs/block | ≥1000× |
-| `cinder/decode` (64 packets) | 676 µs | 10.6 µs/packet | ≥1000× |
+| `cinder/encode` (64 × 512 samples = 0.68 s) | 606 µs | 9.5 µs/block | ≥1000× |
+| `cinder/decode/128_packets` | 673 µs | 5.3 µs/packet | ≥1000× |
 
-Encode + decode ≈ 20 µs against a 5.3 ms frame budget at 256/48 kHz —
-roughly three orders of magnitude of headroom. Canonical tables:
-[`docs/performance.md`](../../docs/performance.md).
+Each packet now covers one 256-sample hop, so a single packet costs about
+half of what a 512-sample packet did, but there are twice as many of them.
+Encode and decode together are about 15 µs per hop against a 5.3 ms frame
+budget at 256/48 kHz, which leaves roughly three orders of magnitude of
+headroom. Canonical tables: [`docs/performance.md`](../../docs/performance.md).
 
 Profiling recipe: release build, `cargo bench -p tpt-audio-cinder`, then
 `cargo flamegraph --bench codec_bench -- -c <case>` on Linux,
@@ -116,9 +131,10 @@ cargo test -p tpt-audio-cinder
 
 ## Known limitations
 
-- **Structural quality ceiling.** Uniform scalar quantisation with a fixed
-  bit depth tops out around 3 dB better than the input's own noise floor in
-  the recorded experiments (todo.md Known Issues). Use
+- **Noise-like content plateaus at the default step.** With `band_steps` of
+  1.0, the ±127 level clamp limits noise and mixed material to about 21 dB
+  SNR at any bit depth from 5 to 10. That is a tuning limit: a larger step
+  lifts the ceiling, at the cost of noise on quiet material. Use
   [`tpt-audio-aura`](../aura) for archival fidelity.
 - Mono only, 44.1/48 kHz, `S16` — anything else is refused with
   `CodecError::Unsupported`, not silently converted.

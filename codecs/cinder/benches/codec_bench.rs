@@ -73,7 +73,8 @@ fn bench_cinder(c: &mut Criterion) {
         })
     });
 
-    // Decode: packets pre-encoded once outside the timed loop.
+    // Decode: packets pre-encoded once outside the timed loop. Each 512-sample
+    // block yields two hop-256 packets, so this is 128 packets.
     let packets: Vec<_> = {
         let mut enc = CinderEncoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
         input
@@ -81,7 +82,7 @@ fn bench_cinder(c: &mut Criterion) {
             .flat_map(|f| enc.encode(f).expect("encode"))
             .collect()
     };
-    group.bench_function("decode/64_packets@48k", |b| {
+    group.bench_function("decode/128_packets@48k", |b| {
         let mut dec = CinderDecoder::new(CodecConfig::default(), enc_cfg.clone()).unwrap();
         b.iter(|| {
             for pkt in black_box(&packets) {

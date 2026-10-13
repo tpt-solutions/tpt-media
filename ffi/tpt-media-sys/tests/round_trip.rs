@@ -70,10 +70,22 @@ unsafe fn encode_all(codec: u32, rate: u32, blocks: usize) -> Vec<(Vec<u8>, i64)
         tpt_media_sys::tpt_packet_free(pkt);
     }
 
+    // Cinder's overlap-add holds back the last block until flush; the
+    // other audio encoders have nothing buffered and return no packet.
     let mut pkt: *mut tpt_media_sys::TptPacket = ptr::null_mut();
     let rc = tpt_media_sys::tpt_encoder_flush(enc, &mut pkt);
     assert_eq!(rc, TptError::Ok.code(), "flush");
-    assert!(pkt.is_null(), "audio encoders buffer nothing");
+    if !pkt.is_null() {
+        let len = tpt_media_sys::tpt_packet_len(pkt);
+        let data = tpt_media_sys::tpt_packet_data(pkt);
+        let mut bytes = Vec::with_capacity(len as usize);
+        for i in 0..len as usize {
+            // SAFETY: data points at len readable bytes per the ABI.
+            bytes.push(unsafe { *data.add(i) });
+        }
+        out.push((bytes, tpt_media_sys::tpt_packet_pts(pkt)));
+        tpt_media_sys::tpt_packet_free(pkt);
+    }
     tpt_media_sys::tpt_encoder_free(enc);
     out
 }
@@ -102,7 +114,12 @@ unsafe fn decode_all(codec: u32, rate: u32, packets: &[(Vec<u8>, i64)]) -> Vec<V
         let mut frame: *mut tpt_media_sys::TptFrame = ptr::null_mut();
         let rc = tpt_media_sys::tpt_decoder_decode(dec, pkt, &mut frame);
         assert_eq!(rc, TptError::Ok.code(), "decode");
-        assert!(!frame.is_null(), "decode must produce a frame");
+        if frame.is_null() {
+            // A packet may complete no output: Cinder's first packet only
+            // primes the overlap-add.
+            tpt_media_sys::tpt_packet_free(pkt);
+            continue;
+        }
         assert_eq!(tpt_media_sys::tpt_frame_pts(frame), *pts, "PTS carried");
         assert_eq!(tpt_media_sys::tpt_frame_sample_rate(frame), rate);
 

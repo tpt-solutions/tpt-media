@@ -13,7 +13,7 @@ use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, T
 
 const RATE: u32 = 48_000;
 /// Samples per encode block, matching the CLI (`samples_per_block`):
-/// Cinder's 2×256 window, Aura's 1024.
+/// Cinder's two 256-sample hops, Aura's 1024.
 const CINDER_BLOCK: usize = 512;
 const AURA_BLOCK: usize = 1024;
 /// One second of audio per corpus signal.
@@ -70,6 +70,11 @@ fn cinder_round_trip(samples: &[u8], bits_per_coef: u8) -> Vec<u8> {
             }
         }
     }
+    for pkt in enc.drain().expect("cinder drain") {
+        for f in dec.decode(&pkt).expect("cinder decode") {
+            out.extend_from_slice(&f.samples);
+        }
+    }
     out.truncate(samples.len());
     out
 }
@@ -111,26 +116,22 @@ fn aura_round_trip(samples: &[u8]) -> Vec<u8> {
 /// Per-signal Cinder round-trip SNR floors (dB) at the CLI's
 /// default-equivalent quality (10 bits/coefficient).
 ///
-/// These floors sit just under the *measured* values, because Cinder v0.1
-/// has a structural quality ceiling of ≈3 dB shared by every signal (see
-/// todo.md Known Issues, 2026-09-14): the encoder MDCTs non-overlapping
-/// 2N-sample windows (hop 2N), so the TDAC overlap-add that would recover
-/// the window edges never happens and half of each window's samples
-/// time-alias away. That is a codec-design defect to fix in its own
-/// change, not something these tests can or should mask — what they guard
-/// against is a *further regression* (quantization, bitstream bugs) on
-/// top of today's measured behavior.
+/// These floors sit about 1 dB under the *measured* Cinder v2 values
+/// (hop-N MDCT with decoder overlap-add). The v1 floors were pinned at a
+/// structural ≈3 dB ceiling (todo.md Known Issues, 2026-09-14); v2 removes
+/// it. The floors are regression guards: a drop below them means a real
+/// quantization or overlap-add regression, not a return of the old ceiling.
 fn cinder_floor(signal: &str) -> f64 {
     match signal {
-        "silence" => f64::INFINITY,     // handled separately: must stay silent
-        "sine_1khz" => 1.5,             // measured 3.01
-        "square_220hz" => 1.5,          // measured 3.03
-        "sweep_100_8k" => 1.5,          // measured 2.93
-        "noise" => 1.5,                 // measured 2.95
-        "clicks" => 0.5,                // measured 1.59
-        "mixed" => 1.5,                 // measured 3.00
-        "dc_fullscale" => 1.0,          // measured 2.67
-        "alternating_fullscale" => 1.0, // measured 2.69
+        "silence" => f64::INFINITY,      // handled separately: must stay silent
+        "sine_1khz" => 33.0,             // measured 34.30
+        "square_220hz" => 25.0,          // measured 26.79
+        "sweep_100_8k" => 33.0,          // measured 34.85
+        "noise" => 20.0,                 // measured 21.08 (level-clamp limited)
+        "clicks" => 16.0,                // measured 17.49
+        "mixed" => 19.0,                 // measured 20.72
+        "dc_fullscale" => 49.0,          // measured 50.46
+        "alternating_fullscale" => 49.0, // measured 50.29
         other => panic!("unknown corpus signal {other}"),
     }
 }
@@ -283,8 +284,8 @@ fn transcode_aura_to_cinder_round_trips_audibly() {
     let frame = tpt_media_io::decode_wav(&wav).expect("decoded wav");
     let back = s16_bytes_to_f32(&frame.samples);
     let snr = snr_db(&test_tone(), &back).expect("tone is not silent");
-    // Same ≈3 dB structural ceiling as the corpus test (see
-    // `cinder_floor`); require "no worse than today's measured 2.9 dB".
+    // Cinder v2 reconstructs well above its old ≈3 dB ceiling (see
+    // `cinder_floor`); this only requires the transcode path to be audible.
     assert!(snr > 1.0, "aura->cinder transcode SNR {snr:.1} dB too low");
 }
 

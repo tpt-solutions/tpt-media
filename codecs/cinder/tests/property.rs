@@ -50,6 +50,11 @@ fn encode_blocks(enc: &mut CinderEncoder, blocks: &[Vec<u8>]) -> Vec<Vec<u8>> {
             packets.push(p.data);
         }
     }
+    // The decoder completes each block one packet late, so the stream is
+    // only whole after the encoder's flush has emitted the tail.
+    for p in enc.flush().expect("flush") {
+        packets.push(p.data);
+    }
     packets
 }
 

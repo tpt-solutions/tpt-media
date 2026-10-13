@@ -749,9 +749,9 @@ struct EncodeJob {
     extra_meta: Vec<(String, MetadataValue)>,
 }
 
-/// Samples per encode block per codec — Cinder's 512 = its 2×256-sample
-/// window, Aura's 1024, Reed's 20 ms frame (160/320 samples at 8/16 kHz,
-/// hence the rate).
+/// Samples per encode block per codec — Cinder's 512 = two 256-sample hops,
+/// Aura's 1024, Reed's 20 ms frame (160/320 samples at 8/16 kHz, hence the
+/// rate).
 fn samples_per_block(codec: AudioCodec, rate: u32) -> usize {
     match codec {
         AudioCodec::Cinder => 2 * 256,
@@ -840,6 +840,15 @@ fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
             written += 1;
         }
         block_index += 1;
+    }
+    // Codecs that hold back output (Cinder's overlap-add tail) release it
+    // only at end-of-stream.
+    let tail = encoder.drain().map_err(|e| format!("drain failed: {e}"))?;
+    for pkt in tail {
+        if let Err(e) = muxer.write_packet_raw(&pkt) {
+            return Err(format!("mux failed: {e:?}"));
+        }
+        written += 1;
     }
     Ok((muxer.finish(), written))
 }
@@ -1284,7 +1293,7 @@ pub fn decode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
 /// exact sample count recorded by `tpt encode` (see
 /// [`TRACK_SAMPLE_COUNT_KEY`]). Without that metadata the frames pass
 /// through unchanged.
-fn trim_padding(frames: &mut [tpt_media_core::AudioFrame], track: &tpt_media_core::Track) {
+fn trim_padding(frames: &mut Vec<tpt_media_core::AudioFrame>, track: &tpt_media_core::Track) {
     let exact = track
         .metadata
         .iter()
@@ -1301,17 +1310,25 @@ fn trim_padding(frames: &mut [tpt_media_core::AudioFrame], track: &tpt_media_cor
     if decoded <= exact {
         return;
     }
-    let excess = decoded - exact;
-    let last = match frames.last_mut() {
-        Some(l) => l,
-        None => return,
-    };
-    let last_count = last.sample_count as usize;
-    if excess > last_count {
-        return;
+    // The excess can span several trailing frames (Cinder's hop-sized
+    // frames are shorter than its padding), so drop whole frames from the
+    // end and trim the last partial one.
+    let mut excess = decoded - exact;
+    while excess > 0 {
+        let last = match frames.last_mut() {
+            Some(l) => l,
+            None => return,
+        };
+        let last_count = last.sample_count as usize;
+        if excess >= last_count {
+            frames.pop();
+            excess -= last_count;
+        } else {
+            last.sample_count = (last_count - excess) as u32;
+            last.samples.truncate(last.sample_count as usize * 2);
+            excess = 0;
+        }
     }
-    last.sample_count = (last_count - excess) as u32;
-    last.samples.truncate(last.sample_count as usize * 2);
 }
 
 /// Map `--quality 0..=100` onto the codec's per-coefficient bit count —
@@ -1697,6 +1714,7 @@ fn bench_pass(
                 .map_err(|e| format!("encode failed: {e}"))?,
         );
     }
+    packets.extend(encoder.drain().map_err(|e| format!("drain failed: {e}"))?);
     let encode_ms = t0.elapsed().as_secs_f64() * 1e3;
     let t1 = std::time::Instant::now();
     let mut frames = Vec::new();

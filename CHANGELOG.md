@@ -7,6 +7,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+Changed
+
+- **Cinder v2: overlap-add MDCT (wire version 2, breaking) (2026-10-14).**
+  Cinder now analyses hop-`frame_size` blocks and its decoder overlap-adds
+  them, so the structural ≈3 dB SNR ceiling (todo.md Known Issues,
+  2026-09-14) is gone. At 8 bits per coefficient the §37 corpus measures
+  sine 34.30 dB, square 26.79 dB, noise 21.08 dB (were 3.01, 3.03, 2.95).
+  The packet layout is unchanged; version 1 packets are rejected. Packets
+  arrive every `frame_size` samples, so bitrate doubles at a given bit
+  depth. Packets carry the timestamp of the output they yield, the first
+  packet yields nothing, and `drain`/`flush` release the held-back tail.
+  Plan and decisions: `docs/codec-design.md`, "Cinder v2". The C ABI's
+  Cinder block size is now 256 (was 512). Corpus floors in the CLI's
+  quality tests are re-pinned to the measured values.
+
+### Fixed (Cinder and the workspace, 2026-10-14)
+
+- Cinder bit depths below 8 wrapped the offset-binary level and decoded to
+  negative SNR. Levels now clamp to the width's signed range; `bits_per_coef`
+  is validated to `4..=12`.
+- `tpt decode` trimmed padding only within the last decoded frame, so a
+  padding excess spanning several shorter frames (Cinder v2's hop-sized
+  frames) was left in the output. It now drops whole trailing frames.
+- The audio encode job and the benchmark never drained the encoder, which
+  would have dropped Cinder's tail block.
+- The web parser subtracted past the end of its buffer when a chunk handler
+  failed (the failed chunk had already released the buffer) and when an
+  unknown chunk's body had not yet arrived. Found by the parser fuzz test on
+  the new Cinder base file.
+
 Added
 
 - **Vault's B leaves gain forward-only and backward-only combine modes

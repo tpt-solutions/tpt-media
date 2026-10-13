@@ -223,13 +223,13 @@ fn quality_to_lsf_bits(q: u8) -> u8 {
 /// codec is unknown.
 ///
 /// The native audio encoders consume exactly one block per call
-/// (Cinder's 2×256-sample MDCT window, Aura's 1024-sample block,
+/// (Cinder's 256-sample hop, Aura's 1024-sample block,
 /// Reed's 20 ms frame); frames of any other length are rejected with
 /// `TPT_ERR_INVALID_ARGUMENT`, and this function is how a caller
 /// sizes them.
 pub fn block_size(id: CodecId, rate: u32) -> Option<usize> {
     match classify(id)? {
-        CodecKind::Cinder => Some(2 * 256),
+        CodecKind::Cinder => Some(256),
         CodecKind::Aura => Some(usize::from(AuraConfig::default().block_size)),
         CodecKind::Reed => Some(rate as usize / 50),
     }
@@ -552,7 +552,7 @@ pub unsafe extern "C" fn tpt_encoder_encode(
 }
 
 /// The number of samples per channel one encode call consumes for
-/// this codec and sample rate (Cinder 512, Aura 1024, Reed rate/50),
+/// this codec and sample rate (Cinder 256, Aura 1024, Reed rate/50),
 /// or 0 for an unknown codec id.
 ///
 /// # Safety

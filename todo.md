@@ -11,9 +11,9 @@
 
 ## Known issues (as of 2026-09-07)
 
-* **2026-09-14 — Cinder has a structural ≈3 dB SNR ceiling on every
-  signal** (found by the new §36/§37 corpus quality tests, not by
-  review). The encoder MDCTs *non-overlapping* 2N-sample windows (input
+* ~~**2026-09-14 — Cinder has a structural ≈3 dB SNR ceiling on every
+  signal**~~ **Fixed 2026-10-14 (Cinder wire version 2).** (Originally
+  found by the new §36/§37 corpus quality tests, not by review.) The encoder MDCTs *non-overlapping* 2N-sample windows (input
   hop = 2N) and the decoder emits a windowed IMDCT per packet with no
   overlap-add, so the TDAC reconstruction that a Princen–Bradley
   sine-window MDCT requires never happens: half of each window's
@@ -28,7 +28,16 @@
   currently assert 2N-sample frames in → one packet → 2N samples out).
   Recorded as a known defect with the §37 corpus floors pinned at
   measured values as regression guards; the redesign is its own future
-  change, not something to slip in unnoticed.
+  change, not something to slip in unnoticed. **Resolved 2026-10-14**
+  (`docs/codec-design.md`, "Cinder v2 — overlap-add redesign"): hop-N
+  analysis, decoder overlap-add, `VERSION` 2. Corpus SNR rose from about
+  3 dB to 21–50 dB at 8 bits. Packet rate doubles at a fixed quantizer,
+  so the rate-quality comparison was made at matched bitrate: at about
+  218 kbit/s v2 reaches 8–31 dB where v1 was flat at ~3 dB. The §37
+  floors are re-pinned. Noise and mixed content still plateau near 21 dB
+  at step 1.0 (the ±127 level clamp, a tuning limit). The same change
+  fixes bit depths 4–7, which wrapped their levels and decoded to negative
+  SNR before (see `CHANGELOG.md`).
 * **2026-09-14 — `RangeDecoder` desynchronized from the encoder for any
   `freq > 1` symbol — found and fixed by the new §38 property tests.**
   `decode(total)` narrowed by `range/total` regardless of the decoded
@@ -1812,11 +1821,18 @@ Not done, and why (left honestly open):
       `max_packet_bits` derivation gained the B-leaf motion accounting
       it had missed since v2 (a B leaf writes four absolute vectors,
       4 · 67 bits, against the charged two P deltas) and its bound test
-      now runs at `b_frames = 2`. Still open (v0.3+): long-term
-      references (stage 3; reference reordering folded into it),
-      designed in `docs/codec-design.md`'s "v0.3 remainder" section.
-      The keyframe schedule also now counts every coded frame (display
-      cadence; see CHANGELOG)
+      now runs at `b_frames = 2`. **v0.3 stage 3 (wire v5) followed the
+      same day**: one long-term reference outside the short-term pool,
+      addressed as index `num_refs` when the I/P header's explicit
+      `ltr_used` flag widens the leaf index field (the width never
+      depends on decoder state), pinned by `ltr_update`, and selected by
+      `long_term_interval` (0 = off by default). Pinned by
+      `tests/ltr.rs` (the A/B/A/B value case, drift-freedom through
+      scene cuts and B frames, the hostile `ltr_used`-without-LTR case).
+      Reference reordering was dropped as a standalone feature: every
+      inter leaf already names its reference explicitly. The keyframe
+      schedule also now counts every coded frame (display cadence; see
+      CHANGELOG)
 * [x] frame-level rate control (2026-10-05): `VaultConfig::
       target_bits_per_frame` — a bounded search (at most three encodes
       per frame) around the previous frame's choice, driven by a
