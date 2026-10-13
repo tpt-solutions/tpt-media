@@ -37,10 +37,11 @@
 //! reference, so bands the ear is objectively less sensitive to (relative
 //! to 1kHz) get proportionally coarser steps for the same nominal
 //! `band_steps` input. The scaling only ever *coarsens* a band's step,
-//! never sharpens it below its configured value, since the wire format's
-//! step field is an integer with no sub-configured granularity to
-//! sharpen into. Zero added real-time cost, no wire-format change, since
-//! Cinder already transmits the actual per-band step used.
+//! never sharpens it below its configured value. The wire carries each
+//! band's step in `1 / STEP_UNIT` fixed point, so the effective step is
+//! rounded to that grid before quantising. Zero added real-time cost, and
+//! no extra side information, since Cinder already transmits the actual
+//! per-band step used.
 //!
 //! See `docs/provenance.md` for algorithm sources.
 
@@ -69,11 +70,23 @@ pub const FRAME_256: u16 = 256;
 /// Codec id for Cinder.
 pub const CODEC_ID: [u8; 4] = *b"CIND";
 
-/// Bitstream version. Version 2 keeps the version 1 packet layout but
-/// changes its meaning: packets are hop-`frame_size` MDCT blocks that the
-/// decoder overlap-adds. A version 1 packet decoded as version 2 would be
-/// misreconstructed, so version 1 is rejected rather than guessed at.
-pub const VERSION: u16 = 2;
+/// Bitstream version. Version 2 changed the meaning of a packet: hop-`frame_size`
+/// MDCT blocks that the decoder overlap-adds. Version 3 changes the meaning of
+/// the per-band step field: it is now a fixed-point value in units of
+/// `1 / STEP_UNIT` (it was a whole number, so every step below 1.0 was
+/// unrepresentable). A packet from either earlier version would be
+/// misreconstructed, so both are rejected rather than guessed at.
+pub const VERSION: u16 = 3;
+
+/// Units per 1.0 of a band's quantisation step on the wire. Coefficients
+/// of normalised input have a median magnitude near 0.003 and a 99th
+/// percentile near 1, so a 1/256 unit (which cannot go below 0.0039) cannot
+/// reach the fine steps a rate-quality curve needs. A `u16` at 1/1024 spans
+/// steps from 0.001 to 64.
+pub const STEP_UNIT: f32 = 1024.0;
+
+/// Smallest and largest per-band step the wire can carry.
+const STEP_RANGE: core::ops::RangeInclusive<f32> = (1.0 / STEP_UNIT)..=(u16::MAX as f32 / STEP_UNIT);
 
 /// Inclusive range of supported `bits_per_coef` values.
 const BITS_PER_COEF: core::ops::RangeInclusive<u8> = 4..=12;
@@ -288,6 +301,11 @@ impl CinderEncoder {
         if !BITS_PER_COEF.contains(&enc.bits_per_coef) {
             return Err(CodecError::InvalidConfig("bits_per_coef must be 4..=12"));
         }
+        if !enc.band_steps.iter().all(|s| STEP_RANGE.contains(s)) {
+            return Err(CodecError::InvalidConfig(
+                "band_steps must be within 1/1024..=64",
+            ));
+        }
         let n = enc.frame_size as usize;
         let mdct_plan = FastMdctPlan::new(n);
         let perceptual_weights = perceptual_band_weights(
@@ -374,15 +392,16 @@ impl CinderEncoder {
             w.write(8, self.enc.n_bands as u64)
                 .map_err(|_| CodecError::Internal)?;
             for band in 0..self.enc.n_bands as usize {
-                // The wire format's step field is an integer `u16` (no
-                // fractional granularity), so perceptual weighting can
-                // only ever *coarsen* a band's step (weight > 1, for
-                // less-sensitive bands), never sharpen an already
-                // integer-quantized one below its own configured value —
-                // floor at the configured step itself.
+                // Perceptual weighting can only ever *coarsen* a band's
+                // step (weight > 1, for less-sensitive bands), never sharpen
+                // it below its configured value. The step is then rounded to
+                // the wire's fixed-point grid, and the coefficients are
+                // quantised with that rounded value, so the decoder
+                // reconstructs at exactly the step the encoder used.
                 let effective_step = (self.enc.band_steps[band] * self.perceptual_weights[band])
                     .max(self.enc.band_steps[band]);
-                let step_bits = effective_step.clamp(0.0, 65535.0) as u16;
+                let step_bits = (effective_step * STEP_UNIT).round().clamp(1.0, 65535.0) as u16;
+                let step = step_bits as f32 / STEP_UNIT;
                 w.write(16, step_bits as u64)
                     .map_err(|_| CodecError::Internal)?;
                 let start = band * band_size;
@@ -390,7 +409,7 @@ impl CinderEncoder {
                 w.write(8, (end - start) as u64)
                     .map_err(|_| CodecError::Internal)?;
                 for &s in &spec[start..end] {
-                    let q = quantize(s, effective_step.max(1e-9)).clamp(-max_level, max_level);
+                    let q = quantize(s, step).clamp(-max_level, max_level);
                     w.write(self.enc.bits_per_coef as u32, (q + half) as u64)
                         .map_err(|_| CodecError::Internal)?;
                 }
@@ -632,7 +651,12 @@ impl CinderDecoder {
         let mut spec = vec![0f32; frame_size as usize];
         for band in 0..n_bands as usize {
             let step_bits = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
-            let step = step_bits as f32;
+            if step_bits == 0 {
+                // Zero is never written: the encoder clamps every step to at
+                // least 1/STEP_UNIT, so a zero step is a malformed packet.
+                return Err(CodecError::MalformedPacket);
+            }
+            let step = step_bits as f32 / STEP_UNIT;
             let n_coeffs = r.read(8).map_err(|_| CodecError::MalformedPacket)? as usize;
             let start = band * band_size;
             // `n_bands`/`n_coeffs` come straight from the packet, so a
@@ -651,7 +675,7 @@ impl CinderDecoder {
                 let q = r
                     .read(self.enc.bits_per_coef as u32)
                     .map_err(|_| CodecError::MalformedPacket)? as i32;
-                spec[start + i] = dequantize(q - half, step.max(1e-9));
+                spec[start + i] = dequantize(q - half, step);
             }
         }
         let _keyframe = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
@@ -889,6 +913,46 @@ mod tests {
         let decoded = decode_all(&mut dec, &packets);
         let energy: i64 = decoded.iter().map(frame_s16_energy).sum();
         assert!(energy > 0, "decoded tone must not be silent");
+    }
+
+    #[test]
+    fn fractional_step_round_trips_at_the_step_it_was_quantised_with() {
+        // Regression test for the v2 wire desync: the encoder quantised at a
+        // fractional step but wrote it truncated to an integer, and the
+        // decoder reconstructed at that integer, so any step below 1.0
+        // (or any fractional weighted step) decoded to near silence. A
+        // correct round trip at this step is about 23 dB; a desync is ~0 dB.
+        let cfg = CodecConfig::default();
+        let enc_cfg = CinderEncoderConfig {
+            frame_size: 256,
+            n_bands: 16,
+            band_steps: alloc::vec![0.05; 16],
+            bits_per_coef: 12,
+            ..Default::default()
+        };
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
+        let frame = make_tone_audio_frame(16_384, 0);
+        let reference: Vec<i16> = (0..16_384).map(|i| frame.s16(0, i).unwrap()).collect();
+        let mut all = enc.encode(&frame).unwrap();
+        all.extend(enc.flush().unwrap());
+        let snr = snr_against(&reference, &decode_all(&mut dec, &all));
+        assert!(snr > 15.0, "fractional-step SNR {snr:.2} dB must clear 15 dB");
+    }
+
+    #[test]
+    fn rejects_band_steps_the_wire_cannot_carry() {
+        let cfg = CodecConfig::default();
+        for bad in [0.0, -1.0, 0.0001, 65.0, f32::NAN, f32::INFINITY] {
+            let enc_cfg = CinderEncoderConfig {
+                band_steps: alloc::vec![bad; 16],
+                ..Default::default()
+            };
+            assert!(
+                CinderEncoder::new(cfg.clone(), enc_cfg).is_err(),
+                "band step {bad} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -1188,7 +1252,7 @@ mod tests {
         let steps = extract_band_steps(&packet, enc_cfg.bits_per_coef as u32);
         assert_eq!(
             steps,
-            alloc::vec![12u16; 8],
+            alloc::vec![(12.0 * STEP_UNIT) as u16; 8],
             "with perceptual_weighting off, every band must keep its configured step exactly"
         );
     }
@@ -1198,9 +1262,8 @@ mod tests {
         // §29: "optional perceptual weighting". A band covering ~22kHz
         // (far less sensitive than the 1kHz reference) must end up with a
         // coarser step than the configured baseline, while no band is
-        // ever sharpened below what was configured (the wire format's
-        // step field is an integer, so there's no sub-configured
-        // granularity to sharpen into) — see `perceptual_band_weights`.
+        // ever sharpened below what was configured — see
+        // `perceptual_band_weights`.
         let cfg = CodecConfig::default();
         let enc_cfg = CinderEncoderConfig {
             frame_size: 128,
@@ -1216,7 +1279,7 @@ mod tests {
         let steps = extract_band_steps(&packet, enc_cfg.bits_per_coef as u32);
 
         assert!(
-            steps.iter().all(|&s| s >= 12),
+            steps.iter().all(|&s| s >= (12.0 * STEP_UNIT) as u16),
             "perceptual weighting must never coarsen below the configured step: {steps:?}"
         );
         assert!(
