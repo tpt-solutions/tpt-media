@@ -4,6 +4,7 @@
     python benchmarks/run.py fetch      # download + prepare the Xiph corpus
     python benchmarks/run.py run        # measure, write benchmarks/results/<stamp>.json
     python benchmarks/run.py report     # regenerate docs/benchmarks.md from all results
+    python benchmarks/run.py audio      # re-measure audio only (keeps latest video) + report
     python benchmarks/run.py all        # run + report
 
 Video: Thrum and Vault (quality sweep) vs x264 / x265 / SVT-AV1 (CRF sweep),
@@ -207,9 +208,13 @@ def cinder_sweep(wav, tmp):
     for bits, q in zip(CINDER_BITS, CINDER_QUALITY):
         for step in CINDER_STEPS:
             out, dec = tmp / "c.tpt", tmp / "c.wav"
+            # Rate is the codec's payload (from `benchmark`), so the .tpt framing
+            # (about 43 bytes per packet) is not charged to Cinder.
+            j = json.loads(sh([TPT, "benchmark", "--codec", "cinder", "--runs", 1, "--quality", q,
+                               "--band-step", f"{step:.6f}", "--json", wav]).stdout)
             sh([TPT, "encode", "--codec", "cinder", "--quality", q, "--band-step", f"{step:.6f}", wav, out])
             sh([TPT, "decode", "--codec", "cinder", "--container", "wav", out, dec])
-            pts.append(dict(bits=bits, step=round(step, 6), kbps=kbps(out.stat().st_size, seconds),
+            pts.append(dict(bits=bits, step=round(step, 6), kbps=j["bitrate_bits_per_second"] / 1000,
                             snr_db=snr_db(ref, wav_samples(dec))))
         best = max((p for p in pts if p["bits"] == bits), key=lambda p: p["snr_db"])
         print(f"   cinder {bits} bits: best step {best['step']} -> {best['kbps']:.0f} kbps, {best['snr_db']:.2f} dB", flush=True)
@@ -248,21 +253,23 @@ def _box(a, r0, r1):
     return out / ((2 * r0 + 1) * (2 * r1 + 1))
 
 
-def rd_bound(wav, block=256):
-    """Gaussian rate-distortion bound (reverse water-filling) for the clip.
+def rd_bound(wav, block=256, bands=16, side_bits=4):
+    """Gaussian rate-distortion bound (reverse water-filling) with side information.
 
-    The signal is split into orthonormal DCT-II blocks. Each coefficient's
-    variance is estimated from the clip itself (its local average power over
-    +-2 blocks and +-2 bins), then reverse water-filling gives the minimum
-    rate at each SNR. This is an estimate: the variance model is fitted to the
-    same data it is scored on, so it is a bound for that model rather than a
-    proven bound on every source."""
+    The signal is split into orthonormal DCT-II blocks of `block` samples. The
+    variance of every coefficient is the mean power of its band in that block
+    (flat within the band), which a codec would have to transmit: `side_bits`
+    per band per block is charged on top of the water-filling rate. This is
+    still an estimate, not a proven bound: the envelope is fitted to the data
+    it is scored on, and the cost of coding it is taken as a fixed budget."""
     x = wav_samples(wav)
     n = len(x) // block * block
     coefs = x[:n].reshape(-1, block) @ dct_matrix(block).T
-    var = _box(coefs ** 2, 2, 2) + 1e-12
+    band_power = (coefs ** 2).reshape(-1, bands, block // bands).mean(axis=2) + 1e-12
+    var = np.repeat(band_power, block // bands, axis=1)
     p_sig = (x[:n] ** 2).mean()
     seconds = n / 48000
+    side_kbps = bands * side_bits * (48000 / block) / 1000
     out = []
     for snr in range(0, 61, 5):
         budget = p_sig / 10 ** (snr / 10) * n  # total squared error allowed
@@ -276,7 +283,7 @@ def rd_bound(wav, block=256):
                 lo = mid
         theta = math.exp(lo)
         bits = np.maximum(0.0, 0.5 * np.log2(var / theta)).sum()
-        out.append(dict(snr_db=snr, kbps=bits / seconds / 1000))
+        out.append(dict(snr_db=snr, kbps=bits / seconds / 1000 + side_kbps))
     return out
 
 
@@ -315,6 +322,19 @@ def run_audio():
 
 def git(*a):
     return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+
+
+def run_audio_only():
+    """Re-measure only the audio section, keeping the latest run's video."""
+    latest = json.loads(sorted(RESULTS.glob("*.json"))[-1].read_text())
+    sh(["cargo", "build", "--release", "-p", "tpt-cli"], cwd=ROOT)
+    meta = dict(latest["meta"], date=datetime.datetime.now().isoformat(timespec="seconds"),
+                commit=git("rev-parse", "--short", "HEAD"),
+                dirty=bool(git("status", "--porcelain", "--untracked-files=no")))
+    data = dict(meta=meta, video=latest["video"], audio=run_audio())
+    f = RESULTS / f"{meta['date'][:10]}-{meta['commit']}{'-dirty' if meta['dirty'] else ''}.json"
+    f.write_text(json.dumps(data, indent=1))
+    print("wrote", f)
 
 
 def run():
@@ -366,14 +386,15 @@ def report():
          "(order-32 LPC per 4096-sample block, ideal Laplace entropy coder, side info ignored). It is an estimate, not a proven bound.",
          "- **Audio, lossy:** Cinder is swept over bit depth (4–12, via `--quality`) and per-band step (`--band-step`, "
          "half-octave grid from 1/1024 to about 45). Cinder codes every coefficient at a fixed width with no entropy coding, so its "
-         "rate depends only on the bit depth; the step is the only free choice at each rate. The Cinder rows therefore use the "
+         "rate depends only on the bit depth; the step is the only free choice at each rate. Rate is the codec's payload, not the file size. The Cinder rows therefore use the "
          "best step found for each rate, which is an oracle choice: a shipped encoder would need rate control to find it.",
          "- **Audio, lossy reference:** Opus (libopus via ffmpeg, mono 48 kHz) at 12–128 kbps. Opus is perceptually tuned and "
          "SNR is a waveform metric, so Opus is expected to look worse here than it sounds; read the SNR columns as "
          "a waveform-fidelity comparison, not a listening test.",
-         "- **Audio, bound:** the Gaussian rate-distortion bound from reverse water-filling over DCT coefficients whose variance "
-         "is estimated from the clip itself (local power over ±2 blocks and ±2 bins). It is a bound for that variance model, "
-         "not a proven bound on every source. A sanity check on white Gaussian noise matches the textbook 6.02 dB per bit.",
+         "- **Audio, bound:** the Gaussian rate-distortion bound from reverse water-filling over 16 bands per 256-sample DCT block, "
+         "each band's variance taken as its power in that block, plus 4 bits per band per block of side information (about 12 kbps). "
+         "It is an estimate for that envelope model, not a proven bound on every source. Earlier runs used per-coefficient "
+         "variances with no side information; those numbers were far too optimistic and are not comparable.",
          "- **Cinder's wire step:** version 3 carries steps in 1/1024 units. Version 2 wrote whole numbers only, which made every "
          "step below 1.0 decode to near silence; the rows below post-date that fix.",
          "- **Cinder's loudest peaks clip at fine steps.** At 12 bits the range is about ±2048 × step, so a step of 0.001 clips "
@@ -470,6 +491,8 @@ if __name__ == "__main__":
         fetch()
     elif cmd == "run":
         fetch(); run()
+    elif cmd == "audio":
+        fetch(); run_audio_only(); report()
     elif cmd == "report":
         report()
     elif cmd == "all":
