@@ -1,0 +1,853 @@
+{
+ "meta": {
+  "date": "2026-10-14T09:52:21",
+  "commit": "cda1121",
+  "dirty": true,
+  "frames": 100,
+  "ffmpeg": "ffmpeg version 9.0.2-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+ },
+ "video": {
+  "akiyo_cif": {
+   "thrum": [
+    {
+     "setting": 10,
+     "kbps": 41.073326673326676,
+     "psnr_y": 19.724736,
+     "psnr_avg": 20.496811,
+     "ssim": 0.598954,
+     "encode_x_realtime": 1.684072591570522,
+     "decode_x_realtime": 35.446301155457355
+    },
+    {
+     "setting": 30,
+     "kbps": 54.73246753246753,
+     "psnr_y": 21.741765,
+     "psnr_avg": 23.036012,
+     "ssim": 0.701865,
+     "encode_x_realtime": 1.7532079721326457,
+     "decode_x_realtime": 36.05667489738616
+    },
+    {
+     "setting": 50,
+     "kbps": 206.48631368631368,
+     "psnr_y": 22.929987,
+     "psnr_avg": 24.361101,
+     "ssim": 0.770236,
+     "encode_x_realtime": 1.8552425243085888,
+     "decode_x_realtime": 29.222199062437422
+    },
+    {
+     "setting": 70,
+     "kbps": 1734.9578421578424,
+     "psnr_y": 24.860906,
+     "psnr_avg": 26.309324,
+     "ssim": 0.829908,
+     "encode_x_realtime": 1.5561291106487394,
+     "decode_x_realtime": 8.266024278494168
+    },
+    {
+     "setting": 90,
+     "kbps": 5383.96003996004,
+     "psnr_y": 25.387514,
+     "psnr_avg": 26.89169,
+     "ssim": 0.862846,
+     "encode_x_realtime": 1.260123030305594,
+     "decode_x_realtime": 4.459813052300063
+    }
+   ],
+   "vault": [
+    {
+     "setting": 10,
+     "kbps": 9.166033966033966,
+     "psnr_y": 26.229387,
+     "psnr_avg": 27.240775,
+     "ssim": 0.783759,
+     "encode_x_realtime": 1.9216809244448623,
+     "decode_x_realtime": 255.72638043705965
+    },
+    {
+     "setting": 30,
+     "kbps": 28.922277722277727,
+     "psnr_y": 31.091035,
+     "psnr_avg": 32.252022,
+     "ssim": 0.90001,
+     "encode_x_realtime": 1.5366314910073515,
+     "decode_x_realtime": 142.1224951087713
+    },
+    {
+     "setting": 50,
+     "kbps": 129.62157842157845,
+     "psnr_y": 37.259072,
+     "psnr_avg": 38.392748,
+     "ssim": 0.962508,
+     "encode_x_realtime": 1.2862580863358015,
+     "decode_x_realtime": 106.90641043304039
+    },
+    {
+     "setting": 70,
+     "kbps": 625.3978021978022,
+     "psnr_y": 44.009012,
+     "psnr_avg": 44.914269,
+     "ssim": 0.984752,
+     "encode_x_realtime": 0.8645787650904515,
+     "decode_x_realtime": 55.057417020607204
+    },
+    {
+     "setting": 90,
+     "kbps": 2779.128071928072,
+     "psnr_y": 50.846218,
+     "psnr_avg": 51.063484,
+     "ssim": 0.994738,
+     "encode_x_realtime": 0.43419667421136526,
+     "decode_x_realtime": 24.18666597078657
+    }
+   ],
+   "x264-medium": [
+    {
+     "setting": 20,
+     "kbps": 177.53766233766237,
+     "psnr_y": 44.046779,
+     "psnr_avg": 44.992451,
+     "ssim": 0.987596,
+     "encode_x_realtime": 2.9232885283853
+    },
+    {
+     "setting": 26,
+     "kbps": 76.95104895104896,
+     "psnr_y": 40.612744,
+     "psnr_avg": 41.683475,
+     "ssim": 0.978316,
+     "encode_x_realtime": 2.8822751278762
+    },
+    {
+     "setting": 32,
+     "kbps": 38.32087912087912,
+     "psnr_y": 37.134065,
+     "psnr_avg": 38.344671,
+     "ssim": 0.964669,
+     "encode_x_realtime": 2.969061782915183
+    },
+    {
+     "setting": 38,
+     "kbps": 22.27612387612388,
+     "psnr_y": 33.731096,
+     "psnr_avg": 35.06098,
+     "ssim": 0.941959,
+     "encode_x_realtime": 3.0562535679735254
+    },
+    {
+     "setting": 44,
+     "kbps": 14.100299700299702,
+     "psnr_y": 30.320447,
+     "psnr_avg": 31.784738,
+     "ssim": 0.903527,
+     "encode_x_realtime": 2.7392258871394066
+    }
+   ],
+   "x264-veryslow": [
+    {
+     "setting": 20,
+     "kbps": 169.61358641358643,
+     "psnr_y": 44.101019,
+     "psnr_avg": 45.062475,
+     "ssim": 0.988122,
+     "encode_x_realtime": 2.30544359223106
+    },
+    {
+     "setting": 26,
+     "kbps": 74.28731268731269,
+     "psnr_y": 40.628693,
+     "psnr_avg": 41.691802,
+     "ssim": 0.978412,
+     "encode_x_realtime": 2.0944471372168354
+    },
+    {
+     "setting": 32,
+     "kbps": 37.96123876123876,
+     "psnr_y": 37.136722,
+     "psnr_avg": 38.340856,
+     "ssim": 0.96437,
+     "encode_x_realtime": 2.3404156275350947
+    },
+    {
+     "setting": 38,
+     "kbps": 22.91628371628372,
+     "psnr_y": 33.603994,
+     "psnr_avg": 34.946125,
+     "ssim": 0.94023,
+     "encode_x_realtime": 2.702758674222651
+    },
+    {
+     "setting": 44,
+     "kbps": 15.172027972027973,
+     "psnr_y": 30.28409,
+     "psnr_avg": 31.749178,
+     "ssim": 0.90266,
+     "encode_x_realtime": 2.885266942079769
+    }
+   ],
+   "x265-veryslow": [
+    {
+     "setting": 20,
+     "kbps": 229.13886113886116,
+     "psnr_y": 45.718687,
+     "psnr_avg": 46.524622,
+     "ssim": 0.989695,
+     "encode_x_realtime": 0.5696772338508748
+    },
+    {
+     "setting": 26,
+     "kbps": 104.38201798201798,
+     "psnr_y": 42.576685,
+     "psnr_avg": 43.537264,
+     "ssim": 0.982477,
+     "encode_x_realtime": 0.5148459269051706
+    },
+    {
+     "setting": 32,
+     "kbps": 52.71368631368632,
+     "psnr_y": 39.258539,
+     "psnr_avg": 40.305706,
+     "ssim": 0.971623,
+     "encode_x_realtime": 0.6014975715240175
+    },
+    {
+     "setting": 38,
+     "kbps": 30.051548451548452,
+     "psnr_y": 35.692381,
+     "psnr_avg": 36.875762,
+     "ssim": 0.952385,
+     "encode_x_realtime": 1.050999040715264
+    },
+    {
+     "setting": 44,
+     "kbps": 20.286113886113885,
+     "psnr_y": 31.9157,
+     "psnr_avg": 33.283461,
+     "ssim": 0.918495,
+     "encode_x_realtime": 1.474668183837188
+    }
+   ],
+   "svtav1-p4": [
+    {
+     "setting": 24,
+     "kbps": 189.16603396603398,
+     "psnr_y": 46.132445,
+     "psnr_avg": 47.179997,
+     "ssim": 0.993335,
+     "encode_x_realtime": 1.9508800749564823
+    },
+    {
+     "setting": 32,
+     "kbps": 117.61438561438563,
+     "psnr_y": 44.256179,
+     "psnr_avg": 45.367482,
+     "ssim": 0.989969,
+     "encode_x_realtime": 2.1328429627374934
+    },
+    {
+     "setting": 40,
+     "kbps": 76.22697302697304,
+     "psnr_y": 42.628455,
+     "psnr_avg": 43.7935,
+     "ssim": 0.986141,
+     "encode_x_realtime": 1.577048111270522
+    },
+    {
+     "setting": 48,
+     "kbps": 52.953446553446554,
+     "psnr_y": 41.22034,
+     "psnr_avg": 42.435447,
+     "ssim": 0.981994,
+     "encode_x_realtime": 1.352136322076474
+    },
+    {
+     "setting": 56,
+     "kbps": 37.64955044955045,
+     "psnr_y": 39.703638,
+     "psnr_avg": 40.950448,
+     "ssim": 0.977478,
+     "encode_x_realtime": 1.6719006678001007
+    }
+   ]
+  },
+  "foreman_cif": {
+   "thrum": [
+    {
+     "setting": 10,
+     "kbps": 42.329670329670336,
+     "psnr_y": 15.661137,
+     "psnr_avg": 17.278231,
+     "ssim": 0.494338,
+     "encode_x_realtime": 1.698781269539803,
+     "decode_x_realtime": 35.94023938856354
+    },
+    {
+     "setting": 30,
+     "kbps": 63.2895104895105,
+     "psnr_y": 17.012139,
+     "psnr_avg": 18.695357,
+     "ssim": 0.531235,
+     "encode_x_realtime": 1.7191777576388383,
+     "decode_x_realtime": 34.083963682361976
+    },
+    {
+     "setting": 50,
+     "kbps": 532.4523476523476,
+     "psnr_y": 18.472205,
+     "psnr_avg": 20.159034,
+     "ssim": 0.584879,
+     "encode_x_realtime": 1.7515792385400348,
+     "decode_x_realtime": 18.299057790471952
+    },
+    {
+     "setting": 70,
+     "kbps": 3505.0165834165837,
+     "psnr_y": 23.526026,
+     "psnr_avg": 25.210026,
+     "ssim": 0.759117,
+     "encode_x_realtime": 1.0232361807890484,
+     "decode_x_realtime": 4.692974233133552
+    },
+    {
+     "setting": 90,
+     "kbps": 8453.126073926074,
+     "psnr_y": 32.346879,
+     "psnr_avg": 33.923177,
+     "ssim": 0.947408,
+     "encode_x_realtime": 1.0244628736547952,
+     "decode_x_realtime": 3.156659425586374
+    }
+   ],
+   "vault": [
+    {
+     "setting": 10,
+     "kbps": 28.982217782217784,
+     "psnr_y": 23.56003,
+     "psnr_avg": 25.087964,
+     "ssim": 0.725591,
+     "encode_x_realtime": 1.3403418886780318,
+     "decode_x_realtime": 98.49967576780055
+    },
+    {
+     "setting": 30,
+     "kbps": 129.21398601398602,
+     "psnr_y": 28.956653,
+     "psnr_avg": 30.400642,
+     "ssim": 0.85394,
+     "encode_x_realtime": 0.48295891063267044,
+     "decode_x_realtime": 13.072115636378928
+    },
+    {
+     "setting": 50,
+     "kbps": 600.1462537462538,
+     "psnr_y": 34.533558,
+     "psnr_avg": 35.890186,
+     "ssim": 0.928052,
+     "encode_x_realtime": 0.5717666832536125,
+     "decode_x_realtime": 30.30558994326709
+    },
+    {
+     "setting": 70,
+     "kbps": 2971.574025974026,
+     "psnr_y": 42.063048,
+     "psnr_avg": 43.148664,
+     "ssim": 0.978559,
+     "encode_x_realtime": 0.3272803470701821,
+     "decode_x_realtime": 15.003786919845453
+    },
+    {
+     "setting": 90,
+     "kbps": 10767.306293706295,
+     "psnr_y": 51.134288,
+     "psnr_avg": 51.36075,
+     "ssim": 0.995773,
+     "encode_x_realtime": 0.2754377242693542,
+     "decode_x_realtime": 6.606490186920114
+    }
+   ],
+   "x264-medium": [
+    {
+     "setting": 20,
+     "kbps": 585.5448551448552,
+     "psnr_y": 39.095553,
+     "psnr_avg": 40.264162,
+     "ssim": 0.97027,
+     "encode_x_realtime": 2.560040887119458
+    },
+    {
+     "setting": 26,
+     "kbps": 259.7634365634366,
+     "psnr_y": 35.706806,
+     "psnr_avg": 37.010496,
+     "ssim": 0.947366,
+     "encode_x_realtime": 2.4726778972144694
+    },
+    {
+     "setting": 32,
+     "kbps": 130.43676323676326,
+     "psnr_y": 32.361697,
+     "psnr_avg": 33.800549,
+     "ssim": 0.91221,
+     "encode_x_realtime": 2.9182929006751444
+    },
+    {
+     "setting": 38,
+     "kbps": 69.91648351648352,
+     "psnr_y": 29.195418,
+     "psnr_avg": 30.735534,
+     "ssim": 0.866654,
+     "encode_x_realtime": 2.9280522854233983
+    },
+    {
+     "setting": 44,
+     "kbps": 38.25134865134866,
+     "psnr_y": 26.139225,
+     "psnr_avg": 27.756712,
+     "ssim": 0.810236,
+     "encode_x_realtime": 2.4624050283476215
+    }
+   ],
+   "x264-veryslow": [
+    {
+     "setting": 20,
+     "kbps": 510.27692307692314,
+     "psnr_y": 39.130078,
+     "psnr_avg": 40.29786,
+     "ssim": 0.971145,
+     "encode_x_realtime": 2.1500041346290644
+    },
+    {
+     "setting": 26,
+     "kbps": 232.02797202797206,
+     "psnr_y": 35.707063,
+     "psnr_avg": 37.007877,
+     "ssim": 0.948707,
+     "encode_x_realtime": 2.2232007857723803
+    },
+    {
+     "setting": 32,
+     "kbps": 116.58581418581419,
+     "psnr_y": 32.261415,
+     "psnr_avg": 33.707768,
+     "ssim": 0.913088,
+     "encode_x_realtime": 2.3922857792483168
+    },
+    {
+     "setting": 38,
+     "kbps": 65.42097902097902,
+     "psnr_y": 29.018566,
+     "psnr_avg": 30.562428,
+     "ssim": 0.86507,
+     "encode_x_realtime": 2.126182630793551
+    },
+    {
+     "setting": 44,
+     "kbps": 36.817582417582415,
+     "psnr_y": 26.057045,
+     "psnr_avg": 27.675653,
+     "ssim": 0.808778,
+     "encode_x_realtime": 2.506447341186253
+    }
+   ],
+   "x265-veryslow": [
+    {
+     "setting": 20,
+     "kbps": 652.4499500499501,
+     "psnr_y": 40.955134,
+     "psnr_avg": 42.071056,
+     "ssim": 0.977682,
+     "encode_x_realtime": 0.29838769828963757
+    },
+    {
+     "setting": 26,
+     "kbps": 282.4711288711289,
+     "psnr_y": 37.737063,
+     "psnr_avg": 38.908287,
+     "ssim": 0.959156,
+     "encode_x_realtime": 0.3923926257532028
+    },
+    {
+     "setting": 32,
+     "kbps": 135.52927072927073,
+     "psnr_y": 34.419402,
+     "psnr_avg": 35.716593,
+     "ssim": 0.929171,
+     "encode_x_realtime": 0.5187457751167001
+    },
+    {
+     "setting": 38,
+     "kbps": 66.4951048951049,
+     "psnr_y": 31.231408,
+     "psnr_avg": 32.654592,
+     "ssim": 0.888496,
+     "encode_x_realtime": 0.6312670399022551
+    },
+    {
+     "setting": 44,
+     "kbps": 34.18741258741259,
+     "psnr_y": 27.981069,
+     "psnr_avg": 29.505282,
+     "ssim": 0.836229,
+     "encode_x_realtime": 1.0318205946559298
+    }
+   ],
+   "svtav1-p4": [
+    {
+     "setting": 24,
+     "kbps": 567.6299700299701,
+     "psnr_y": 40.249014,
+     "psnr_avg": 41.480229,
+     "ssim": 0.975037,
+     "encode_x_realtime": 1.8592449767132129
+    },
+    {
+     "setting": 32,
+     "kbps": 341.31788211788216,
+     "psnr_y": 38.676016,
+     "psnr_avg": 39.965034,
+     "ssim": 0.968234,
+     "encode_x_realtime": 2.1217868786249063
+    },
+    {
+     "setting": 40,
+     "kbps": 214.18501498501502,
+     "psnr_y": 37.144873,
+     "psnr_avg": 38.479448,
+     "ssim": 0.95952,
+     "encode_x_realtime": 2.0504883911795058
+    },
+    {
+     "setting": 48,
+     "kbps": 139.4781218781219,
+     "psnr_y": 35.731485,
+     "psnr_avg": 37.106221,
+     "ssim": 0.949187,
+     "encode_x_realtime": 1.8828200514162514
+    },
+    {
+     "setting": 56,
+     "kbps": 89.9964035964036,
+     "psnr_y": 33.991317,
+     "psnr_avg": 35.39944,
+     "ssim": 0.932765,
+     "encode_x_realtime": 1.9120112297081748
+    }
+   ]
+  },
+  "mobile_cif": {
+   "thrum": [
+    {
+     "setting": 10,
+     "kbps": 49.83176823176824,
+     "psnr_y": 13.132842,
+     "psnr_avg": 14.375738,
+     "ssim": 0.238788,
+     "encode_x_realtime": 1.590371266373079,
+     "decode_x_realtime": 34.322620286897326
+    },
+    {
+     "setting": 30,
+     "kbps": 132.0767232767233,
+     "psnr_y": 13.008174,
+     "psnr_avg": 14.395612,
+     "ssim": 0.296541,
+     "encode_x_realtime": 0.9194164290328819,
+     "decode_x_realtime": 15.34376157296702
+    },
+    {
+     "setting": 50,
+     "kbps": 4355.081718281719,
+     "psnr_y": 18.34784,
+     "psnr_avg": 19.437852,
+     "ssim": 0.611677,
+     "encode_x_realtime": 0.6049972263204086,
+     "decode_x_realtime": 2.1715821980850465
+    },
+    {
+     "setting": 70,
+     "kbps": 8707.768231768232,
+     "psnr_y": 25.613838,
+     "psnr_avg": 26.712288,
+     "ssim": 0.870262,
+     "encode_x_realtime": 0.5795519795712385,
+     "decode_x_realtime": 1.6705504043024035
+    },
+    {
+     "setting": 90,
+     "kbps": 15110.033166833167,
+     "psnr_y": 32.49455,
+     "psnr_avg": 33.78926,
+     "ssim": 0.968968,
+     "encode_x_realtime": 0.5502768648505012,
+     "decode_x_realtime": 1.4390777435226478
+    }
+   ],
+   "vault": [
+    {
+     "setting": 10,
+     "kbps": 53.88851148851149,
+     "psnr_y": 17.388532,
+     "psnr_avg": 18.724218,
+     "ssim": 0.453798,
+     "encode_x_realtime": 0.5681519555041097,
+     "decode_x_realtime": 43.03554968563843
+    },
+    {
+     "setting": 30,
+     "kbps": 580.0495504495505,
+     "psnr_y": 24.04715,
+     "psnr_avg": 25.230258,
+     "ssim": 0.807917,
+     "encode_x_realtime": 0.31376270879239154,
+     "decode_x_realtime": 14.256249606564541
+    },
+    {
+     "setting": 50,
+     "kbps": 3314.6829170829174,
+     "psnr_y": 33.039699,
+     "psnr_avg": 33.866149,
+     "ssim": 0.953201,
+     "encode_x_realtime": 0.19297171936799506,
+     "decode_x_realtime": 7.15802005017908
+    },
+    {
+     "setting": 70,
+     "kbps": 9124.11188811189,
+     "psnr_y": 42.539198,
+     "psnr_avg": 42.900373,
+     "ssim": 0.989997,
+     "encode_x_realtime": 0.17417568403850223,
+     "decode_x_realtime": 5.043580109510686
+    },
+    {
+     "setting": 90,
+     "kbps": 19408.234165834165,
+     "psnr_y": 51.172825,
+     "psnr_avg": 51.078819,
+     "ssim": 0.997879,
+     "encode_x_realtime": 0.172228481807034,
+     "decode_x_realtime": 3.702013162894275
+    }
+   ],
+   "x264-medium": [
+    {
+     "setting": 20,
+     "kbps": 1486.1898101898103,
+     "psnr_y": 35.001356,
+     "psnr_avg": 35.870845,
+     "ssim": 0.97382,
+     "encode_x_realtime": 3.137494735780502
+    },
+    {
+     "setting": 26,
+     "kbps": 591.3878121878122,
+     "psnr_y": 30.988431,
+     "psnr_avg": 32.004517,
+     "ssim": 0.948199,
+     "encode_x_realtime": 3.228609310200966
+    },
+    {
+     "setting": 32,
+     "kbps": 236.04875124875127,
+     "psnr_y": 27.396796,
+     "psnr_avg": 28.585439,
+     "ssim": 0.907644,
+     "encode_x_realtime": 3.2926937299019876
+    },
+    {
+     "setting": 38,
+     "kbps": 115.97682317682317,
+     "psnr_y": 23.763419,
+     "psnr_avg": 25.148878,
+     "ssim": 0.8317,
+     "encode_x_realtime": 3.2477560959321075
+    },
+    {
+     "setting": 44,
+     "kbps": 68.1974025974026,
+     "psnr_y": 20.311454,
+     "psnr_avg": 21.846191,
+     "ssim": 0.692499,
+     "encode_x_realtime": 3.371072507111313
+    }
+   ],
+   "x264-veryslow": [
+    {
+     "setting": 20,
+     "kbps": 1395.0377622377623,
+     "psnr_y": 34.974682,
+     "psnr_avg": 35.848878,
+     "ssim": 0.974328,
+     "encode_x_realtime": 2.155615915720615
+    },
+    {
+     "setting": 26,
+     "kbps": 557.1164835164835,
+     "psnr_y": 30.939029,
+     "psnr_avg": 31.958845,
+     "ssim": 0.94842,
+     "encode_x_realtime": 5.975724826918609
+    },
+    {
+     "setting": 32,
+     "kbps": 228.4147852147852,
+     "psnr_y": 27.347864,
+     "psnr_avg": 28.535172,
+     "ssim": 0.908173,
+     "encode_x_realtime": 2.438250216982064
+    },
+    {
+     "setting": 38,
+     "kbps": 113.76863136863138,
+     "psnr_y": 23.644395,
+     "psnr_avg": 25.036708,
+     "ssim": 0.837386,
+     "encode_x_realtime": 2.5135010915857676
+    },
+    {
+     "setting": 44,
+     "kbps": 67.96963036963038,
+     "psnr_y": 20.220411,
+     "psnr_avg": 21.761839,
+     "ssim": 0.713461,
+     "encode_x_realtime": 2.610550216611885
+    }
+   ],
+   "x265-veryslow": [
+    {
+     "setting": 20,
+     "kbps": 1796.1278721278723,
+     "psnr_y": 37.426934,
+     "psnr_avg": 38.385137,
+     "ssim": 0.985232,
+     "encode_x_realtime": 0.12190659265718469
+    },
+    {
+     "setting": 26,
+     "kbps": 776.5930069930071,
+     "psnr_y": 33.58308,
+     "psnr_avg": 34.612351,
+     "ssim": 0.969774,
+     "encode_x_realtime": 0.18198299451552422
+    },
+    {
+     "setting": 32,
+     "kbps": 312.0599400599401,
+     "psnr_y": 30.162579,
+     "psnr_avg": 31.29084,
+     "ssim": 0.943587,
+     "encode_x_realtime": 0.277662783037322
+    },
+    {
+     "setting": 38,
+     "kbps": 129.7966033966034,
+     "psnr_y": 26.50773,
+     "psnr_avg": 27.81842,
+     "ssim": 0.896363,
+     "encode_x_realtime": 0.44778034990280874
+    },
+    {
+     "setting": 44,
+     "kbps": 58.66213786213787,
+     "psnr_y": 22.539641,
+     "psnr_avg": 23.99884,
+     "ssim": 0.789464,
+     "encode_x_realtime": 0.9871113239196667
+    }
+   ],
+   "svtav1-p4": [
+    {
+     "setting": 24,
+     "kbps": 1794.6413586413587,
+     "psnr_y": 37.373682,
+     "psnr_avg": 38.336431,
+     "ssim": 0.982995,
+     "encode_x_realtime": 1.8728544730077832
+    },
+    {
+     "setting": 32,
+     "kbps": 823.1064935064935,
+     "psnr_y": 33.997392,
+     "psnr_avg": 35.124115,
+     "ssim": 0.971674,
+     "encode_x_realtime": 1.9854945440671499
+    },
+    {
+     "setting": 40,
+     "kbps": 383.391008991009,
+     "psnr_y": 31.764486,
+     "psnr_avg": 32.961797,
+     "ssim": 0.959904,
+     "encode_x_realtime": 2.018306951442642
+    },
+    {
+     "setting": 48,
+     "kbps": 234.15464535464537,
+     "psnr_y": 30.466761,
+     "psnr_avg": 31.701218,
+     "ssim": 0.951598,
+     "encode_x_realtime": 1.990067436250445
+    },
+    {
+     "setting": 56,
+     "kbps": 166.44635364635366,
+     "psnr_y": 29.393873,
+     "psnr_avg": 30.647334,
+     "ssim": 0.941687,
+     "encode_x_realtime": 1.9969838561089368
+    }
+   ]
+  }
+ },
+ "audio": {
+  "sintel_trailer": {
+   "pcm_bytes": 2880034,
+   "aura": {
+    "bytes": 3521014,
+    "bit_exact": true,
+    "encode_x_realtime": 566.6503597285367,
+    "decode_x_realtime": 632.8433016700735
+   },
+   "flac-5": {
+    "bytes": 1332211,
+    "encode_x_realtime": 30.033712844137703
+   },
+   "flac-8": {
+    "bytes": 1327689,
+    "encode_x_realtime": 30.764582949102664
+   },
+   "flac-12": {
+    "bytes": 1319526,
+    "encode_x_realtime": 25.76298585427093
+   },
+   "lpc_estimate": {
+    "bytes": 1265607
+   }
+  },
+  "ed_music": {
+   "pcm_bytes": 2880034,
+   "aura": {
+    "bytes": 2607944,
+    "bit_exact": true,
+    "encode_x_realtime": 609.5999804928006,
+    "decode_x_realtime": 741.5976980807451
+   },
+   "flac-5": {
+    "bytes": 1156522,
+    "encode_x_realtime": 31.38474845561306
+   },
+   "flac-8": {
+    "bytes": 1154355,
+    "encode_x_realtime": 31.09081824856514
+   },
+   "flac-12": {
+    "bytes": 1152097,
+    "encode_x_realtime": 26.417285147655164
+   },
+   "lpc_estimate": {
+    "bytes": 1108658
+   }
+  }
+ }
+}

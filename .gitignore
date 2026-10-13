@@ -19,3 +19,6 @@ Thumbs.db
 *.log
 # tpt-weave working state
 /.tpt-weave/
+
+# Benchmark corpus (downloaded by benchmarks/run.py fetch)
+/benchmarks/corpus/
