@@ -738,6 +738,7 @@ struct EncodeJob {
     codec: AudioCodec,
     rate: u32,
     bits_per_coef: u8,
+    band_step: Option<f32>,
     /// S16 LE mono samples; the final partial block is zero-padded by
     /// [`run_encode_job`].
     samples: Vec<u8>,
@@ -774,7 +775,7 @@ fn quality_to_lsf_bits(quality: Option<u8>) -> u8 {
 /// bytes and the packet count.
 fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
     let samples_per_block = samples_per_block(job.codec, job.rate);
-    let mut encoder = build_encoder(job.codec, job.rate, job.bits_per_coef)?;
+    let mut encoder = build_encoder(job.codec, job.rate, job.bits_per_coef, job.band_step)?;
     let track_timebase = Timebase::new(1, job.rate);
     let mut muxer = tpt_container::TptMuxer::new(track_timebase);
     let mut track = Track::new(0, MediaType::Audio, job.codec.codec_id(), track_timebase);
@@ -1200,6 +1201,7 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         codec,
         rate: frame.sample_rate,
         bits_per_coef: quality_param(codec, spec.quality),
+        band_step: spec.band_step,
         samples: frame.samples,
         sample_count: frame.sample_count as usize,
         extra_meta: spec
@@ -1350,18 +1352,29 @@ fn quality_to_bits(quality: Option<u8>) -> u8 {
     }
 }
 
-fn build_encoder(codec: AudioCodec, rate: u32, bits_per_coef: u8) -> Result<EncoderBox, String> {
+fn build_encoder(
+    codec: AudioCodec,
+    rate: u32,
+    bits_per_coef: u8,
+    band_step: Option<f32>,
+) -> Result<EncoderBox, String> {
     let fw = FrameworkCodecConfig::default();
+    if band_step.is_some() && codec != AudioCodec::Cinder {
+        return Err("--band-step applies to cinder only".into());
+    }
     match codec {
         AudioCodec::Cinder => Ok(Box::new(
-            CinderEncoder::new(
-                fw,
-                CinderEncoderConfig {
+            CinderEncoder::new(fw, {
+                let mut cfg = CinderEncoderConfig {
                     sample_rate: rate,
                     bits_per_coef,
                     ..CinderEncoderConfig::default()
-                },
-            )
+                };
+                if let Some(s) = band_step {
+                    cfg.band_steps = vec![s; cfg.n_bands as usize];
+                }
+                cfg
+            })
             .map_err(|e| format!("cinder encoder: {e}"))?,
         ) as EncoderBox),
         AudioCodec::Aura => Ok(Box::new(
@@ -1597,6 +1610,7 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                 codec: target,
                 rate,
                 bits_per_coef: quality_param(target, spec.quality),
+                band_step: spec.band_step,
                 samples,
                 sample_count,
                 extra_meta: carry_meta(&track),
@@ -2032,7 +2046,7 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     let bits_per_coef = quality_param(codec, spec.quality);
     let runs = spec.runs.unwrap_or(5);
     let block = samples_per_block(codec, rate);
-    let mut encoder = match build_encoder(codec, rate, bits_per_coef) {
+    let mut encoder = match build_encoder(codec, rate, bits_per_coef, spec.band_step) {
         Ok(e) => e,
         Err(e) => return Outcome::fail(1, e),
     };
@@ -2091,7 +2105,7 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         // garbage quality. The warm-up pass keeps the pair built above;
         // each measured pass gets a fresh one.
         if run > 0 {
-            encoder = match build_encoder(codec, rate, bits_per_coef) {
+            encoder = match build_encoder(codec, rate, bits_per_coef, spec.band_step) {
                 Ok(e) => e,
                 Err(e) => return Outcome::fail(1, e),
             };

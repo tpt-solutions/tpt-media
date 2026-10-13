@@ -38,7 +38,7 @@ pub const NATIVE_CODECS: &[(&str, &str, &str)] = &[
 ];
 
 /// A requested pipeline operation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// `tpt probe [--json] <input>` — introspect a media file (see §44).
     Probe { input: String, json: bool },
@@ -72,7 +72,7 @@ pub enum Command {
 
 /// Options shared by the encode family (codec + container + quality +
 /// bitrate + metadata + machine-readable output).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OpSpec {
     /// Selected codec ID (`--codec`).
     pub codec: Option<CodecId>,
@@ -82,6 +82,10 @@ pub struct OpSpec {
     pub quality: Option<u8>,
     /// Target bitrate in bits/second (`--bitrate`).
     pub bitrate_bits_per_second: Option<u64>,
+    /// Cinder's per-band quantisation step (`--band-step`), applied to
+    /// every band. Overrides what `--quality` would otherwise imply for
+    /// the step; `--quality` still sets the coefficient bit depth.
+    pub band_step: Option<f32>,
     /// Metadata pairs to set (`--set-meta key=value`, repeatable).
     pub meta: Vec<(String, String)>,
     /// Emit machine-readable output (`--json`).
@@ -101,6 +105,7 @@ impl Default for OpSpec {
             container: ContainerKind::Tpt,
             quality: None,
             bitrate_bits_per_second: None,
+            band_step: None,
             meta: Vec::new(),
             json: false,
             runs: None,
@@ -265,6 +270,16 @@ pub fn parse(argv: &[String]) -> Result<Command, String> {
                         let v = take_value(argv, &mut i, "--bitrate")?;
                         spec.bitrate_bits_per_second = Some(parse_bitrate(&v)?);
                     }
+                    "--band-step" => {
+                        let v = take_value(argv, &mut i, "--band-step")?;
+                        let s: f32 = v
+                            .parse()
+                            .map_err(|_| format!("invalid band step `{v}` (a number, 1/1024..=64)"))?;
+                        if !s.is_finite() {
+                            return Err(format!("band step must be finite, got `{v}`"));
+                        }
+                        spec.band_step = Some(s);
+                    }
                     "--set-meta" => {
                         let v = take_value(argv, &mut i, "--set-meta")?;
                         let (k, val) = v
@@ -338,6 +353,8 @@ OPTIONS:
   --container <kind>   tpt (default) | wav
   --quality <0..=100>  quality setting
   --bitrate <n>[k|m]   target bitrate (bits/s)
+  --band-step <f>      cinder: quantisation step for every band
+                       (1/1024..=64; finer = higher quality, more bits)
   --set-meta <k=v>     set a metadata pair (repeatable)
   --json               machine-readable output (probe, benchmark,
                        video-corpus)
