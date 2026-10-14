@@ -436,9 +436,9 @@ def report():
          "- **Audio, lossy:** Cinder is swept over bit depth (4–12, via `--quality`) and per-band step (`--band-step`, "
          "half-octave grid from 1/1024 to about 45). Rate is the codec's payload, not the file size. The Cinder rows use the "
          "lowest rate that reaches each SNR over the whole grid, which is an oracle choice: a shipped encoder would need rate "
-         "control to find the step. Cinder v4 uses a per-packet Rice code, which spends at least one bit on every coefficient: "
-         "about 48 kbps at 48 kHz, a floor it cannot go under however coarse the step. The proxy shows the headroom an "
-         "arithmetic coder would have; closing that gap is the next codec step.",
+         "control to find the step. Cinder v5 range-codes its levels under one of 16 fixed geometric models chosen per packet "
+         "(a 4-bit class), so it no longer pays a per-coefficient floor. The entropy proxy is the remaining headroom: "
+         "it uses ideal per-band histograms fitted to each clip.",
          "- **Audio, lossy reference:** Opus (libopus via ffmpeg, mono 48 kHz) at 12–128 kbps. Opus is perceptually tuned and "
          "SNR is a waveform metric, so Opus is expected to look worse here than it sounds; read the SNR columns as "
          "a waveform-fidelity comparison, not a listening test.",
