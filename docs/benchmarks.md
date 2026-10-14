@@ -133,17 +133,17 @@ Latest run: **2026-10-14T11:21:08**, commit `bb4661f` (dirty tree), ffmpeg versi
 
 ## Audio, lossy: rate needed for a given SNR
 
-Lowest kbps that reaches each SNR (oracle choice over each codec's own sweep). Ratios are against the Gaussian bound.
+Lowest kbps that reaches each SNR (oracle choice over each codec's own sweep). Ratios are against the Gaussian bound. The entropy-coding proxy is not a codec: it is what entropy coding Cinder's levels could reach, with oracle histograms and a DCT in place of the MDCT (see Method).
 
 ### sintel_trailer
 
-| SNR (dB) | Cinder kbps | Opus kbps | Gaussian bound kbps | Cinder ÷ bound | Opus ÷ bound |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 10 | 318 | 25 | 16 | 20.17× | 1.57× |
-| 15 | 366 | 48 | 20 | 18.55× | 2.45× |
-| 20 | 414 | 96 | 25 | 16.47× | 3.81× |
-| 25 | 462 | n/a | 32 | 14.25× | n/a |
-| 30 | 558 | n/a | 42 | 13.26× | n/a |
+| SNR (dB) | Cinder kbps | Opus kbps | Gaussian bound kbps | Entropy-coding proxy kbps | Cinder ÷ bound | Opus ÷ bound |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 318 | 25 | 16 | 17 | 20.17× | 1.57× |
+| 15 | 366 | 48 | 20 | 23 | 18.55× | 2.45× |
+| 20 | 414 | 96 | 25 | 31 | 16.47× | 3.81× |
+| 25 | 462 | n/a | 32 | 42 | 14.25× | n/a |
+| 30 | 558 | n/a | 42 | 56 | 13.26× | n/a |
 
 Cinder points (best step per bit depth):
 
@@ -174,13 +174,13 @@ Opus points:
 
 ### ed_music
 
-| SNR (dB) | Cinder kbps | Opus kbps | Gaussian bound kbps | Cinder ÷ bound | Opus ÷ bound |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 10 | 318 | 30 | 16 | 19.95× | 1.87× |
-| 15 | 414 | 58 | 20 | 20.70× | 2.92× |
-| 20 | 462 | 122 | 26 | 17.77× | 4.68× |
-| 25 | 558 | n/a | 35 | 15.92× | n/a |
-| 30 | 606 | n/a | 48 | 12.67× | n/a |
+| SNR (dB) | Cinder kbps | Opus kbps | Gaussian bound kbps | Entropy-coding proxy kbps | Cinder ÷ bound | Opus ÷ bound |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 318 | 30 | 16 | 18 | 19.95× | 1.87× |
+| 15 | 414 | 58 | 20 | 23 | 20.70× | 2.92× |
+| 20 | 462 | 122 | 26 | 33 | 17.77× | 4.68× |
+| 25 | 558 | n/a | 35 | 46 | 15.92× | n/a |
+| 30 | 606 | n/a | 48 | 64 | 12.67× | n/a |
 
 Cinder points (best step per bit depth):
 

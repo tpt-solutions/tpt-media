@@ -5,6 +5,7 @@
     python benchmarks/run.py run        # measure, write benchmarks/results/<stamp>.json
     python benchmarks/run.py report     # regenerate docs/benchmarks.md from all results
     python benchmarks/run.py audio      # re-measure audio only (keeps latest video) + report
+    python benchmarks/run.py proxy      # add the entropy-coding proxy to the latest run + report
     python benchmarks/run.py all        # run + report
 
 Video: Thrum and Vault (quality sweep) vs x264 / x265 / SVT-AV1 (CRF sweep),
@@ -287,6 +288,44 @@ def rd_bound(wav, block=256, bands=16, side_bits=4):
     return out
 
 
+def entropy_proxy(wav, block=256, bands=16, side_bits=4):
+    """What entropy-coding Cinder's quantised coefficients could reach, as a proxy.
+
+    Uses the same DCT blocks and band layout as `rd_bound`, normalised input,
+    and one uniform step per target SNR (uniform is the MSE-optimal choice at
+    these rates). Rate is the empirical entropy of the levels, per band, over
+    the whole clip, plus the same envelope side information as the bound. This
+    is an oracle: the histograms are fitted to the clip and their transmission
+    is not charged, and the transform is a DCT, not Cinder's MDCT. It shows the
+    headroom entropy coding would have, not what Cinder achieves."""
+    x = wav_samples(wav) / 32768.0
+    n = len(x) // block * block
+    flat = (x[:n].reshape(-1, block) @ dct_matrix(block).T).reshape(-1)
+    band_idx = np.tile(np.repeat(np.arange(bands), block // bands), n // block)
+    p_sig = (x[:n] ** 2).mean()
+    seconds = n / 48000
+    side_kbps = bands * side_bits * (48000 / block) / 1000
+    out = []
+    for target in SNR_TARGETS:
+        lo, hi = math.log(1e-4), math.log(4.0)
+        for _ in range(60):  # bisection: largest step that still reaches the target
+            mid = (lo + hi) / 2
+            lev = np.round(flat / math.exp(mid))
+            snr = 10 * math.log10(p_sig / (((flat - lev * math.exp(mid)) ** 2).sum() / n))
+            if snr > target:
+                lo = mid
+            else:
+                hi = mid
+        step = math.exp(lo)
+        lev = np.round(flat / step).astype(np.int64)
+        bits = 0.0
+        for b in range(bands):
+            _, c = np.unique(lev[band_idx == b], return_counts=True)
+            bits += -(c * np.log2(c / c.sum())).sum()
+        out.append(dict(snr_db=target, step=round(step, 6), kbps=bits / seconds / 1000 + side_kbps))
+    return out
+
+
 def rate_for_snr(points, target):
     """Lowest rate among points that reach `target` dB, or None."""
     ok = [p["kbps"] for p in points if p["snr_db"] >= target]
@@ -322,6 +361,16 @@ def run_audio():
 
 def git(*a):
     return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+
+
+def run_proxy_only():
+    """Add the entropy-coding proxy to the latest run without re-measuring anything else."""
+    f = sorted(RESULTS.glob("*.json"))[-1]
+    data = json.loads(f.read_text())
+    for name in data["audio"]:
+        data["audio"][name]["entropy_proxy"] = entropy_proxy(CORPUS / "audio" / f"{name}_{AUDIO_SECONDS}s.wav")
+    f.write_text(json.dumps(data, indent=1))
+    print("updated", f)
 
 
 def run_audio_only():
@@ -427,18 +476,21 @@ def report():
     L.append("")
 
     L += ["## Audio, lossy: rate needed for a given SNR", "",
-          "Lowest kbps that reaches each SNR (oracle choice over each codec's own sweep). Ratios are against the Gaussian bound.", ""]
+          "Lowest kbps that reaches each SNR (oracle choice over each codec's own sweep). Ratios are against the Gaussian bound. "
+          "The entropy-coding proxy is not a codec: it is what entropy coding Cinder's levels could reach, with oracle histograms "
+          "and a DCT in place of the MDCT (see Method).", ""]
     for name, r in cur["audio"].items():
         if "cinder" not in r:
             continue
-        L += [f"### {name}", "", "| SNR (dB) | Cinder kbps | Opus kbps | Gaussian bound kbps | Cinder ÷ bound | Opus ÷ bound |",
-              "| ---: | ---: | ---: | ---: | ---: | ---: |"]
+        L += [f"### {name}", "", "| SNR (dB) | Cinder kbps | Opus kbps | Gaussian bound kbps | Entropy-coding proxy kbps | Cinder ÷ bound | Opus ÷ bound |",
+              "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+        proxy = {p["snr_db"]: p["kbps"] for p in r.get("entropy_proxy", [])}
         for t in SNR_TARGETS:
             c, o = rate_for_snr(r["cinder"], t), rate_for_snr(r["opus"], t)
             b = next((p["kbps"] for p in r["rd_bound"] if p["snr_db"] >= t), None)
             f = lambda v: "n/a" if v is None else f"{v:.0f}"
             ratio = lambda v: "n/a" if (v is None or b is None) else f"{v / b:.2f}×"
-            L.append(f"| {t} | {f(c)} | {f(o)} | {f(b)} | {ratio(c)} | {ratio(o)} |")
+            L.append(f"| {t} | {f(c)} | {f(o)} | {f(b)} | {f(proxy.get(t))} | {ratio(c)} | {ratio(o)} |")
         L.append("")
         L += ["Cinder points (best step per bit depth):", "", "| bits | step | kbps | SNR dB |", "| ---: | ---: | ---: | ---: |"]
         for bits in CINDER_BITS:
@@ -491,6 +543,8 @@ if __name__ == "__main__":
         fetch()
     elif cmd == "run":
         fetch(); run()
+    elif cmd == "proxy":
+        run_proxy_only(); report()
     elif cmd == "audio":
         fetch(); run_audio_only(); report()
     elif cmd == "report":
