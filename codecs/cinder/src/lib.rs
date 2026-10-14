@@ -76,7 +76,43 @@ pub const CODEC_ID: [u8; 4] = *b"CIND";
 /// `1 / STEP_UNIT` (it was a whole number, so every step below 1.0 was
 /// unrepresentable). A packet from either earlier version would be
 /// misreconstructed, so both are rejected rather than guessed at.
-pub const VERSION: u16 = 3;
+pub const VERSION: u16 = 4;
+
+/// Rice parameter width in the packet header: `k` is in `0..=7`.
+const RICE_K_BITS: u32 = 3;
+
+/// A Rice unary prefix of this many ones is the escape: the level's code
+/// follows as a raw `bits_per_coef`-bit value instead. Keeps the worst case
+/// bounded, so no packet can run past its buffer or the decoder's limits.
+const UNARY_LIMIT: u32 = 16;
+
+/// Zigzag map a signed level onto an unsigned code: 0, -1, 1, -2, ... become
+/// 0, 1, 2, 3, ...
+fn zigzag(q: i32) -> u32 {
+    if q >= 0 {
+        (q as u32) << 1
+    } else {
+        ((-q) as u32) * 2 - 1
+    }
+}
+
+fn unzigzag(u: u32) -> i32 {
+    if u & 1 == 0 {
+        (u >> 1) as i32
+    } else {
+        -(((u + 1) >> 1) as i32)
+    }
+}
+
+/// Bits a Rice code of `u` with parameter `k` takes (escape included).
+fn rice_cost(u: u32, k: u32, escape_bits: u32) -> u64 {
+    let prefix = u >> k;
+    if prefix < UNARY_LIMIT {
+        prefix as u64 + 1 + k as u64
+    } else {
+        UNARY_LIMIT as u64 + escape_bits as u64
+    }
+}
 
 /// Units per 1.0 of a band's quantisation step on the wire. Coefficients
 /// of normalised input have a median magnitude near 0.003 and a 99th
@@ -366,19 +402,45 @@ impl CinderEncoder {
         let mut spec = vec![0f32; n];
         self.mdct_plan.forward(&x, &mut spec);
         self.last_spectrum = spec.clone();
-        let band_size = (spec.len() / self.enc.n_bands as usize).max(1);
-        // Upper bound: 2-byte header + per band (2-byte step + 1-byte
-        // count + up to `bits_per_coef` bits per coefficient), plus the
-        // trailing keyframe bit and the leading wire-version field,
-        // rounded up to whole bytes.
+        let n_bands = self.enc.n_bands as usize;
+        let band_size = (spec.len() / n_bands).max(1);
+        let coded = n_bands * band_size;
+        let bits = self.enc.bits_per_coef as u32;
+        let max_level = (1i32 << (bits - 1)) - 1;
+        // Perceptual weighting can only ever *coarsen* a band's step (weight
+        // > 1, for less-sensitive bands), never sharpen it below its
+        // configured value. Each step is rounded to the wire's fixed-point
+        // grid, and the coefficients are quantised with that rounded value,
+        // so the decoder reconstructs at exactly the step the encoder used.
+        let step_bits: Vec<u16> = (0..n_bands)
+            .map(|band| {
+                let effective_step = (self.enc.band_steps[band] * self.perceptual_weights[band])
+                    .max(self.enc.band_steps[band]);
+                (effective_step * STEP_UNIT).round().clamp(1.0, 65535.0) as u16
+            })
+            .collect();
+        let levels: Vec<i32> = (0..coded)
+            .map(|i| {
+                let step = step_bits[i / band_size] as f32 / STEP_UNIT;
+                quantize(spec[i], step).clamp(-max_level, max_level)
+            })
+            .collect();
+        // One Rice parameter per packet, chosen to minimise its exact cost.
+        let k = (0..(1u32 << RICE_K_BITS))
+            .min_by_key(|&k| levels.iter().map(|&q| rice_cost(zigzag(q), k, bits)).sum::<u64>())
+            .unwrap_or(0);
+        // Upper bound: header (version, frame size, band count, step mode,
+        // up to one 16-bit step per band, Rice parameter), then the worst
+        // case per level (the escape), then the trailing keyframe bit.
         let max_bits = 16
-            + self.enc.n_bands as usize * (24 + self.enc.bits_per_coef as usize * band_size)
+            + 1
             + 8
+            + 1
+            + 16 * n_bands
+            + RICE_K_BITS as usize
+            + coded * (UNARY_LIMIT as usize + bits as usize)
+            + 1
             + 16;
-        // Offset-binary levels: `half` is the zero level and the largest
-        // magnitude is `half - 1`, so every level fits `bits_per_coef` bits.
-        let half = 1i32 << (self.enc.bits_per_coef - 1);
-        let max_level = half - 1;
         let mut buf = vec![0u8; max_bits.div_ceil(8)];
         let written = {
             let mut w = BitWriter::new(&mut buf);
@@ -389,29 +451,35 @@ impl CinderEncoder {
                 .map_err(|_| CodecError::Internal)?;
             w.write(1, (self.enc.frame_size as u64 / 128) - 1)
                 .map_err(|_| CodecError::Internal)?;
-            w.write(8, self.enc.n_bands as u64)
+            w.write(8, n_bands as u64).map_err(|_| CodecError::Internal)?;
+            // Step mode: 0 = one step for every band (the common case, and the
+            // MSE-optimal one), 1 = a 16-bit step per band.
+            let uniform = step_bits.iter().all(|&s| s == step_bits[0]);
+            w.write(1, if uniform { 0 } else { 1 })
                 .map_err(|_| CodecError::Internal)?;
-            for band in 0..self.enc.n_bands as usize {
-                // Perceptual weighting can only ever *coarsen* a band's
-                // step (weight > 1, for less-sensitive bands), never sharpen
-                // it below its configured value. The step is then rounded to
-                // the wire's fixed-point grid, and the coefficients are
-                // quantised with that rounded value, so the decoder
-                // reconstructs at exactly the step the encoder used.
-                let effective_step = (self.enc.band_steps[band] * self.perceptual_weights[band])
-                    .max(self.enc.band_steps[band]);
-                let step_bits = (effective_step * STEP_UNIT).round().clamp(1.0, 65535.0) as u16;
-                let step = step_bits as f32 / STEP_UNIT;
-                w.write(16, step_bits as u64)
-                    .map_err(|_| CodecError::Internal)?;
-                let start = band * band_size;
-                let end = ((band + 1) * band_size).min(spec.len());
-                w.write(8, (end - start) as u64)
-                    .map_err(|_| CodecError::Internal)?;
-                for &s in &spec[start..end] {
-                    let q = quantize(s, step).clamp(-max_level, max_level);
-                    w.write(self.enc.bits_per_coef as u32, (q + half) as u64)
-                        .map_err(|_| CodecError::Internal)?;
+            let steps: &[u16] = if uniform { &step_bits[..1] } else { &step_bits };
+            for &s in steps {
+                w.write(16, s as u64).map_err(|_| CodecError::Internal)?;
+            }
+            w.write(RICE_K_BITS, k as u64)
+                .map_err(|_| CodecError::Internal)?;
+            for &q in &levels {
+                let u = zigzag(q);
+                let prefix = u >> k;
+                if prefix < UNARY_LIMIT {
+                    for _ in 0..prefix {
+                        w.write(1, 1).map_err(|_| CodecError::Internal)?;
+                    }
+                    w.write(1, 0).map_err(|_| CodecError::Internal)?;
+                    if k > 0 {
+                        w.write(k, (u & ((1 << k) - 1)) as u64)
+                            .map_err(|_| CodecError::Internal)?;
+                    }
+                } else {
+                    for _ in 0..UNARY_LIMIT {
+                        w.write(1, 1).map_err(|_| CodecError::Internal)?;
+                    }
+                    w.write(bits, u as u64).map_err(|_| CodecError::Internal)?;
                 }
             }
             w.write(1, 1).map_err(|_| CodecError::Internal)?;
@@ -647,36 +715,48 @@ impl CinderDecoder {
             return Err(CodecError::MalformedPacket);
         }
         let band_size = (frame_size as usize / n_bands as usize).max(1);
-        let half = 1i32 << (self.enc.bits_per_coef - 1);
-        let mut spec = vec![0f32; frame_size as usize];
-        for band in 0..n_bands as usize {
-            let step_bits = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
-            if step_bits == 0 {
+        let coded = n_bands as usize * band_size;
+        // A band count above the frame size floors `band_size` to one and
+        // would claim more coefficients than the frame holds.
+        if coded > frame_size as usize {
+            return Err(CodecError::MalformedPacket);
+        }
+        let bits = self.enc.bits_per_coef as u32;
+        let max_u = (1u32 << bits) - 2; // largest zigzag code a level can take
+        let malformed = |_| CodecError::MalformedPacket;
+        let uniform = r.read(1).map_err(malformed)? == 0;
+        let n_steps = if uniform { 1 } else { n_bands as usize };
+        let mut step_bits = Vec::with_capacity(n_steps);
+        for _ in 0..n_steps {
+            let s = r.read(16).map_err(malformed)? as u16;
+            if s == 0 {
                 // Zero is never written: the encoder clamps every step to at
                 // least 1/STEP_UNIT, so a zero step is a malformed packet.
                 return Err(CodecError::MalformedPacket);
             }
-            let step = step_bits as f32 / STEP_UNIT;
-            let n_coeffs = r.read(8).map_err(|_| CodecError::MalformedPacket)? as usize;
-            let start = band * band_size;
-            // `n_bands`/`n_coeffs` come straight from the packet, so a
-            // malformed or adversarial stream can claim more coefficients
-            // than actually fit in `spec` (e.g. `n_bands` far exceeding
-            // `frame_size`, or a `band`/`n_coeffs` combination that runs
-            // past the end) — bounds-check before writing instead of
-            // indexing out of range.
-            let end = start
-                .checked_add(n_coeffs)
-                .ok_or(CodecError::MalformedPacket)?;
-            if end > spec.len() {
+            step_bits.push(s);
+        }
+        let k = r.read(RICE_K_BITS).map_err(malformed)? as u32;
+        let mut spec = vec![0f32; frame_size as usize];
+        for i in 0..coded {
+            let mut prefix = 0u32;
+            while prefix < UNARY_LIMIT {
+                if r.read(1).map_err(malformed)? == 0 {
+                    break;
+                }
+                prefix += 1;
+            }
+            let u = if prefix < UNARY_LIMIT {
+                let low = if k > 0 { r.read(k).map_err(malformed)? as u32 } else { 0 };
+                (prefix << k) | low
+            } else {
+                r.read(bits).map_err(malformed)? as u32
+            };
+            if u > max_u {
                 return Err(CodecError::MalformedPacket);
             }
-            for i in 0..n_coeffs {
-                let q = r
-                    .read(self.enc.bits_per_coef as u32)
-                    .map_err(|_| CodecError::MalformedPacket)? as i32;
-                spec[start + i] = dequantize(q - half, step);
-            }
+            let s = if uniform { step_bits[0] } else { step_bits[i / band_size] };
+            spec[i] = dequantize(unzigzag(u), s as f32 / STEP_UNIT);
         }
         let _keyframe = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
         self.last_spectrum = spec.clone();
@@ -956,6 +1036,94 @@ mod tests {
     }
 
     #[test]
+    fn band_count_above_frame_size_is_malformed_not_a_panic() {
+        // Regression: a header with more bands than bins (here 200 bands in a
+        // 128-bin frame) once indexed past the spectrum. It must be rejected.
+        let cfg = CodecConfig::default();
+        let enc_cfg = CinderEncoderConfig::default();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
+        let mut buf = vec![0u8; 64];
+        let written = {
+            let mut w = BitWriter::new(&mut buf);
+            w.write(16, VERSION as u64).unwrap();
+            w.write(1, 0).unwrap(); // 128-bin frame
+            w.write(8, 200).unwrap(); // 200 bands
+            w.write(1, 0).unwrap(); // uniform steps
+            w.write(16, 1024).unwrap();
+            w.write(RICE_K_BITS, 0).unwrap();
+            w.finish().unwrap()
+        };
+        let packet = Packet {
+            data: buf[..written].to_vec(),
+            pts: Timestamp::zero(Timebase::new(1, 48_000)),
+            dts: Timestamp::zero(Timebase::new(1, 48_000)),
+            flags: PacketFlags::KEYFRAME,
+            track_id: 0,
+            duration: None,
+        };
+        assert_eq!(dec.decode(&packet).unwrap_err(), CodecError::MalformedPacket);
+    }
+
+    #[test]
+    fn rice_escape_round_trips_levels_past_the_unary_limit() {
+        // Silence with a few full-scale clicks at a fine step: the silent
+        // blocks pick a small Rice parameter, so the click coefficients
+        // overflow the unary limit and take the raw escape code. Every packet
+        // must still fit its buffer and decode back to the encoder's levels.
+        let cfg = CodecConfig::default();
+        let enc_cfg = CinderEncoderConfig {
+            frame_size: 256,
+            n_bands: 16,
+            band_steps: alloc::vec![1.0 / STEP_UNIT; 16],
+            bits_per_coef: 12,
+            ..Default::default()
+        };
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
+        let mut f = AudioFrame::alloc(16_384, SampleFormat::S16, ChannelLayout::Mono, 48_000);
+        for &at in &[1_000usize, 5_000, 9_000, 13_000] {
+            f.samples[at * 2..at * 2 + 2].copy_from_slice(&i16::MAX.to_le_bytes());
+        }
+        let reference: Vec<i16> = (0..16_384).map(|i| f.s16(0, i).unwrap()).collect();
+        let mut all = enc.encode(&f).unwrap();
+        all.extend(enc.flush().unwrap());
+        assert!(all.iter().all(|p| !p.data.is_empty()));
+        let snr = snr_against(&reference, &decode_all(&mut dec, &all));
+        assert!(snr > 30.0, "escape-coded SNR {snr:.2} dB must clear 30 dB");
+    }
+
+    #[test]
+    fn rice_parameter_follows_the_packet_not_a_global_state() {
+        // The stateless design: a packet decodes on its own, whatever came
+        // before it. Decode the second packet of a stream with a fresh
+        // decoder and it must match the in-order decode.
+        let cfg = CodecConfig::default();
+        let enc_cfg = CinderEncoderConfig {
+            frame_size: 128,
+            n_bands: 8,
+            band_steps: alloc::vec![0.05; 8],
+            bits_per_coef: 10,
+            ..Default::default()
+        };
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let frame = make_tone_audio_frame(2048, 0);
+        let packets = enc.encode(&frame).unwrap();
+        assert!(packets.len() >= 3);
+        let mut in_order = CinderDecoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut spectra = Vec::new();
+        for p in &packets {
+            in_order.decode(p).unwrap();
+            spectra.push(in_order.last_spectrum.clone());
+        }
+        // Drop packets 0 and 1 (lost) and decode packet 2 with a fresh decoder.
+        // Its coefficients must match what the in-order decoder recovered:
+        // the overlap-add tail is the only state a packet depends on.
+        let mut after_loss = CinderDecoder::new(cfg, enc_cfg).unwrap();
+        after_loss.decode(&packets[2]).unwrap();
+        assert_eq!(after_loss.last_spectrum, spectra[2], "a later packet must decode without its predecessors");
+    }
+
+    #[test]
     fn overlap_add_beats_the_old_three_db_ceiling() {
         // The v1 decoder had no overlap-add, so every input decoded at about
         // 3 dB regardless of quantization. A tone at a fine step must now
@@ -1220,19 +1388,19 @@ mod tests {
     /// Parse a Cinder packet's header far enough to recover the transmitted
     /// per-band step values (skipping over each band's coefficients),
     /// without going through a full decode.
-    fn extract_band_steps(pkt: &Packet, bits_per_coef: u32) -> alloc::vec::Vec<u16> {
+    fn extract_band_steps(pkt: &Packet) -> alloc::vec::Vec<u16> {
         let mut r = BitReader::new(&pkt.data);
         let _wire_version = r.read(16).unwrap();
         let _fs_code = r.read(1).unwrap();
         let n_bands = r.read(8).unwrap() as usize;
-        let mut steps = alloc::vec::Vec::with_capacity(n_bands);
-        for _ in 0..n_bands {
-            let step_bits = r.read(16).unwrap() as u16;
-            steps.push(step_bits);
-            let n_coeffs = r.read(8).unwrap() as u32;
-            r.skip(n_coeffs * bits_per_coef).unwrap();
+        let uniform = r.read(1).unwrap() == 0;
+        let count = if uniform { 1 } else { n_bands };
+        let steps: alloc::vec::Vec<u16> = (0..count).map(|_| r.read(16).unwrap() as u16).collect();
+        if uniform {
+            alloc::vec![steps[0]; n_bands]
+        } else {
+            steps
         }
-        steps
     }
 
     #[test]
@@ -1249,7 +1417,7 @@ mod tests {
         let mut enc = CinderEncoder::new(cfg, enc_cfg.clone()).unwrap();
         let frame = make_tone_audio_frame(256, 0);
         let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
-        let steps = extract_band_steps(&packet, enc_cfg.bits_per_coef as u32);
+        let steps = extract_band_steps(&packet);
         assert_eq!(
             steps,
             alloc::vec![(12.0 * STEP_UNIT) as u16; 8],
@@ -1276,7 +1444,7 @@ mod tests {
         let mut enc = CinderEncoder::new(cfg, enc_cfg.clone()).unwrap();
         let frame = make_tone_audio_frame(256, 0);
         let packet = enc.encode(&frame).unwrap().into_iter().next().unwrap();
-        let steps = extract_band_steps(&packet, enc_cfg.bits_per_coef as u32);
+        let steps = extract_band_steps(&packet);
 
         assert!(
             steps.iter().all(|&s| s >= (12.0 * STEP_UNIT) as u16),
