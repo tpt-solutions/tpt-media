@@ -53,7 +53,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 use tpt_dsp_core::{db_to_power, mdct_sine_window, threshold_in_quiet, FastMdctPlan};
-use tpt_media_bitstream::{BitReader, BitWriter};
+use tpt_media_bitstream::range::{RangeDecoder, RangeEncoder};
 use tpt_media_codec::{
     Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, Decoder, DynDecoder,
     DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder, SupportedFormat,
@@ -71,20 +71,62 @@ pub const FRAME_256: u16 = 256;
 pub const CODEC_ID: [u8; 4] = *b"CIND";
 
 /// Bitstream version. Version 2 changed the meaning of a packet: hop-`frame_size`
-/// MDCT blocks that the decoder overlap-adds. Version 3 changes the meaning of
-/// the per-band step field: it is now a fixed-point value in units of
-/// `1 / STEP_UNIT` (it was a whole number, so every step below 1.0 was
-/// unrepresentable). A packet from either earlier version would be
-/// misreconstructed, so both are rejected rather than guessed at.
-pub const VERSION: u16 = 4;
+/// MDCT blocks that the decoder overlap-adds. Version 3 made the per-band step
+/// a fixed-point value in units of `1 / STEP_UNIT`. Version 4 Rice-coded the
+/// levels with one step per packet. Version 5 range-codes the levels under a
+/// per-packet loudness class. A packet from an earlier version would be
+/// misreconstructed, so each is rejected rather than guessed at. The version
+/// is the packet's first two bytes, big-endian, so it is readable before any
+/// coded data.
+pub const VERSION: u16 = 5;
 
-/// Rice parameter width in the packet header: `k` is in `0..=7`.
-const RICE_K_BITS: u32 = 3;
+/// Symbols in a level model: 0..ESCAPE code the zigzag value directly. ESCAPE
+/// is followed by the value's excess over ESCAPE, in `bits_per_coef` bits.
+const ESCAPE: u32 = 255;
+const ALPHABET: usize = ESCAPE as usize + 1;
 
-/// A Rice unary prefix of this many ones is the escape: the level's code
-/// follows as a raw `bits_per_coef`-bit value instead. Keeps the worst case
-/// bounded, so no packet can run past its buffer or the decoder's limits.
-const UNARY_LIMIT: u32 = 16;
+/// Total of every level model. A power of two, well below the range coder's
+/// renormalisation threshold.
+const MODEL_TOTAL: u32 = 1 << 15;
+
+/// Loudness classes: geometric models whose means grow 1.7x per class, from
+/// 1/16 up to about 100. The encoder sends the class per packet.
+const CLASSES: u32 = 16;
+const CLASS_BITS: u32 = 4;
+
+/// Cumulative frequencies of one level model.
+struct LevelTable {
+    freq: [u32; ALPHABET],
+    cum: [u32; ALPHABET + 1],
+}
+
+/// The model for loudness class `class`: a geometric distribution over zigzag
+/// values with mean `m`. Built with IEEE multiply and floor only, so the
+/// encoder and decoder derive identical integer tables on every platform.
+fn level_table(class: u32) -> LevelTable {
+    let mut mean = 0.0625f64;
+    for _ in 0..class {
+        mean *= 1.7;
+    }
+    let r = mean / (1.0 + mean);
+    // Reserve one unit per symbol for the `max(1)` floor below, so the direct
+    // symbols never total more than MODEL_TOTAL - 1 and the escape keeps >= 1.
+    let budget = (MODEL_TOTAL as usize - ALPHABET) as f64;
+    let mut p = budget * (1.0 - r);
+    let mut freq = [0u32; ALPHABET];
+    let mut sum = 0u32;
+    for f in freq.iter_mut().take(ESCAPE as usize) {
+        *f = (p.floor() as u32).max(1);
+        sum += *f;
+        p *= r;
+    }
+    freq[ESCAPE as usize] = MODEL_TOTAL - sum;
+    let mut cum = [0u32; ALPHABET + 1];
+    for i in 0..ALPHABET {
+        cum[i + 1] = cum[i] + freq[i];
+    }
+    LevelTable { freq, cum }
+}
 
 /// Zigzag map a signed level onto an unsigned code: 0, -1, 1, -2, ... become
 /// 0, 1, 2, 3, ...
@@ -104,14 +146,34 @@ fn unzigzag(u: u32) -> i32 {
     }
 }
 
-/// Bits a Rice code of `u` with parameter `k` takes (escape included).
-fn rice_cost(u: u32, k: u32, escape_bits: u32) -> u64 {
-    let prefix = u >> k;
-    if prefix < UNARY_LIMIT {
-        prefix as u64 + 1 + k as u64
-    } else {
-        UNARY_LIMIT as u64 + escape_bits as u64
+/// Exact code length in bits of zigzag value `u` under `table` (encoder only).
+fn level_cost(table: &LevelTable, u: u32, bits: u32) -> f64 {
+    let sym = u.min(ESCAPE) as usize;
+    let raw = if sym == ESCAPE as usize { bits as f64 } else { 0.0 };
+    -(table.freq[sym] as f64 / MODEL_TOTAL as f64).log2() + raw
+}
+
+/// Write `n` bits of `value`, most significant first, as uniform symbols.
+fn put_bits(enc: &mut RangeEncoder<'_>, value: u32, n: u32) -> CodecResult<()> {
+    for i in (0..n).rev() {
+        enc.encode((value >> i) & 1, 1, 2)
+            .map_err(|_| CodecError::Internal)?;
     }
+    Ok(())
+}
+
+/// Read `n` bits written by [`put_bits`].
+fn get_bits(dec: &mut RangeDecoder<'_>, n: u32) -> CodecResult<u32> {
+    let mut v = 0u32;
+    for _ in 0..n {
+        let bit = dec
+            .decode_peek(2)
+            .map_err(|_| CodecError::MalformedPacket)?;
+        dec.update(bit, 1, 2)
+            .map_err(|_| CodecError::MalformedPacket)?;
+        v = (v << 1) | bit;
+    }
+    Ok(v)
 }
 
 /// Units per 1.0 of a band's quantisation step on the wire. Coefficients
@@ -425,65 +487,53 @@ impl CinderEncoder {
                 quantize(spec[i], step).clamp(-max_level, max_level)
             })
             .collect();
-        // One Rice parameter per packet, chosen to minimise its exact cost.
-        let k = (0..(1u32 << RICE_K_BITS))
-            .min_by_key(|&k| levels.iter().map(|&q| rice_cost(zigzag(q), k, bits)).sum::<u64>())
+        // The packet's loudness class is the model with the shortest exact
+        // code length for these levels. Each model is built, costed and
+        // dropped in turn, so the encoder never holds more than one table.
+        let costs: Vec<f64> = (0..CLASSES)
+            .map(|c| {
+                let t = level_table(c);
+                levels.iter().map(|&q| level_cost(&t, zigzag(q), bits)).sum()
+            })
+            .collect();
+        let class = costs
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(c, _)| c as u32)
             .unwrap_or(0);
-        // Upper bound: header (version, frame size, band count, step mode,
-        // up to one 16-bit step per band, Rice parameter), then the worst
-        // case per level (the escape), then the trailing keyframe bit.
-        let max_bits = 16
-            + 1
-            + 8
-            + 1
-            + 16 * n_bands
-            + RICE_K_BITS as usize
-            + coded * (UNARY_LIMIT as usize + bits as usize)
-            + 1
-            + 16;
-        let mut buf = vec![0u8; max_bits.div_ceil(8)];
+        // Worst case: each level at most 15 bits of symbol plus `bits` raw bits
+        // for an escape, then the header and the keyframe bit, with slack.
+        let max_bytes = 2 + (coded * (16 + bits as usize)).div_ceil(8) + 16 * n_bands + 64;
+        let mut buf = vec![0u8; max_bytes];
+        buf[..2].copy_from_slice(&VERSION.to_be_bytes());
         let written = {
-            let mut w = BitWriter::new(&mut buf);
-            // §35: a versioned bitstream, checked first on decode so an
-            // unrecognized version fails cleanly instead of being
-            // misparsed as this decoder's own layout.
-            w.write(16, VERSION as u64)
-                .map_err(|_| CodecError::Internal)?;
-            w.write(1, (self.enc.frame_size as u64 / 128) - 1)
-                .map_err(|_| CodecError::Internal)?;
-            w.write(8, n_bands as u64).map_err(|_| CodecError::Internal)?;
+            let mut enc = RangeEncoder::new(&mut buf[2..]);
+            // §35: the version is checked first (above, in the decoder), so an
+            // unrecognized layout fails cleanly instead of being misread.
+            put_bits(&mut enc, (self.enc.frame_size as u32 / 128) - 1, 1)?;
+            put_bits(&mut enc, n_bands as u32, 8)?;
             // Step mode: 0 = one step for every band (the common case, and the
             // MSE-optimal one), 1 = a 16-bit step per band.
             let uniform = step_bits.iter().all(|&s| s == step_bits[0]);
-            w.write(1, if uniform { 0 } else { 1 })
-                .map_err(|_| CodecError::Internal)?;
+            put_bits(&mut enc, if uniform { 0 } else { 1 }, 1)?;
             let steps: &[u16] = if uniform { &step_bits[..1] } else { &step_bits };
             for &s in steps {
-                w.write(16, s as u64).map_err(|_| CodecError::Internal)?;
+                put_bits(&mut enc, s as u32, 16)?;
             }
-            w.write(RICE_K_BITS, k as u64)
-                .map_err(|_| CodecError::Internal)?;
+            put_bits(&mut enc, class, CLASS_BITS)?;
+            let table = level_table(class);
             for &q in &levels {
                 let u = zigzag(q);
-                let prefix = u >> k;
-                if prefix < UNARY_LIMIT {
-                    for _ in 0..prefix {
-                        w.write(1, 1).map_err(|_| CodecError::Internal)?;
-                    }
-                    w.write(1, 0).map_err(|_| CodecError::Internal)?;
-                    if k > 0 {
-                        w.write(k, (u & ((1 << k) - 1)) as u64)
-                            .map_err(|_| CodecError::Internal)?;
-                    }
-                } else {
-                    for _ in 0..UNARY_LIMIT {
-                        w.write(1, 1).map_err(|_| CodecError::Internal)?;
-                    }
-                    w.write(bits, u as u64).map_err(|_| CodecError::Internal)?;
+                let sym = u.min(ESCAPE) as usize;
+                enc.encode(table.cum[sym], table.freq[sym], MODEL_TOTAL)
+                    .map_err(|_| CodecError::Internal)?;
+                if sym == ESCAPE as usize {
+                    put_bits(&mut enc, u - ESCAPE, bits)?;
                 }
             }
-            w.write(1, 1).map_err(|_| CodecError::Internal)?;
-            w.finish().map_err(|_| CodecError::Internal)?
+            put_bits(&mut enc, 1, 1)?;
+            2 + enc.finish().map_err(|_| CodecError::Internal)?
         };
         buf.truncate(written);
 
@@ -694,14 +744,18 @@ impl Decoder for CinderDecoder {
 
 impl CinderDecoder {
     fn decode_inner(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
-        let mut r = BitReader::new(&packet.data);
-        // §35: reject an unrecognized wire version before interpreting
-        // any further bits as if they were this decoder's own layout.
-        let wire_version = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
-        if wire_version != VERSION {
+        // §35: reject an unrecognized wire version before interpreting any
+        // further bytes as this decoder's own layout.
+        let version = packet
+            .data
+            .get(..2)
+            .ok_or(CodecError::MalformedPacket)?;
+        if u16::from_be_bytes([version[0], version[1]]) != VERSION {
             return Err(CodecError::Unsupported("unsupported Cinder packet version"));
         }
-        let fs_code = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
+        let mut r =
+            RangeDecoder::new(&packet.data[2..]).map_err(|_| CodecError::MalformedPacket)?;
+        let fs_code = get_bits(&mut r, 1)?;
         let frame_size = 128 * (fs_code as u16 + 1);
         if frame_size != 128 && frame_size != 256 {
             return Err(CodecError::MalformedPacket);
@@ -710,7 +764,7 @@ impl CinderDecoder {
             .limits
             .check_allocation(frame_size as usize * core::mem::size_of::<f32>())?;
         self.cfg.limits.check_frame_bytes(4 * frame_size as usize)?;
-        let n_bands = r.read(8).map_err(|_| CodecError::MalformedPacket)? as u8;
+        let n_bands = get_bits(&mut r, 8)? as u8;
         if n_bands == 0 {
             return Err(CodecError::MalformedPacket);
         }
@@ -724,11 +778,11 @@ impl CinderDecoder {
         let bits = self.enc.bits_per_coef as u32;
         let max_u = (1u32 << bits) - 2; // largest zigzag code a level can take
         let malformed = |_| CodecError::MalformedPacket;
-        let uniform = r.read(1).map_err(malformed)? == 0;
+        let uniform = get_bits(&mut r, 1)? == 0;
         let n_steps = if uniform { 1 } else { n_bands as usize };
         let mut step_bits = Vec::with_capacity(n_steps);
         for _ in 0..n_steps {
-            let s = r.read(16).map_err(malformed)? as u16;
+            let s = get_bits(&mut r, 16)? as u16;
             if s == 0 {
                 // Zero is never written: the encoder clamps every step to at
                 // least 1/STEP_UNIT, so a zero step is a malformed packet.
@@ -736,21 +790,19 @@ impl CinderDecoder {
             }
             step_bits.push(s);
         }
-        let k = r.read(RICE_K_BITS).map_err(malformed)? as u32;
+        let class = get_bits(&mut r, CLASS_BITS)?;
+        let table = level_table(class);
         let mut spec = vec![0f32; frame_size as usize];
         for i in 0..coded {
-            let mut prefix = 0u32;
-            while prefix < UNARY_LIMIT {
-                if r.read(1).map_err(malformed)? == 0 {
-                    break;
-                }
-                prefix += 1;
-            }
-            let u = if prefix < UNARY_LIMIT {
-                let low = if k > 0 { r.read(k).map_err(malformed)? as u32 } else { 0 };
-                (prefix << k) | low
+            let x = r.decode_peek(MODEL_TOTAL).map_err(malformed)?;
+            // The largest symbol whose interval starts at or below `x`.
+            let sym = table.cum.partition_point(|&c| c <= x) - 1;
+            r.update(table.cum[sym], table.freq[sym], MODEL_TOTAL)
+                .map_err(malformed)?;
+            let u = if sym == ESCAPE as usize {
+                ESCAPE + get_bits(&mut r, bits)?
             } else {
-                r.read(bits).map_err(malformed)? as u32
+                sym as u32
             };
             if u > max_u {
                 return Err(CodecError::MalformedPacket);
@@ -758,7 +810,7 @@ impl CinderDecoder {
             let s = if uniform { step_bits[0] } else { step_bits[i / band_size] };
             spec[i] = dequantize(unzigzag(u), s as f32 / STEP_UNIT);
         }
-        let _keyframe = r.read(1).map_err(|_| CodecError::MalformedPacket)?;
+        let _keyframe = get_bits(&mut r, 1)?;
         self.last_spectrum = spec.clone();
         let y = self.synthesize(&spec);
         let block = self.overlap_add(&y);
@@ -1043,18 +1095,19 @@ mod tests {
         let enc_cfg = CinderEncoderConfig::default();
         let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
         let mut buf = vec![0u8; 64];
+        buf[..2].copy_from_slice(&VERSION.to_be_bytes());
         let written = {
-            let mut w = BitWriter::new(&mut buf);
-            w.write(16, VERSION as u64).unwrap();
-            w.write(1, 0).unwrap(); // 128-bin frame
-            w.write(8, 200).unwrap(); // 200 bands
-            w.write(1, 0).unwrap(); // uniform steps
-            w.write(16, 1024).unwrap();
-            w.write(RICE_K_BITS, 0).unwrap();
-            w.finish().unwrap()
+            let mut enc = RangeEncoder::new(&mut buf[2..]);
+            put_bits(&mut enc, 0, 1).unwrap(); // 128-bin frame
+            put_bits(&mut enc, 200, 8).unwrap(); // 200 bands
+            put_bits(&mut enc, 0, 1).unwrap(); // uniform steps
+            put_bits(&mut enc, 1024, 16).unwrap();
+            put_bits(&mut enc, 0, CLASS_BITS).unwrap();
+            enc.finish().unwrap()
         };
+        let data = buf[..2 + written].to_vec();
         let packet = Packet {
-            data: buf[..written].to_vec(),
+            data,
             pts: Timestamp::zero(Timebase::new(1, 48_000)),
             dts: Timestamp::zero(Timebase::new(1, 48_000)),
             flags: PacketFlags::KEYFRAME,
@@ -1065,35 +1118,31 @@ mod tests {
     }
 
     #[test]
-    fn rice_escape_round_trips_levels_past_the_unary_limit() {
-        // Silence with a few full-scale clicks at a fine step: the silent
-        // blocks pick a small Rice parameter, so the click coefficients
-        // overflow the unary limit and take the raw escape code. Every packet
-        // must still fit its buffer and decode back to the encoder's levels.
+    fn escape_symbol_round_trips_levels_past_the_alphabet() {
+        // A full-scale tone at a step where its MDCT levels are in the hundreds: past
+        // the 255-symbol alphabet, so they take the escape symbol, yet inside the
+        // 12-bit clamp, so nothing clips. Every packet must decode back cleanly.
         let cfg = CodecConfig::default();
         let enc_cfg = CinderEncoderConfig {
             frame_size: 256,
             n_bands: 16,
-            band_steps: alloc::vec![1.0 / STEP_UNIT; 16],
+            band_steps: alloc::vec![0.3; 16],
             bits_per_coef: 12,
             ..Default::default()
         };
         let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
         let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
-        let mut f = AudioFrame::alloc(16_384, SampleFormat::S16, ChannelLayout::Mono, 48_000);
-        for &at in &[1_000usize, 5_000, 9_000, 13_000] {
-            f.samples[at * 2..at * 2 + 2].copy_from_slice(&i16::MAX.to_le_bytes());
-        }
+        let f = make_tone_audio_frame(16_384, 0);
         let reference: Vec<i16> = (0..16_384).map(|i| f.s16(0, i).unwrap()).collect();
         let mut all = enc.encode(&f).unwrap();
         all.extend(enc.flush().unwrap());
         assert!(all.iter().all(|p| !p.data.is_empty()));
         let snr = snr_against(&reference, &decode_all(&mut dec, &all));
-        assert!(snr > 30.0, "escape-coded SNR {snr:.2} dB must clear 30 dB");
+        assert!(snr > 40.0, "escape-coded SNR {snr:.2} dB must clear 40 dB");
     }
 
     #[test]
-    fn rice_parameter_follows_the_packet_not_a_global_state() {
+    fn packet_decodes_without_its_predecessors() {
         // The stateless design: a packet decodes on its own, whatever came
         // before it. Decode the second packet of a stream with a fresh
         // decoder and it must match the in-order decode.
@@ -1389,13 +1438,13 @@ mod tests {
     /// per-band step values (skipping over each band's coefficients),
     /// without going through a full decode.
     fn extract_band_steps(pkt: &Packet) -> alloc::vec::Vec<u16> {
-        let mut r = BitReader::new(&pkt.data);
-        let _wire_version = r.read(16).unwrap();
-        let _fs_code = r.read(1).unwrap();
-        let n_bands = r.read(8).unwrap() as usize;
-        let uniform = r.read(1).unwrap() == 0;
+        let mut r = RangeDecoder::new(&pkt.data[2..]).unwrap();
+        let _fs = get_bits(&mut r, 1).unwrap();
+        let n_bands = get_bits(&mut r, 8).unwrap() as usize;
+        let uniform = get_bits(&mut r, 1).unwrap() == 0;
         let count = if uniform { 1 } else { n_bands };
-        let steps: alloc::vec::Vec<u16> = (0..count).map(|_| r.read(16).unwrap() as u16).collect();
+        let steps: alloc::vec::Vec<u16> =
+            (0..count).map(|_| get_bits(&mut r, 16).unwrap() as u16).collect();
         if uniform {
             alloc::vec![steps[0]; n_bands]
         } else {
@@ -1509,17 +1558,8 @@ mod tests {
         // §35: a decoder must fail cleanly on a wire version it doesn't
         // understand, rather than silently misinterpreting the rest of
         // the packet as if it were this decoder's own layout.
-        let mut buf = alloc::vec![0u8; 4];
-        let written = {
-            let mut w = BitWriter::new(&mut buf);
-            w.write(16, 99).unwrap(); // bogus/future version
-            w.write(1, 0).unwrap(); // frame-size selector; never reached
-            w.write(8, 0).unwrap();
-            w.finish().unwrap()
-        };
-        buf.truncate(written);
         let pkt = Packet {
-            data: buf,
+            data: alloc::vec![0x00, 99, 0, 0, 0, 0], // bogus/future version
             pts: Timestamp::zero(Timebase::new(1, 48_000)),
             dts: Timestamp::zero(Timebase::new(1, 48_000)),
             flags: PacketFlags::KEYFRAME,
@@ -1538,17 +1578,8 @@ mod tests {
     fn decode_rejects_version_1_packets() {
         // Version 1 used the same layout with non-overlapping blocks. Its
         // packets must be refused, not overlap-added as if they were v2.
-        let mut buf = alloc::vec![0u8; 4];
-        let written = {
-            let mut w = BitWriter::new(&mut buf);
-            w.write(16, 1).unwrap();
-            w.write(1, 0).unwrap();
-            w.write(8, 1).unwrap();
-            w.finish().unwrap()
-        };
-        buf.truncate(written);
         let pkt = Packet {
-            data: buf,
+            data: alloc::vec![0x00, 1, 0, 0, 0, 0],
             pts: Timestamp::zero(timebase_48k()),
             dts: Timestamp::zero(timebase_48k()),
             flags: PacketFlags::KEYFRAME,
@@ -1561,27 +1592,11 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_n_coeffs_that_would_overrun_the_spectrum() {
-        // Regression: `n_coeffs` (and `n_bands`) come straight from the
-        // packet with no bound relative to `frame_size`. A single band
-        // claiming more coefficients than fit in the whole spectrum used
-        // to index `spec` out of bounds and panic instead of returning
-        // `MalformedPacket`. Buffer is sized generously so the failure
-        // path being tested is the bounds check itself, not an
-        // incidental end-of-input a few bits earlier.
-        let mut buf = alloc::vec![0u8; 8];
-        let written = {
-            let mut w = BitWriter::new(&mut buf);
-            w.write(16, VERSION as u64).unwrap();
-            w.write(1, 0).unwrap(); // frame_size = 128
-            w.write(8, 1).unwrap(); // n_bands = 1 (band_size = 128)
-            w.write(16, 12).unwrap(); // step
-            w.write(8, 200).unwrap(); // n_coeffs: far more than band_size
-            w.finish().unwrap()
-        };
-        buf.truncate(written);
+    fn decode_rejects_a_truncated_payload() {
+        // A payload too short for the range decoder's 5-byte start must be
+        // rejected as malformed, not read past its end.
         let pkt = Packet {
-            data: buf,
+            data: alloc::vec![0x00, VERSION as u8, 0x12],
             pts: Timestamp::zero(timebase_48k()),
             dts: Timestamp::zero(timebase_48k()),
             flags: PacketFlags::KEYFRAME,
@@ -1595,15 +1610,15 @@ mod tests {
 
     #[test]
     fn decode_rejects_zero_bands() {
-        let mut buf = alloc::vec![0u8; 4];
+        let mut buf = alloc::vec![0u8; 16];
+        buf[..2].copy_from_slice(&VERSION.to_be_bytes());
         let written = {
-            let mut w = BitWriter::new(&mut buf);
-            w.write(16, VERSION as u64).unwrap();
-            w.write(1, 0).unwrap();
-            w.write(8, 0).unwrap(); // n_bands = 0
-            w.finish().unwrap()
+            let mut enc = RangeEncoder::new(&mut buf[2..]);
+            put_bits(&mut enc, 0, 1).unwrap(); // frame_size = 128
+            put_bits(&mut enc, 0, 8).unwrap(); // n_bands = 0
+            enc.finish().unwrap()
         };
-        buf.truncate(written);
+        buf.truncate(2 + written);
         let pkt = Packet {
             data: buf,
             pts: Timestamp::zero(timebase_48k()),
