@@ -4555,5 +4555,1835 @@
     }
    ]
   }
+ },
+ "speech": {
+  "OSR_us_000_0010_8k": [
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0010",
+    "kbps": 147.302,
+    "pesq": 1.323947548866272
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0020",
+    "kbps": 137.47,
+    "pesq": 1.2951126098632812
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0039",
+    "kbps": 123.508,
+    "pesq": 1.194173812866211
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0078",
+    "kbps": 106.784,
+    "pesq": 1.3519556522369385
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0156",
+    "kbps": 89.371,
+    "pesq": 1.4392433166503906
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0312",
+    "kbps": 72.325,
+    "pesq": 1.544183373451233
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0625",
+    "kbps": 58.136,
+    "pesq": 1.5593554973602295
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.1250",
+    "kbps": 47.238,
+    "pesq": 1.6308817863464355
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.2500",
+    "kbps": 39.05,
+    "pesq": 1.7774873971939087
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.5000",
+    "kbps": 32.966,
+    "pesq": 1.9588522911071777
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 1.0000",
+    "kbps": 28.534,
+    "pesq": 1.988102674484253
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 2.0000",
+    "kbps": 25.43,
+    "pesq": 1.8903663158416748
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 4.0000",
+    "kbps": 23.317,
+    "pesq": 1.688828468322754
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 8.0000",
+    "kbps": 21.93,
+    "pesq": 1.438021183013916
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 16.0000",
+    "kbps": 21.27,
+    "pesq": 1.2204198837280273
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 32.0000",
+    "kbps": 21.035,
+    "pesq": 1.1089550256729126
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0010",
+    "kbps": 151.217,
+    "pesq": 1.2727210521697998
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0020",
+    "kbps": 138.781,
+    "pesq": 1.1467616558074951
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0039",
+    "kbps": 123.738,
+    "pesq": 1.3587673902511597
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0078",
+    "kbps": 106.817,
+    "pesq": 1.4519741535186768
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0156",
+    "kbps": 89.388,
+    "pesq": 1.5993788242340088
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0312",
+    "kbps": 72.33,
+    "pesq": 1.758470058441162
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0625",
+    "kbps": 58.136,
+    "pesq": 1.8371496200561523
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.1250",
+    "kbps": 47.238,
+    "pesq": 2.0264527797698975
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.2500",
+    "kbps": 39.05,
+    "pesq": 2.2998411655426025
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.5000",
+    "kbps": 32.966,
+    "pesq": 2.493053436279297
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 1.0000",
+    "kbps": 28.534,
+    "pesq": 2.334620714187622
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 2.0000",
+    "kbps": 25.43,
+    "pesq": 1.927215814590454
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 4.0000",
+    "kbps": 23.317,
+    "pesq": 1.689220905303955
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 8.0000",
+    "kbps": 21.93,
+    "pesq": 1.438021183013916
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 16.0000",
+    "kbps": 21.27,
+    "pesq": 1.2204198837280273
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 32.0000",
+    "kbps": 21.035,
+    "pesq": 1.1089550256729126
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0010",
+    "kbps": 151.374,
+    "pesq": 1.269446611404419
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0020",
+    "kbps": 138.788,
+    "pesq": 1.362309217453003
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0039",
+    "kbps": 123.745,
+    "pesq": 1.4572381973266602
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0078",
+    "kbps": 106.821,
+    "pesq": 1.607778549194336
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0156",
+    "kbps": 89.389,
+    "pesq": 1.8190542459487915
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0312",
+    "kbps": 72.33,
+    "pesq": 2.065443992614746
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0625",
+    "kbps": 58.136,
+    "pesq": 2.278494358062744
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.1250",
+    "kbps": 47.238,
+    "pesq": 2.579901695251465
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.2500",
+    "kbps": 39.05,
+    "pesq": 2.851531982421875
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.5000",
+    "kbps": 32.966,
+    "pesq": 2.9480628967285156
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 1.0000",
+    "kbps": 28.534,
+    "pesq": 2.413435459136963
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 2.0000",
+    "kbps": 25.43,
+    "pesq": 1.9270720481872559
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 4.0000",
+    "kbps": 23.317,
+    "pesq": 1.689220905303955
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 8.0000",
+    "kbps": 21.93,
+    "pesq": 1.438021183013916
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 16.0000",
+    "kbps": 21.27,
+    "pesq": 1.2204198837280273
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 32.0000",
+    "kbps": 21.035,
+    "pesq": 1.1089550256729126
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0010",
+    "kbps": 151.382,
+    "pesq": 1.3641207218170166
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0020",
+    "kbps": 138.794,
+    "pesq": 1.4600465297698975
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0039",
+    "kbps": 123.748,
+    "pesq": 1.6104531288146973
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0078",
+    "kbps": 106.821,
+    "pesq": 1.8223357200622559
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0156",
+    "kbps": 89.389,
+    "pesq": 2.1260087490081787
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0312",
+    "kbps": 72.33,
+    "pesq": 2.51708984375
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0625",
+    "kbps": 58.136,
+    "pesq": 2.8176462650299072
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.1250",
+    "kbps": 47.238,
+    "pesq": 3.1040334701538086
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.2500",
+    "kbps": 39.05,
+    "pesq": 3.3820245265960693
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.5000",
+    "kbps": 32.966,
+    "pesq": 3.1146702766418457
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 1.0000",
+    "kbps": 28.534,
+    "pesq": 2.41605806350708
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 2.0000",
+    "kbps": 25.43,
+    "pesq": 1.9270720481872559
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 4.0000",
+    "kbps": 23.317,
+    "pesq": 1.689220905303955
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 8.0000",
+    "kbps": 21.93,
+    "pesq": 1.438021183013916
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 16.0000",
+    "kbps": 21.27,
+    "pesq": 1.2204198837280273
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 32.0000",
+    "kbps": 21.035,
+    "pesq": 1.1089550256729126
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0010",
+    "kbps": 151.387,
+    "pesq": 1.4615740776062012
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0020",
+    "kbps": 138.796,
+    "pesq": 1.612318992614746
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0039",
+    "kbps": 123.748,
+    "pesq": 1.8235951662063599
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0078",
+    "kbps": 106.821,
+    "pesq": 2.129934072494507
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0156",
+    "kbps": 89.389,
+    "pesq": 2.572234630584717
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0312",
+    "kbps": 72.33,
+    "pesq": 3.006894111633301
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0625",
+    "kbps": 58.136,
+    "pesq": 3.310814380645752
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.1250",
+    "kbps": 47.238,
+    "pesq": 3.6907317638397217
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.2500",
+    "kbps": 39.05,
+    "pesq": 3.6020538806915283
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.5000",
+    "kbps": 32.966,
+    "pesq": 3.1180331707000732
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 1.0000",
+    "kbps": 28.534,
+    "pesq": 2.41605806350708
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 2.0000",
+    "kbps": 25.43,
+    "pesq": 1.9270720481872559
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 4.0000",
+    "kbps": 23.317,
+    "pesq": 1.689220905303955
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 8.0000",
+    "kbps": 21.93,
+    "pesq": 1.438021183013916
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 16.0000",
+    "kbps": 21.27,
+    "pesq": 1.2204198837280273
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 32.0000",
+    "kbps": 21.035,
+    "pesq": 1.1089550256729126
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0010",
+    "kbps": 161.475,
+    "pesq": 1.6133118867874146
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0020",
+    "kbps": 145.894,
+    "pesq": 1.8251128196716309
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0039",
+    "kbps": 128.478,
+    "pesq": 2.131412982940674
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0078",
+    "kbps": 109.805,
+    "pesq": 2.577604293823242
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0156",
+    "kbps": 91.117,
+    "pesq": 3.0473904609680176
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0312",
+    "kbps": 73.228,
+    "pesq": 3.4862637519836426
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0625",
+    "kbps": 58.467,
+    "pesq": 3.913844347000122
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.1250",
+    "kbps": 47.283,
+    "pesq": 3.9252569675445557
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.2500",
+    "kbps": 39.051,
+    "pesq": 3.60371732711792
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.5000",
+    "kbps": 32.966,
+    "pesq": 3.1180331707000732
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 1.0000",
+    "kbps": 28.534,
+    "pesq": 2.41605806350708
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 2.0000",
+    "kbps": 25.43,
+    "pesq": 1.9270720481872559
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 4.0000",
+    "kbps": 23.317,
+    "pesq": 1.689220905303955
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 8.0000",
+    "kbps": 21.93,
+    "pesq": 1.438021183013916
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 16.0000",
+    "kbps": 21.27,
+    "pesq": 1.2204198837280273
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 32.0000",
+    "kbps": 21.035,
+    "pesq": 1.1089550256729126
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0010",
+    "kbps": 163.238,
+    "pesq": 1.825770378112793
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0020",
+    "kbps": 147.106,
+    "pesq": 2.1326019763946533
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0039",
+    "kbps": 129.302,
+    "pesq": 2.578660011291504
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0078",
+    "kbps": 110.317,
+    "pesq": 3.0495197772979736
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0156",
+    "kbps": 91.417,
+    "pesq": 3.5230324268341064
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0312",
+    "kbps": 73.379,
+    "pesq": 4.118788719177246
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0625",
+    "kbps": 58.522,
+    "pesq": 4.179722785949707
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.1250",
+    "kbps": 47.294,
+    "pesq": 3.927396297454834
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.2500",
+    "kbps": 39.051,
+    "pesq": 3.60371732711792
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.5000",
+    "kbps": 32.966,
+    "pesq": 3.1180331707000732
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 1.0000",
+    "kbps": 28.534,
+    "pesq": 2.41605806350708
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 2.0000",
+    "kbps": 25.43,
+    "pesq": 1.9270720481872559
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 4.0000",
+    "kbps": 23.317,
+    "pesq": 1.689220905303955
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 8.0000",
+    "kbps": 21.93,
+    "pesq": 1.438021183013916
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 16.0000",
+    "kbps": 21.27,
+    "pesq": 1.2204198837280273
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 32.0000",
+    "kbps": 21.035,
+    "pesq": 1.1089550256729126
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0010",
+    "kbps": 165.034,
+    "pesq": 2.1332459449768066
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0020",
+    "kbps": 148.313,
+    "pesq": 2.5797176361083984
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0039",
+    "kbps": 130.104,
+    "pesq": 3.0502092838287354
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0078",
+    "kbps": 110.828,
+    "pesq": 3.524169445037842
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0156",
+    "kbps": 91.711,
+    "pesq": 4.174868583679199
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0312",
+    "kbps": 73.548,
+    "pesq": 4.4117231369018555
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0625",
+    "kbps": 58.576,
+    "pesq": 4.18334436416626
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.1250",
+    "kbps": 47.302,
+    "pesq": 3.927396297454834
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.2500",
+    "kbps": 39.051,
+    "pesq": 3.60371732711792
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.5000",
+    "kbps": 32.966,
+    "pesq": 3.1180331707000732
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 1.0000",
+    "kbps": 28.534,
+    "pesq": 2.41605806350708
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 2.0000",
+    "kbps": 25.43,
+    "pesq": 1.9270720481872559
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 4.0000",
+    "kbps": 23.317,
+    "pesq": 1.689220905303955
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 8.0000",
+    "kbps": 21.93,
+    "pesq": 1.438021183013916
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 16.0000",
+    "kbps": 21.27,
+    "pesq": 1.2204198837280273
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 32.0000",
+    "kbps": 21.035,
+    "pesq": 1.1089550256729126
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0010",
+    "kbps": 166.794,
+    "pesq": 2.580065965652466
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0020",
+    "kbps": 149.534,
+    "pesq": 3.0505080223083496
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0039",
+    "kbps": 130.902,
+    "pesq": 3.5247151851654053
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0078",
+    "kbps": 111.34,
+    "pesq": 4.176287651062012
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0156",
+    "kbps": 92.013,
+    "pesq": 4.515346050262451
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0312",
+    "kbps": 73.695,
+    "pesq": 4.417245388031006
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0625",
+    "kbps": 58.632,
+    "pesq": 4.18334436416626
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.1250",
+    "kbps": 47.311,
+    "pesq": 3.927396297454834
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.2500",
+    "kbps": 39.051,
+    "pesq": 3.60371732711792
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.5000",
+    "kbps": 32.966,
+    "pesq": 3.1180331707000732
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 1.0000",
+    "kbps": 28.534,
+    "pesq": 2.41605806350708
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 2.0000",
+    "kbps": 25.43,
+    "pesq": 1.9270720481872559
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 4.0000",
+    "kbps": 23.317,
+    "pesq": 1.689220905303955
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 8.0000",
+    "kbps": 21.93,
+    "pesq": 1.438021183013916
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 16.0000",
+    "kbps": 21.27,
+    "pesq": 1.2204198837280273
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 32.0000",
+    "kbps": 21.035,
+    "pesq": 1.1089550256729126
+   },
+   {
+    "codec": "opus",
+    "setting": "12 kbps",
+    "kbps": 12.524799999999999,
+    "pesq": 3.987224817276001
+   },
+   {
+    "codec": "opus",
+    "setting": "16 kbps",
+    "kbps": 16.2776,
+    "pesq": 4.2237982749938965
+   },
+   {
+    "codec": "opus",
+    "setting": "24 kbps",
+    "kbps": 23.2364,
+    "pesq": 4.4244184494018555
+   },
+   {
+    "codec": "opus",
+    "setting": "32 kbps",
+    "kbps": 31.816,
+    "pesq": 4.404849529266357
+   },
+   {
+    "codec": "opus",
+    "setting": "48 kbps",
+    "kbps": 46.133199999999995,
+    "pesq": 4.469836711883545
+   },
+   {
+    "codec": "opus",
+    "setting": "64 kbps",
+    "kbps": 65.544,
+    "pesq": 4.4698286056518555
+   },
+   {
+    "codec": "opus",
+    "setting": "96 kbps",
+    "kbps": 99.21560000000001,
+    "pesq": 4.504919528961182
+   },
+   {
+    "codec": "opus",
+    "setting": "128 kbps",
+    "kbps": 133.09320000000002,
+    "pesq": 4.516062259674072
+   }
+  ],
+  "OSR_us_000_0011_8k": [
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0010",
+    "kbps": 143.876,
+    "pesq": 1.309637427330017
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0020",
+    "kbps": 132.6,
+    "pesq": 1.311992883682251
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0039",
+    "kbps": 117.293,
+    "pesq": 1.3165735006332397
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0078",
+    "kbps": 100.25,
+    "pesq": 1.353653907775879
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0156",
+    "kbps": 83.117,
+    "pesq": 1.4369651079177856
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0312",
+    "kbps": 66.934,
+    "pesq": 1.5204133987426758
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.0625",
+    "kbps": 54.002,
+    "pesq": 1.5537835359573364
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.1250",
+    "kbps": 44.278,
+    "pesq": 1.6251235008239746
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.2500",
+    "kbps": 37.008,
+    "pesq": 1.7909557819366455
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 0.5000",
+    "kbps": 31.633,
+    "pesq": 2.0090126991271973
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 1.0000",
+    "kbps": 27.838,
+    "pesq": 2.0361886024475098
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 2.0000",
+    "kbps": 25.103,
+    "pesq": 1.939819097518921
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 4.0000",
+    "kbps": 23.097,
+    "pesq": 1.6187043190002441
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 8.0000",
+    "kbps": 21.85,
+    "pesq": 1.4675456285476685
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 16.0000",
+    "kbps": 21.236,
+    "pesq": 1.2651995420455933
+   },
+   {
+    "codec": "cinder",
+    "setting": "4 bits, step 32.0000",
+    "kbps": 21.027,
+    "pesq": 1.1858112812042236
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0010",
+    "kbps": 146.933,
+    "pesq": 1.3113956451416016
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0020",
+    "kbps": 133.475,
+    "pesq": 1.3187257051467896
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0039",
+    "kbps": 117.401,
+    "pesq": 1.3596382141113281
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0078",
+    "kbps": 100.261,
+    "pesq": 1.4503051042556763
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0156",
+    "kbps": 83.126,
+    "pesq": 1.6061875820159912
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0312",
+    "kbps": 66.938,
+    "pesq": 1.7518091201782227
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.0625",
+    "kbps": 54.002,
+    "pesq": 1.8621799945831299
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.1250",
+    "kbps": 44.278,
+    "pesq": 2.0477328300476074
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.2500",
+    "kbps": 37.008,
+    "pesq": 2.3042898178100586
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 0.5000",
+    "kbps": 31.633,
+    "pesq": 2.5415592193603516
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 1.0000",
+    "kbps": 27.838,
+    "pesq": 2.373525619506836
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 2.0000",
+    "kbps": 25.103,
+    "pesq": 1.9683880805969238
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 4.0000",
+    "kbps": 23.097,
+    "pesq": 1.6187100410461426
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 8.0000",
+    "kbps": 21.85,
+    "pesq": 1.4675456285476685
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 16.0000",
+    "kbps": 21.236,
+    "pesq": 1.2651995420455933
+   },
+   {
+    "codec": "cinder",
+    "setting": "5 bits, step 32.0000",
+    "kbps": 21.027,
+    "pesq": 1.1858112812042236
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0010",
+    "kbps": 147.026,
+    "pesq": 1.319806694984436
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0020",
+    "kbps": 133.479,
+    "pesq": 1.3624707460403442
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0039",
+    "kbps": 117.406,
+    "pesq": 1.4556519985198975
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0078",
+    "kbps": 100.264,
+    "pesq": 1.6166609525680542
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0156",
+    "kbps": 83.127,
+    "pesq": 1.8581286668777466
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0312",
+    "kbps": 66.938,
+    "pesq": 2.1215708255767822
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.0625",
+    "kbps": 54.002,
+    "pesq": 2.3619837760925293
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.1250",
+    "kbps": 44.278,
+    "pesq": 2.5773117542266846
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.2500",
+    "kbps": 37.008,
+    "pesq": 2.8711917400360107
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 0.5000",
+    "kbps": 31.633,
+    "pesq": 2.98419451713562
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 1.0000",
+    "kbps": 27.838,
+    "pesq": 2.423550605773926
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 2.0000",
+    "kbps": 25.103,
+    "pesq": 1.968414545059204
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 4.0000",
+    "kbps": 23.097,
+    "pesq": 1.6187100410461426
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 8.0000",
+    "kbps": 21.85,
+    "pesq": 1.4675456285476685
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 16.0000",
+    "kbps": 21.236,
+    "pesq": 1.2651995420455933
+   },
+   {
+    "codec": "cinder",
+    "setting": "6 bits, step 32.0000",
+    "kbps": 21.027,
+    "pesq": 1.1858112812042236
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0010",
+    "kbps": 147.031,
+    "pesq": 1.363968849182129
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0020",
+    "kbps": 133.484,
+    "pesq": 1.4583522081375122
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0039",
+    "kbps": 117.408,
+    "pesq": 1.6204673051834106
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0078",
+    "kbps": 100.264,
+    "pesq": 1.8651912212371826
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0156",
+    "kbps": 83.127,
+    "pesq": 2.2333779335021973
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0312",
+    "kbps": 66.938,
+    "pesq": 2.6182851791381836
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.0625",
+    "kbps": 54.002,
+    "pesq": 2.8593456745147705
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.1250",
+    "kbps": 44.278,
+    "pesq": 3.1367411613464355
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.2500",
+    "kbps": 37.008,
+    "pesq": 3.3853378295898438
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 0.5000",
+    "kbps": 31.633,
+    "pesq": 3.089872121810913
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 1.0000",
+    "kbps": 27.838,
+    "pesq": 2.424079656600952
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 2.0000",
+    "kbps": 25.103,
+    "pesq": 1.968414545059204
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 4.0000",
+    "kbps": 23.097,
+    "pesq": 1.6187100410461426
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 8.0000",
+    "kbps": 21.85,
+    "pesq": 1.4675456285476685
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 16.0000",
+    "kbps": 21.236,
+    "pesq": 1.2651995420455933
+   },
+   {
+    "codec": "cinder",
+    "setting": "7 bits, step 32.0000",
+    "kbps": 21.027,
+    "pesq": 1.1858112812042236
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0010",
+    "kbps": 147.036,
+    "pesq": 1.4597711563110352
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0020",
+    "kbps": 133.486,
+    "pesq": 1.622713327407837
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0039",
+    "kbps": 117.408,
+    "pesq": 1.8673679828643799
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0078",
+    "kbps": 100.264,
+    "pesq": 2.2397825717926025
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0156",
+    "kbps": 83.127,
+    "pesq": 2.7144782543182373
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0312",
+    "kbps": 66.938,
+    "pesq": 3.0606513023376465
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.0625",
+    "kbps": 54.002,
+    "pesq": 3.3668274879455566
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.1250",
+    "kbps": 44.278,
+    "pesq": 3.6969387531280518
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.2500",
+    "kbps": 37.008,
+    "pesq": 3.5210790634155273
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 0.5000",
+    "kbps": 31.633,
+    "pesq": 3.0892982482910156
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 1.0000",
+    "kbps": 27.838,
+    "pesq": 2.424079656600952
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 2.0000",
+    "kbps": 25.103,
+    "pesq": 1.968414545059204
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 4.0000",
+    "kbps": 23.097,
+    "pesq": 1.6187100410461426
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 8.0000",
+    "kbps": 21.85,
+    "pesq": 1.4675456285476685
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 16.0000",
+    "kbps": 21.236,
+    "pesq": 1.2651995420455933
+   },
+   {
+    "codec": "cinder",
+    "setting": "8 bits, step 32.0000",
+    "kbps": 21.027,
+    "pesq": 1.1858112812042236
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0010",
+    "kbps": 156.08,
+    "pesq": 1.623992919921875
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0020",
+    "kbps": 139.778,
+    "pesq": 1.8687975406646729
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0039",
+    "kbps": 121.635,
+    "pesq": 2.2410712242126465
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0078",
+    "kbps": 103.025,
+    "pesq": 2.720977544784546
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0156",
+    "kbps": 84.734,
+    "pesq": 3.1312918663024902
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0312",
+    "kbps": 67.791,
+    "pesq": 3.553088903427124
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.0625",
+    "kbps": 54.282,
+    "pesq": 3.940382957458496
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.1250",
+    "kbps": 44.306,
+    "pesq": 3.8629701137542725
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.2500",
+    "kbps": 37.008,
+    "pesq": 3.5212509632110596
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 0.5000",
+    "kbps": 31.633,
+    "pesq": 3.0892982482910156
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 1.0000",
+    "kbps": 27.838,
+    "pesq": 2.424079656600952
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 2.0000",
+    "kbps": 25.103,
+    "pesq": 1.968414545059204
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 4.0000",
+    "kbps": 23.097,
+    "pesq": 1.6187100410461426
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 8.0000",
+    "kbps": 21.85,
+    "pesq": 1.4675456285476685
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 16.0000",
+    "kbps": 21.236,
+    "pesq": 1.2651995420455933
+   },
+   {
+    "codec": "cinder",
+    "setting": "9 bits, step 32.0000",
+    "kbps": 21.027,
+    "pesq": 1.1858112812042236
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0010",
+    "kbps": 157.658,
+    "pesq": 1.8698642253875732
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0020",
+    "kbps": 140.849,
+    "pesq": 2.2424137592315674
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0039",
+    "kbps": 122.358,
+    "pesq": 2.721905469894409
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0078",
+    "kbps": 103.487,
+    "pesq": 3.1341848373413086
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0156",
+    "kbps": 85.018,
+    "pesq": 3.6261141300201416
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0312",
+    "kbps": 67.942,
+    "pesq": 4.1515069007873535
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.0625",
+    "kbps": 54.335,
+    "pesq": 4.13585090637207
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.1250",
+    "kbps": 44.31,
+    "pesq": 3.8630754947662354
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.2500",
+    "kbps": 37.008,
+    "pesq": 3.5212509632110596
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 0.5000",
+    "kbps": 31.633,
+    "pesq": 3.0892982482910156
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 1.0000",
+    "kbps": 27.838,
+    "pesq": 2.424079656600952
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 2.0000",
+    "kbps": 25.103,
+    "pesq": 1.968414545059204
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 4.0000",
+    "kbps": 23.097,
+    "pesq": 1.6187100410461426
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 8.0000",
+    "kbps": 21.85,
+    "pesq": 1.4675456285476685
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 16.0000",
+    "kbps": 21.236,
+    "pesq": 1.2651995420455933
+   },
+   {
+    "codec": "cinder",
+    "setting": "10 bits, step 32.0000",
+    "kbps": 21.027,
+    "pesq": 1.1858112812042236
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0010",
+    "kbps": 159.241,
+    "pesq": 2.242995500564575
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0020",
+    "kbps": 141.94,
+    "pesq": 2.722653388977051
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0039",
+    "kbps": 123.092,
+    "pesq": 3.1350739002227783
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0078",
+    "kbps": 103.957,
+    "pesq": 3.628542184829712
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0156",
+    "kbps": 85.289,
+    "pesq": 4.251492023468018
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0312",
+    "kbps": 68.096,
+    "pesq": 4.369963645935059
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.0625",
+    "kbps": 54.388,
+    "pesq": 4.13584041595459
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.1250",
+    "kbps": 44.318,
+    "pesq": 3.8630754947662354
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.2500",
+    "kbps": 37.008,
+    "pesq": 3.5212509632110596
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 0.5000",
+    "kbps": 31.633,
+    "pesq": 3.0892982482910156
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 1.0000",
+    "kbps": 27.838,
+    "pesq": 2.424079656600952
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 2.0000",
+    "kbps": 25.103,
+    "pesq": 1.968414545059204
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 4.0000",
+    "kbps": 23.097,
+    "pesq": 1.6187100410461426
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 8.0000",
+    "kbps": 21.85,
+    "pesq": 1.4675456285476685
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 16.0000",
+    "kbps": 21.236,
+    "pesq": 1.2651995420455933
+   },
+   {
+    "codec": "cinder",
+    "setting": "11 bits, step 32.0000",
+    "kbps": 21.027,
+    "pesq": 1.1858112812042236
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0010",
+    "kbps": 160.838,
+    "pesq": 2.723099946975708
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0020",
+    "kbps": 143.017,
+    "pesq": 3.135434865951538
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0039",
+    "kbps": 123.81,
+    "pesq": 3.629087209701538
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0078",
+    "kbps": 104.432,
+    "pesq": 4.255117416381836
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0156",
+    "kbps": 85.556,
+    "pesq": 4.521728515625
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0312",
+    "kbps": 68.234,
+    "pesq": 4.369999408721924
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.0625",
+    "kbps": 54.432,
+    "pesq": 4.13584041595459
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.1250",
+    "kbps": 44.324,
+    "pesq": 3.8630754947662354
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.2500",
+    "kbps": 37.009,
+    "pesq": 3.5212509632110596
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 0.5000",
+    "kbps": 31.633,
+    "pesq": 3.0892982482910156
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 1.0000",
+    "kbps": 27.838,
+    "pesq": 2.424079656600952
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 2.0000",
+    "kbps": 25.103,
+    "pesq": 1.968414545059204
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 4.0000",
+    "kbps": 23.097,
+    "pesq": 1.6187100410461426
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 8.0000",
+    "kbps": 21.85,
+    "pesq": 1.4675456285476685
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 16.0000",
+    "kbps": 21.236,
+    "pesq": 1.2651995420455933
+   },
+   {
+    "codec": "cinder",
+    "setting": "12 bits, step 32.0000",
+    "kbps": 21.027,
+    "pesq": 1.1858112812042236
+   },
+   {
+    "codec": "opus",
+    "setting": "12 kbps",
+    "kbps": 12.4792,
+    "pesq": 3.9484269618988037
+   },
+   {
+    "codec": "opus",
+    "setting": "16 kbps",
+    "kbps": 16.1664,
+    "pesq": 4.226568222045898
+   },
+   {
+    "codec": "opus",
+    "setting": "24 kbps",
+    "kbps": 23.000400000000003,
+    "pesq": 4.429852485656738
+   },
+   {
+    "codec": "opus",
+    "setting": "32 kbps",
+    "kbps": 31.512,
+    "pesq": 4.41302490234375
+   },
+   {
+    "codec": "opus",
+    "setting": "48 kbps",
+    "kbps": 45.9268,
+    "pesq": 4.47273063659668
+   },
+   {
+    "codec": "opus",
+    "setting": "64 kbps",
+    "kbps": 64.076,
+    "pesq": 4.478163719177246
+   },
+   {
+    "codec": "opus",
+    "setting": "96 kbps",
+    "kbps": 96.952,
+    "pesq": 4.503000259399414
+   },
+   {
+    "codec": "opus",
+    "setting": "128 kbps",
+    "kbps": 130.3236,
+    "pesq": 4.516870498657227
+   }
+  ]
  }
 }

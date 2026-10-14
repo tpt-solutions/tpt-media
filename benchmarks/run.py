@@ -6,6 +6,7 @@
     python benchmarks/run.py report     # regenerate docs/benchmarks.md from all results
     python benchmarks/run.py audio      # re-measure audio only (keeps latest video) + report
     python benchmarks/run.py proxy      # add the entropy-coding proxy to the latest run + report
+    python benchmarks/run.py speech     # add narrowband PESQ on speech (Cinder, Opus) to the latest run + report
     python benchmarks/run.py all        # run + report
 
 Video: Thrum and Vault (quality sweep) vs x264 / x265 / SVT-AV1 (CRF sweep),
@@ -359,6 +360,80 @@ def run_audio():
     return out
 
 
+# --------------------------------------------------------------------------
+# speech (perceptual): narrowband PESQ (ITU-T P.862) on Open Speech Repository clips
+# --------------------------------------------------------------------------
+SPEECH_CLIPS = ["OSR_us_000_0010_8k", "OSR_us_000_0011_8k"]
+SPEECH_SECONDS = 20
+PESQ_TARGETS = [2.0, 2.5, 3.0, 3.5, 4.0]
+
+
+def fetch_speech():
+    import urllib.request
+    (CORPUS / "speech").mkdir(parents=True, exist_ok=True)
+    (CORPUS / "speech48").mkdir(exist_ok=True)
+    for clip in SPEECH_CLIPS:
+        src = CORPUS / "speech" / f"{clip}.wav"
+        if not src.exists():
+            print("download", clip)
+            urllib.request.urlretrieve(f"https://www.voiptroubleshooter.com/open_speech/american/{clip}.wav", src)
+        dst = CORPUS / "speech48" / f"{clip}_48k.wav"
+        if not dst.exists():
+            ff("-i", src, "-ar", 48000, "-ac", 1, "-c:a", "pcm_s16le", "-t", SPEECH_SECONDS, dst)
+
+
+def to_8k(path, tmp):
+    """Narrowband view of a clip, through the same resampler for reference and decoded output."""
+    out = tmp / "n8.wav"
+    ff("-i", path, "-ar", 8000, "-ac", 1, "-c:a", "pcm_s16le", out)
+    return wav_samples(out) / 32768.0
+
+
+def pesq_nb(ref8, deg8):
+    from pesq import pesq
+    return float(pesq(8000, ref8.astype(np.float32), deg8.astype(np.float32), "nb"))
+
+
+def speech_points(ref48, tmp):
+    from pesq import pesq  # noqa: F401  (fail early if missing)
+    ref8 = to_8k(ref48, tmp)
+    seconds = len(wav_samples(ref48)) / 48000
+    pts = []
+    dec = tmp / "d48.wav"
+    for bits, q in zip(CINDER_BITS, CINDER_QUALITY):
+        for step in CINDER_STEPS[::2]:  # octave grid keeps the sweep affordable
+            j = json.loads(sh([TPT, "benchmark", "--codec", "cinder", "--runs", 1, "--quality", q,
+                               "--band-step", f"{step:.6f}", "--json", ref48]).stdout)
+            out = tmp / "c.tpt"
+            sh([TPT, "encode", "--codec", "cinder", "--quality", q, "--band-step", f"{step:.6f}", ref48, out])
+            sh([TPT, "decode", "--codec", "cinder", "--container", "wav", out, dec])
+            pts.append(dict(codec="cinder", setting=f"{bits} bits, step {step:.4f}",
+                            kbps=j["bitrate_bits_per_second"] / 1000, pesq=pesq_nb(ref8, to_8k(dec, tmp))))
+    for k in OPUS_KBPS:
+        opus, dec2 = tmp / "o.opus", tmp / "o48.wav"
+        ff("-i", ref48, "-c:a", "libopus", "-b:a", f"{k}k", "-ac", 1, "-ar", 48000, opus)
+        ff("-i", opus, "-ac", 1, "-ar", 48000, "-c:a", "pcm_s16le", dec2)
+        pts.append(dict(codec="opus", setting=f"{k} kbps", kbps=kbps(opus.stat().st_size, seconds),
+                        pesq=pesq_nb(ref8, to_8k(dec2, tmp))))
+    print("   ceiling check (reference vs itself):", round(pesq_nb(ref8, ref8), 2), flush=True)
+    return pts
+
+
+def run_speech_only():
+    """Add the speech/PESQ section to the latest run without re-measuring anything else."""
+    fetch_speech()
+    f = sorted(RESULTS.glob("*.json"))[-1]
+    data = json.loads(f.read_text())
+    data["speech"] = {}
+    with tempfile.TemporaryDirectory() as t:
+        tmp = Path(t)
+        for clip in SPEECH_CLIPS:
+            print("speech", clip, flush=True)
+            data["speech"][clip] = speech_points(CORPUS / "speech48" / f"{clip}_48k.wav", tmp)
+    f.write_text(json.dumps(data, indent=1))
+    print("updated", f)
+
+
 def git(*a):
     return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True).stdout.strip()
 
@@ -504,6 +579,23 @@ def report():
             L.append(f"| {p['setting']} | {p['kbps']:.1f} | {p['snr_db']:.2f} |")
         L.append("")
 
+    if cur.get("speech"):
+        L += ["## Speech, perceptual: narrowband PESQ", "",
+              "ITU-T P.862 PESQ (MOS-LQO, 1 to 4.5) on Open Speech Repository clips, downsampled to 8 kHz on both sides. "
+              "PESQ is a speech metric, so it says nothing about music. Each row is the lowest rate that reaches that score "
+              "over the codec's sweep (an oracle choice, as above). The reference scores 4.5 against itself.", "",
+              "| PESQ | Cinder kbps | Opus kbps | Cinder ÷ Opus |", "| ---: | ---: | ---: | ---: |"]
+        for t in PESQ_TARGETS:
+            rates = {}
+            for codec in ("cinder", "opus"):
+                vals = [p["kbps"] for clip in cur["speech"].values() for p in clip
+                        if p["codec"] == codec and p["pesq"] >= t]
+                rates[codec] = min(vals) if vals else None
+            f = lambda v: "n/a" if v is None else f"{v:.0f}"
+            ratio = "n/a" if None in rates.values() else f"{rates['cinder'] / rates['opus']:.2f}×"
+            L.append(f"| {t} | {f(rates['cinder'])} | {f(rates['opus'])} | {ratio} |")
+        L.append("")
+
     L += ["## Progress", "", "One row per recorded run. Video: each tpt codec's size relative to the best reference at the same "
           "luma PSNR (median over the points where it is defined). Audio: Aura vs FLAC-8 (lossless); Cinder and Opus vs the "
           "Gaussian bound at 20 dB (lossy; n/a for runs made before that codec was measured).", "",
@@ -545,6 +637,8 @@ if __name__ == "__main__":
         fetch()
     elif cmd == "run":
         fetch(); run()
+    elif cmd == "speech":
+        run_speech_only(); report()
     elif cmd == "proxy":
         run_proxy_only(); report()
     elif cmd == "audio":

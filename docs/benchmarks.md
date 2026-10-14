@@ -209,6 +209,18 @@ Opus points:
 | 96 | 89.3 | 19.09 |
 | 128 | 121.7 | 23.05 |
 
+## Speech, perceptual: narrowband PESQ
+
+ITU-T P.862 PESQ (MOS-LQO, 1 to 4.5) on Open Speech Repository clips, downsampled to 8 kHz on both sides. PESQ is a speech metric, so it says nothing about music. Each row is the lowest rate that reaches that score over the codec's sweep (an oracle choice, as above). The reference scores 4.5 against itself.
+
+| PESQ | Cinder kbps | Opus kbps | Cinder ÷ Opus |
+| ---: | ---: | ---: | ---: |
+| 2.0 | 28 | 12 | 2.23× |
+| 2.5 | 32 | 12 | 2.53× |
+| 3.0 | 32 | 12 | 2.53× |
+| 3.5 | 37 | 12 | 2.97× |
+| 4.0 | 54 | 16 | 3.36× |
+
 ## Progress
 
 One row per recorded run. Video: each tpt codec's size relative to the best reference at the same luma PSNR (median over the points where it is defined). Audio: Aura vs FLAC-8 (lossless); Cinder and Opus vs the Gaussian bound at 20 dB (lossy; n/a for runs made before that codec was measured).
