@@ -199,10 +199,10 @@ def snr_db(ref, test):
 
 
 def cinder_sweep(wav, tmp):
-    """Every (bit depth, step) pair on the grid. Cinder's rate is fixed by its
-    bit depth alone (no entropy coding), so the step is the only free choice
-    at each rate; the envelope over the grid is what a perfect rate control
-    could reach."""
+    """Every (bit depth, step) pair on the grid. Cinder v4 Rice-codes its levels
+    per packet, so the rate depends on the step as well as on the bit depth
+    (which bounds the levels). The envelope over the grid is the rate-quality
+    curve a perfect rate control could reach."""
     ref = wav_samples(wav)
     pts = []
     seconds = len(ref) / 48000
@@ -434,9 +434,11 @@ def report():
          "- **Audio, lossless:** Aura is compared by size against FLAC and against an *estimate* of an ideal predictor "
          "(order-32 LPC per 4096-sample block, ideal Laplace entropy coder, side info ignored). It is an estimate, not a proven bound.",
          "- **Audio, lossy:** Cinder is swept over bit depth (4–12, via `--quality`) and per-band step (`--band-step`, "
-         "half-octave grid from 1/1024 to about 45). Cinder codes every coefficient at a fixed width with no entropy coding, so its "
-         "rate depends only on the bit depth; the step is the only free choice at each rate. Rate is the codec's payload, not the file size. The Cinder rows therefore use the "
-         "best step found for each rate, which is an oracle choice: a shipped encoder would need rate control to find it.",
+         "half-octave grid from 1/1024 to about 45). Rate is the codec's payload, not the file size. The Cinder rows use the "
+         "lowest rate that reaches each SNR over the whole grid, which is an oracle choice: a shipped encoder would need rate "
+         "control to find the step. Cinder v4 uses a per-packet Rice code, which spends at least one bit on every coefficient: "
+         "about 48 kbps at 48 kHz, a floor it cannot go under however coarse the step. The proxy shows the headroom an "
+         "arithmetic coder would have; closing that gap is the next codec step.",
          "- **Audio, lossy reference:** Opus (libopus via ffmpeg, mono 48 kHz) at 12–128 kbps. Opus is perceptually tuned and "
          "SNR is a waveform metric, so Opus is expected to look worse here than it sounds; read the SNR columns as "
          "a waveform-fidelity comparison, not a listening test.",
