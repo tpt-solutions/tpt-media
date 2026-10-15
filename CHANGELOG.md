@@ -9,6 +9,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 Changed
 
+- **Cinder v5: range-coded levels under a per-packet loudness class (wire
+  version 5, breaking) (2026-10-15).** Levels were Rice-coded in v4, which
+  spends at least one bit per coefficient and so could not go below about
+  48 kbps. v5 range-codes them with the workspace's static range coder,
+  under one of 16 geometric models that the encoder chooses per packet by
+  exact code length. Nothing carries over between packets, so a lost packet
+  still cannot desynchronise the decoder. Packets from versions 1–4 are
+  rejected. Layout: `docs/codec-design.md`, "Cinder v5". The encoder builds
+  one model at a time to stay inside Cinder's 32 KiB working-set budget.
+- **Cinder v4: one step per packet and Rice-coded levels (wire version 4,
+  breaking) (2026-10-15).** v3 carried a 16-bit step and an 8-bit count per
+  band per block, about 72 kbps of side information at 48 kHz. v4 sends one
+  step per packet (a per-band mode remains for perceptual steps) and a 3-bit
+  Rice parameter chosen per packet to minimise its cost. Packets from
+  versions 1–3 are rejected. A band count above the frame size is now
+  rejected as malformed, which the tpt-web mutation test found.
+- **Cinder v3: fixed-point band steps (wire version 3, breaking)
+  (2026-10-14).** The per-band step was written as a whole number, so any
+  step below 1.0 was truncated on the wire while the encoder quantised at
+  the float value, and fractional steps decoded to near silence (a 0.05 step
+  measured about 0 dB, 23 dB after the fix). The step is now a `u16` in
+  1/1024 units (0.001 to 64). Version 2 packets are rejected; version 2 was
+  never released.
 - **Cinder v2: overlap-add MDCT (wire version 2, breaking) (2026-10-14).**
   Cinder now analyses hop-`frame_size` blocks and its decoder overlap-adds
   them, so the structural ≈3 dB SNR ceiling (todo.md Known Issues,
@@ -39,6 +62,14 @@ Changed
 
 Added
 
+- **`--band-step` for Cinder (2026-10-14).** `tpt encode`, `transcode` and
+  `benchmark` take a per-band quantisation step, so the step can be swept
+  apart from the bit depth that `--quality` sets. Cinder only; other codecs
+  reject the flag.
+- **Narrowband PESQ speech benchmark (2026-10-15).** `benchmarks/run.py speech`
+  scores Cinder and Opus on two Open Speech Repository clips (20 s each,
+  8 kHz for PESQ). Cinder v5 needs 32 kbps for PESQ 3.0 and 54 kbps for 4.0;
+  Opus needs 12 and 16. Results and method are in `docs/benchmarks.md`.
 - **Vault's B leaves gain forward-only and backward-only combine modes
   — the v4 wire, v0.3 stage 2, measured before landing** (2026-10-07):
   a non-skip B leaf now begins with a 2-bit combine mode (`0` = weighted

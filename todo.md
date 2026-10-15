@@ -2078,9 +2078,12 @@ Create reference corpora.
 
 ## Audio
 
-* [ ] speech — no real speech corpus is available in this environment;
-      not approximated synthetically (consistent with §7's honest
-      pitch-corpus stance)
+* [ ] speech — partial, 2026-10-15: two real clips from the Open Speech
+      Repository (20 s each) are scored with narrowband PESQ by
+      `benchmarks/run.py speech` (Cinder v5 against Opus; see
+      `docs/benchmarks.md`). Still unchecked: two clips are not a corpus, and
+      the §37 quality tests do not yet read them. Not approximated
+      synthetically (consistent with §7's honest pitch-corpus stance)
 * [ ] music — same: no real recordings; `signals::mixed` is labelled as
       a synthetic stand-in, not a substitute
 * [x] transient-heavy material — 2026-09-14: synthetic click trains

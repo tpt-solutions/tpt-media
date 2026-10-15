@@ -9,7 +9,9 @@
 //!   window edges (see `docs/codec-design.md`, "Cinder v2").
 //! - Quantisation: uniform scalar with per-band step size, with an
 //!   optional perceptual reweighting (see [`CinderEncoderConfig::perceptual_weighting`]).
-//! - Entropy: fixed-width bit fields (uniform quantiser index).
+//! - Entropy: the levels are range-coded under one of 16 geometric models,
+//!   chosen per packet by a 4-bit loudness class (wire version 5). The header
+//!   fields are raw bits inside the same range-coded body.
 //! - PLC: phase-randomised sign perturbation of previous frame's MDCT.
 //!
 //! ## Framing and latency

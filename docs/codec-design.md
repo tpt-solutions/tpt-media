@@ -50,9 +50,35 @@ convention): 90 bits of coded parameters = 4.5 kbps; the wire-rounded
   vowels can lock onto formant ringing near half the true period (the
   tests assert periodicity at the transmitted lag instead).
 
-### Cinder v2 — wire format (layout unchanged from v1)
+### Cinder v5 — wire format (current)
 
-`codecs/cinder/src/lib.rs` (`VERSION = 2`). Version 1 used the same layout with non-overlapping blocks and is rejected. One packet = one hop of `frame_size` samples (the MDCT block; the decoder overlap-adds it, see "Cinder v2 — overlap-add redesign" below).
+`codecs/cinder/src/lib.rs` (`VERSION = 5`). Versions 1–4 are rejected. The reasons for each change are listed after the table, and the earlier layouts follow it.
+
+The packet is a 2-byte big-endian version, readable before any coded data, followed by one range-coded body (`RangeEncoder`, uniform symbols for the raw fields):
+
+| Field | Coding | Contents |
+| ----- | ------ | -------- |
+| `version` | 16 raw bits | `5`; any other value fails with `CodecError::Unsupported` before any further parse |
+| `frame_size` | 1 bit | `0` = 128 samples, `1` = 256 |
+| `n_bands` | 8 bits | number of spectral bands |
+| step mode | 1 bit | `0` = one step for every band (the common case); `1` = a 16-bit step per band |
+| steps | 16 bits each | one step, or one per band; units of `1 / STEP_UNIT` (1024), so 0.001 to 64 |
+| loudness class | 4 bits | selects one of 16 geometric level models, means growing 1.7× per class from 1/16 |
+| levels | range-coded, one per coded coefficient | zigzag value under the class model (255-symbol alphabet); symbol 255 is an escape, followed by the excess in `bits_per_coef` raw bits |
+
+The encoder costs every class with exact code lengths and sends the shortest. It builds one model at a time, because holding all sixteen breaks the Cinder working-set budget (32 KiB). The models use IEEE multiply and floor only, so encoder and decoder derive identical integer tables on any platform. Nothing carries over between packets, so a lost packet cannot desynchronise the decoder, which the concealment path depends on.
+
+Why each step was taken:
+
+- **v3** made the step a fixed-point `u16` in 1/1024 units. Whole-number steps truncated any step below 1.0, so those decoded to near silence.
+- **v4** dropped the per-band 8-bit count and sent one step per packet. Levels were Rice-coded, which spends at least one bit per coefficient, so the rate floor was about 48 kbps.
+- **v5** range-codes the levels under the loudness class. That removes the per-coefficient floor, so the rate is no longer bounded below by the code.
+
+The v5 measurements are in `docs/benchmarks.md`.
+
+### Cinder v2 — wire format (layout unchanged from v1; superseded by v5)
+
+`codecs/cinder/src/lib.rs` (`VERSION = 2`, now superseded). Version 1 used the same layout with non-overlapping blocks and is rejected. One packet = one hop of `frame_size` samples (the MDCT block; the decoder overlap-adds it, see "Cinder v2 — overlap-add redesign" below).
 Fixed-width fields, bit-packed via `BitWriter`, in this order:
 
 | Field | Width | Contents |
