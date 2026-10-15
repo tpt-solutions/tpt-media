@@ -4,16 +4,19 @@
     python benchmarks/run.py fetch      # download + prepare the Xiph corpus
     python benchmarks/run.py run        # measure, write benchmarks/results/<stamp>.json
     python benchmarks/run.py report     # regenerate docs/benchmarks.md from all results
-    python benchmarks/run.py audio      # re-measure audio only (keeps latest video) + report
     python benchmarks/run.py proxy      # add the entropy-coding proxy to the latest run + report
-    python benchmarks/run.py speech     # add narrowband PESQ on speech (Cinder, Opus) to the latest run + report
+    python benchmarks/run.py speech     # re-measure narrowband PESQ on speech (Cinder, Opus, Codec 2, Reed) + report
+    python benchmarks/run.py video      # re-measure video only, keeping the latest audio/speech + report
+    python benchmarks/run.py audio      # re-measure audio only, keeping the latest video/speech + report
     python benchmarks/run.py all        # run + report
 
-Video: Thrum and Vault (quality sweep) vs x264 / x265 / SVT-AV1 (CRF sweep),
-all scored by the same ffmpeg PSNR/SSIM filters on decoded output, rate taken
-from the raw payload (no container overhead on either side).
-Audio: Aura (lossless) vs FLAC and an LPC-residual entropy estimate; Cinder
-(lossy) and Opus against a Gaussian rate-distortion bound.
+Video: Thrum and Vault (quality sweep) vs x264 / x265 / SVT-AV1 (CRF sweep)
+at offline "ceiling" settings, and vs x264 zerolatency and VP9 realtime as the
+low-latency references. All scored by the same ffmpeg PSNR/SSIM filters on
+decoded output, rate taken from the raw payload (no container overhead).
+Audio: Aura (lossless) vs FLAC, WavPack, ALAC and an LPC-residual entropy
+estimate; Cinder (lossy) vs Opus and AAC-LC against a Gaussian rate-distortion
+bound. Speech: Cinder and Opus vs Codec 2 and Reed on narrowband PESQ.
 """
 import datetime, json, math, os, re, subprocess, sys, tempfile, time
 from pathlib import Path
@@ -42,6 +45,17 @@ REFERENCES = {  # name -> (ffmpeg encoder args, rate-control values, container e
     "x264-veryslow": (["-c:v", "libx264", "-preset", "veryslow", "-crf", "{v}"], [20, 26, 32, 38, 44], "h264"),
     "x265-veryslow": (["-c:v", "libx265", "-preset", "veryslow", "-crf", "{v}", "-x265-params", "log-level=error"], [20, 26, 32, 38, 44], "hevc"),
     "svtav1-p4": (["-c:v", "libsvtav1", "-preset", "4", "-crf", "{v}"], [24, 32, 40, 48, 56], "ivf"),
+    "x264-zerolatency": (["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-crf", "{v}"], [20, 26, 32, 38, 44], "h264"),
+    "vp9-realtime": (["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "0", "-crf", "{v}"], [20, 26, 32, 38, 44], "ivf"),
+}
+# Offline references set the quality ceiling; real-time references are the
+# low-latency settings a real-time codec like Thrum competes with.
+CEILING_REFS = ["x264-veryslow", "x265-veryslow", "svtav1-p4"]
+REALTIME_REFS = ["x264-zerolatency", "vp9-realtime"]
+LOSSLESS_REFS = {  # name -> (ffmpeg encoder args, file ext). ALAC is muxed to m4a; its container is a few kB.
+    "flac-8": (["-c:a", "flac", "-compression_level", "8"], "flac"),
+    "wavpack": (["-c:a", "wavpack", "-compression_level", "3"], "wv"),
+    "alac": (["-c:a", "alac", "-f", "ipod"], "m4a"),
 }
 
 
@@ -193,10 +207,37 @@ def wav_samples(path):
         return np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(np.float64)
 
 
-def snr_db(ref, test):
+MAX_LAG = 2048  # codec delay search, +/- samples (AAC's priming delay is 1024)
+
+
+def best_lag(ref, test):
+    """Integer offset d with test[i + d] ~ ref[i], by FFT cross-correlation of a
+    10 s excerpt from the middle of the clip. Codecs add a fixed delay that
+    decoders do not always trim (AAC in ADTS does not), which would otherwise
+    read as noise and understate SNR."""
     n = min(len(ref), len(test))
-    err = ((ref[:n] - test[:n]) ** 2).sum()
-    return 10 * math.log10((ref[:n] ** 2).sum() / max(err, 1e-12))
+    seg_len = min(480000, n // 2)
+    start = (n - seg_len) // 2
+    seg = ref[start:start + seg_len]
+    lo = max(0, start - MAX_LAG)
+    hi = min(n, start + seg_len + MAX_LAG)
+    t = test[lo:hi]
+    size = 1 << (len(t) + len(seg)).bit_length()
+    corr = np.fft.irfft(np.fft.rfft(t, size) * np.conj(np.fft.rfft(seg, size)), size)
+    k = int(np.argmax(corr[:len(t) - len(seg) + 1]))
+    return (lo + k) - start
+
+
+def snr_db(ref, test):
+    """SNR after aligning `test` to `ref` by the best integer lag."""
+    d = best_lag(ref, test)
+    n = min(len(ref), len(test))
+    if d >= 0:
+        r, t = ref[:n - d], test[d:n]
+    else:
+        r, t = ref[-d:n], test[:n + d]
+    err = ((r - t) ** 2).sum()
+    return 10 * math.log10((r ** 2).sum() / max(err, 1e-12))
 
 
 def cinder_sweep(wav, tmp):
@@ -233,6 +274,24 @@ def opus_points(wav, tmp):
         ff("-i", out, "-ac", 1, "-ar", 48000, "-c:a", "pcm_s16le", dec)
         pts.append(dict(setting=k, kbps=kbps(out.stat().st_size, seconds), snr_db=snr_db(ref, wav_samples(dec))))
         print(f"   opus {k}k: {pts[-1]['kbps']:.1f} kbps, {pts[-1]['snr_db']:.2f} dB", flush=True)
+    return pts
+
+
+AAC_KBPS = [16, 24, 32, 48, 64, 96, 128]
+
+
+def aac_points(wav, tmp):
+    """AAC-LC (ffmpeg's native encoder) as the lossy reference beside Opus.
+    Mono 48 kHz, raw ADTS so the rate is the AAC stream itself."""
+    ref = wav_samples(wav)
+    seconds = len(ref) / 48000
+    pts = []
+    for k in AAC_KBPS:
+        out, dec = tmp / "a.aac", tmp / "a.wav"
+        ff("-i", wav, "-c:a", "aac", "-b:a", f"{k}k", "-ac", 1, "-ar", 48000, "-f", "adts", out)
+        ff("-i", out, "-ac", 1, "-ar", 48000, "-c:a", "pcm_s16le", dec)
+        pts.append(dict(setting=k, kbps=kbps(out.stat().st_size, seconds), snr_db=snr_db(ref, wav_samples(dec))))
+        print(f"   aac {k}k: {pts[-1]['kbps']:.1f} kbps, {pts[-1]['snr_db']:.2f} dB", flush=True)
     return pts
 
 
@@ -345,15 +404,16 @@ def run_audio():
             res = dict(pcm_bytes=raw, aura=dict(bytes=j["payload_bytes"], bit_exact=j["bit_exact"],
                                                 encode_x_realtime=j["encode_realtime_factor_min"],
                                                 decode_x_realtime=j["decode_realtime_factor_min"]))
-            for lvl in (5, 8, 12):
-                f = tmp / f"o{lvl}.flac"
+            for lname, (args, ext) in LOSSLESS_REFS.items():
+                f = tmp / f"o.{ext}"
                 t0 = time.perf_counter()
-                ff("-i", wav, "-c:a", "flac", "-compression_level", lvl, f)
-                res[f"flac-{lvl}"] = dict(bytes=f.stat().st_size, encode_x_realtime=AUDIO_SECONDS / (time.perf_counter() - t0))
+                ff("-i", wav, *args, f)
+                res[lname] = dict(bytes=f.stat().st_size, encode_x_realtime=AUDIO_SECONDS / (time.perf_counter() - t0))
             pcm = np.frombuffer(wav.read_bytes()[44:], dtype="<i2")
             res["lpc_estimate"] = dict(bytes=int(lpc_entropy_bits(pcm) / 8))
             res["cinder"] = cinder_sweep(wav, tmp)
             res["opus"] = opus_points(wav, tmp)
+            res["aac"] = aac_points(wav, tmp)
             res["rd_bound"] = rd_bound(wav)
             out[name] = res
             print("  rd bound:", [(p["snr_db"], round(p["kbps"])) for p in res["rd_bound"][::2]], flush=True)
@@ -394,11 +454,42 @@ def pesq_nb(ref8, deg8):
     return float(pesq(8000, ref8.astype(np.float32), deg8.astype(np.float32), "nb"))
 
 
+CODEC2_MODES = ["3200", "2400", "1600", "1200", "700C"]  # libcodec2 modes, 8 kHz only
+REED_QUALITY = [0, 25, 50, 75, 100]  # Reed's quality maps to LSF bits; its rate moves with it
+
+
+def codec2_points(ref8_wav, ref8, seconds, tmp):
+    pts = []
+    for mode in CODEC2_MODES:
+        raw, dec = tmp / "c2.c2", tmp / "c2.wav"
+        ff("-i", ref8_wav, "-c:a", "libcodec2", "-mode", mode, "-f", "codec2raw", raw)
+        ff("-f", "codec2raw", "-mode", mode, "-i", raw, "-ar", 8000, "-ac", 1, "-c:a", "pcm_s16le", dec)
+        pts.append(dict(codec="codec2", setting=f"{mode} bit/s", kbps=kbps(raw.stat().st_size, seconds),
+                        pesq=pesq_nb(ref8, to_8k(dec, tmp))))
+        print(f"   codec2 {mode}: {pts[-1]['kbps']:.2f} kbps, PESQ {pts[-1]['pesq']:.2f}", flush=True)
+    return pts
+
+
+def reed_points(ref8_wav, ref8, tmp):
+    pts = []
+    dec, enc = tmp / "r.wav", tmp / "r.tpt"
+    for q in REED_QUALITY:
+        j = json.loads(sh([TPT, "benchmark", "--codec", "reed", "--runs", 1, "--quality", q, "--json", ref8_wav]).stdout)
+        sh([TPT, "encode", "--codec", "reed", "--quality", q, ref8_wav, enc])
+        sh([TPT, "decode", "--codec", "reed", "--container", "wav", enc, dec])
+        pts.append(dict(codec="reed", setting=f"quality {q}", kbps=j["bitrate_bits_per_second"] / 1000,
+                        pesq=pesq_nb(ref8, to_8k(dec, tmp))))
+        print(f"   reed q{q}: {pts[-1]['kbps']:.2f} kbps, PESQ {pts[-1]['pesq']:.2f}", flush=True)
+    return pts
+
+
 def speech_points(ref48, tmp):
     from pesq import pesq  # noqa: F401  (fail early if missing)
     ref8 = to_8k(ref48, tmp)
+    ref8_wav = tmp / "ref8.wav"
+    ff("-i", ref48, "-ar", 8000, "-ac", 1, "-c:a", "pcm_s16le", ref8_wav)
     seconds = len(wav_samples(ref48)) / 48000
-    pts = []
+    pts = codec2_points(ref8_wav, ref8, seconds, tmp) + reed_points(ref8_wav, ref8, tmp)
     dec = tmp / "d48.wav"
     for bits, q in zip(CINDER_BITS, CINDER_QUALITY):
         for step in CINDER_STEPS[::2]:  # octave grid keeps the sweep affordable
@@ -419,19 +510,20 @@ def speech_points(ref48, tmp):
     return pts
 
 
-def run_speech_only():
-    """Add the speech/PESQ section to the latest run without re-measuring anything else."""
+def measure_speech():
     fetch_speech()
-    f = sorted(RESULTS.glob("*.json"))[-1]
-    data = json.loads(f.read_text())
-    data["speech"] = {}
+    speech = {}
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
         for clip in SPEECH_CLIPS:
             print("speech", clip, flush=True)
-            data["speech"][clip] = speech_points(CORPUS / "speech48" / f"{clip}_48k.wav", tmp)
-    f.write_text(json.dumps(data, indent=1))
-    print("updated", f)
+            speech[clip] = speech_points(CORPUS / "speech48" / f"{clip}_48k.wav", tmp)
+    return speech
+
+
+def result_files():
+    """Result files oldest first, by the date recorded in each (filenames sort by commit, not time)."""
+    return sorted(RESULTS.glob("*.json"), key=lambda f: json.loads(f.read_text())["meta"]["date"])
 
 
 def git(*a):
@@ -440,7 +532,7 @@ def git(*a):
 
 def run_proxy_only():
     """Add the entropy-coding proxy to the latest run without re-measuring anything else."""
-    f = sorted(RESULTS.glob("*.json"))[-1]
+    f = result_files()[-1]
     data = json.loads(f.read_text())
     for name in data["audio"]:
         data["audio"][name]["entropy_proxy"] = entropy_proxy(CORPUS / "audio" / f"{name}_{AUDIO_SECONDS}s.wav")
@@ -448,14 +540,21 @@ def run_proxy_only():
     print("updated", f)
 
 
-def run_audio_only():
-    """Re-measure only the audio section, keeping the latest run's video."""
-    latest = json.loads(sorted(RESULTS.glob("*.json"))[-1].read_text())
+def remeasure(sections):
+    """Re-measure the named sections ("video", "audio", "speech") and keep the
+    rest of the latest run unchanged. The result is a new file, dated now."""
+    latest = json.loads(result_files()[-1].read_text())
     sh(["cargo", "build", "--release", "-p", "tpt-cli"], cwd=ROOT)
     meta = dict(latest["meta"], date=datetime.datetime.now().isoformat(timespec="seconds"),
                 commit=git("rev-parse", "--short", "HEAD"),
                 dirty=bool(git("status", "--porcelain", "--untracked-files=no")))
-    data = dict(meta=meta, video=latest["video"], audio=run_audio())
+    measure = dict(video=run_video, audio=run_audio, speech=measure_speech)
+    data = dict(meta=meta)
+    for key in ("video", "audio", "speech"):
+        if key in sections:
+            data[key] = measure[key]()
+        elif key in latest:
+            data[key] = latest[key]
     f = RESULTS / f"{meta['date'][:10]}-{meta['commit']}{'-dirty' if meta['dirty'] else ''}.json"
     f.write_text(json.dumps(data, indent=1))
     print("wrote", f)
@@ -467,7 +566,7 @@ def run():
     meta = dict(date=datetime.datetime.now().isoformat(timespec="seconds"), commit=git("rev-parse", "--short", "HEAD"),
                 dirty=bool(git("status", "--porcelain", "--untracked-files=no")), frames=FRAMES,
                 ffmpeg=sh(["ffmpeg", "-version"]).stdout.splitlines()[0])
-    data = dict(meta=meta, video=run_video(), audio=run_audio())
+    data = dict(meta=meta, video=run_video(), audio=run_audio(), speech=measure_speech())
     f = RESULTS / f"{meta['date'][:10]}-{meta['commit']}{'-dirty' if meta['dirty'] else ''}.json"
     f.write_text(json.dumps(data, indent=1))
     print("wrote", f)
@@ -483,8 +582,82 @@ def interp_kbps(points, psnr):
     return None
 
 
+def fmt_x(v):
+    return "n/a" if v is None else f"{v:.2f}×"
+
+
+def fmt_kbps(v, digits=0):
+    return "n/a" if v is None else f"{v:.{digits}f}"
+
+
+def ratio_of(v, b):
+    return fmt_x(None if v is None or not b else v / b)
+
+
+def bound_at(r, t):
+    return next((p["kbps"] for p in r["rd_bound"] if p["snr_db"] >= t), None)
+
+
+def equal_quality(res, refs, p):
+    """tpt's rate over the cheapest reference in `refs` at the same luma PSNR, or None."""
+    best = [b for b in (interp_kbps(res[x], p["psnr_y"]) for x in refs if x in res) if b]
+    return p["kbps"] / min(best) if best else None
+
+
+def video_ratios(cur, codec, refs):
+    return [v for res in cur["video"].values() for p in res[codec]
+            for v in [equal_quality(res, refs, p)] if v is not None]
+
+
+def lossless_ratio(r):
+    best = min((r[k]["bytes"] for k in ("flac-8", "wavpack", "alac") if k in r), default=None)
+    return r["aura"]["bytes"] / best if best else None
+
+
+def lossy_ratios(cur, key, t=20):
+    vals = []
+    for r in cur["audio"].values():
+        if key in r:
+            c, b = rate_for_snr(r[key], t), bound_at(r, t)
+            if c is not None and b:
+                vals.append(c / b)
+    return vals
+
+
+def speech_rate(speech, codec, target):
+    """Lowest kbps reaching `target` PESQ on each clip, averaged over the clips;
+    None if any clip never reaches it."""
+    per_clip = []
+    for clip in speech.values():
+        vals = [p["kbps"] for p in clip if p["codec"] == codec and p["pesq"] >= target]
+        if not vals:
+            return None
+        per_clip.append(min(vals))
+    return sum(per_clip) / len(per_clip)
+
+
+def summary_rows(cur):
+    rows = []
+    for codec in ("thrum", "vault"):
+        for label, refs in (("real-time references", REALTIME_REFS), ("offline ceiling", CEILING_REFS)):
+            vals = video_ratios(cur, codec, refs)
+            value = fmt_x(float(np.median(vals))) if vals else "n/a"
+            rows.append((f"{codec.title()}, size at equal PSNR vs {label} (median)", value))
+    vals = [v for v in (lossless_ratio(r) for r in cur["audio"].values()) if v is not None]
+    rows.append(("Aura, size vs best lossless reference (mean over clips)", fmt_x(float(np.mean(vals))) if vals else "n/a"))
+    for key, label in (("cinder", "Cinder"), ("opus", "Opus"), ("aac", "AAC-LC")):
+        vals = lossy_ratios(cur, key)
+        rows.append((f"{label}, rate ÷ Gaussian bound at 20 dB (mean over clips)",
+                     fmt_x(float(np.mean(vals))) if vals else "n/a"))
+    if cur.get("speech"):
+        for codec, label in (("opus", "Opus"), ("cinder", "Cinder"), ("codec2", "Codec 2"), ("reed", "Reed")):
+            rows.append((f"{label}, lowest kbps at PESQ 3.0 (mean over clips)",
+                         fmt_kbps(speech_rate(cur["speech"], codec, 3.0))))
+    return rows
+
+
 def report():
-    files = sorted(RESULTS.glob("*.json"))
+    files = result_files()
     runs = [json.loads(f.read_text()) for f in files]
     if not runs:
         sys.exit("no results; run `run` first")
@@ -495,6 +668,12 @@ def report():
          "re-run the harness after a codec change and commit the new result file.", "",
          f"Latest run: **{m['date']}**, commit `{m['commit']}`{' (dirty tree)' if m['dirty'] else ''}, "
          f"{m['ffmpeg'].split(' Copyright')[0]}.", "",
+         "## Summary", "",
+         "Each row is one comparison from the tables below. Ratios are how many times larger the codec's stream is "
+         "than the reference at the same quality, so `1.00×` is parity and lower is better.", "",
+         "| measure | result |", "| --- | ---: |"]
+    L += [f"| {label} | {value} |" for label, value in summary_rows(cur)]
+    L += ["",
          "## Method", "",
          "- **Corpus:** Xiph.org derf CIF sequences (akiyo = low motion, foreman = medium, mobile = high), first "
          f"{m['frames']} frames, 4:2:0. Audio is 30 s mono 48 kHz excerpts of the Sintel trailer audio and Elephants Dream's "
@@ -502,25 +681,35 @@ def report():
          "- **Video metric:** every codec's output is decoded and scored by the *same* ffmpeg PSNR and SSIM filters "
          "against the source. Rate is the raw payload, with no container overhead on either side. Each codec is swept over "
          "its quality setting; a single point means little, the curve is the result.",
-         "- **Video reference ceiling:** no true rate-distortion bound exists for natural video, so the practical ceiling is the "
-         "best of x264 `veryslow`, x265 `veryslow` and SVT-AV1 preset 4, at default tuning.",
-         "- **Video equal-quality column:** how many times *larger* the tpt stream is than the best reference at the same luma "
-         "PSNR (log-linear interpolation). `>1` means tpt is worse; `n/a` means the PSNR is outside the reference's range.",
-         "- **Audio, lossless:** Aura is compared by size against FLAC and against an *estimate* of an ideal predictor "
-         "(order-32 LPC per 4096-sample block, ideal Laplace entropy coder, side info ignored). It is an estimate, not a proven bound.",
+         "- **Video references:** the *offline ceiling* is the best of x264 `veryslow`, x265 `veryslow` and SVT-AV1 preset 4 "
+         "at default tuning. The *real-time references* are x264 `veryfast` with `zerolatency` and libvpx VP9 `realtime` at "
+         "`cpu-used 8`, the settings low-latency encoders run with. Thrum is a low-latency codec, so the real-time group is the "
+         "fair comparison; the offline ceiling shows the distance to the best encoders.",
+         "- **Video equal-quality columns:** how many times *larger* the tpt stream is than the cheapest reference in that group "
+         "at the same luma PSNR (log-linear interpolation). `>1` means tpt is worse; `n/a` means the PSNR is outside the "
+         "reference's range.",
+         "- **Audio, lossless:** Aura is compared by size against FLAC (compression level 8), WavPack (level 3) and ALAC "
+         "(muxed into m4a, so a few kB of container is included), and against an *estimate* of an ideal predictor "
+         "(order-32 LPC per 4096-sample block, ideal Laplace entropy coder, side info ignored). The estimate is not a proven bound.",
          "- **Audio, lossy:** Cinder is swept over bit depth (4–12, via `--quality`) and per-band step (`--band-step`, "
          "half-octave grid from 1/1024 to about 45). Rate is the codec's payload, not the file size. The Cinder rows use the "
          "lowest rate that reaches each SNR over the whole grid, which is an oracle choice: a shipped encoder would need rate "
          "control to find the step. Cinder v5 range-codes its levels under one of 16 fixed geometric models chosen per packet "
          "(a 4-bit class), so it no longer pays a per-coefficient floor. The entropy proxy is the remaining headroom: "
          "it uses ideal per-band histograms fitted to each clip.",
-         "- **Audio, lossy reference:** Opus (libopus via ffmpeg, mono 48 kHz) at 12–128 kbps. Opus is perceptually tuned and "
-         "SNR is a waveform metric, so Opus is expected to look worse here than it sounds; read the SNR columns as "
-         "a waveform-fidelity comparison, not a listening test.",
+         "- **Audio, lossy references:** Opus (libopus via ffmpeg, mono 48 kHz, 12–128 kbps) and AAC-LC (ffmpeg's native "
+         "encoder, mono 48 kHz, raw ADTS, 16–128 kbps). Both are perceptually tuned and SNR is a waveform metric, so they are "
+         "expected to look worse here than they sound; read the SNR columns as a waveform-fidelity comparison, not a listening test.",
+         "- **SNR alignment:** every decoded signal is aligned to its source by the best integer lag within ±2048 samples "
+         "before SNR is taken, so a codec's fixed delay does not count as error.",
          "- **Audio, bound:** the Gaussian rate-distortion bound from reverse water-filling over 16 bands per 256-sample DCT block, "
          "each band's variance taken as its power in that block, plus 4 bits per band per block of side information (about 12 kbps). "
          "It is an estimate for that envelope model, not a proven bound on every source. Earlier runs used per-coefficient "
          "variances with no side information; those numbers were far too optimistic and are not comparable.",
+         "- **Speech:** ITU-T P.862 narrowband PESQ on two 20 s Open Speech Repository clips, both sides resampled to 8 kHz. "
+         "Cinder and Opus run at 48 kHz on the original clips. Codec 2 (libcodec2, five modes) and Reed (a quality sweep) run "
+         "at 8 kHz, their native rate. Each cell is the lowest rate that reaches that PESQ on each clip, averaged over the clips. "
+         "PESQ is a speech metric, so it says nothing about music.",
          "- **Cinder's wire step:** version 3 carries steps in 1/1024 units. Version 2 wrote whole numbers only, which made every "
          "step below 1.0 decode to near silence; the rows below post-date that fix.",
          "- **Cinder's loudest peaks clip at fine steps.** At 12 bits the range is about ±2048 × step, so a step of 0.001 clips "
@@ -528,28 +717,26 @@ def report():
 
     L += ["## Video", ""]
     for clip, res in cur["video"].items():
-        L += [f"### {clip}", "", "| codec | setting | kbps | PSNR-Y dB | SSIM | enc ×realtime | tpt size vs best ref at equal PSNR |",
-              "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
-        refs = [n for n in res if n in REFERENCES]
+        L += [f"### {clip}", "", "| codec | setting | kbps | PSNR-Y dB | SSIM | enc ×realtime | vs offline ceiling | vs real-time reference |",
+              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for name, pts in res.items():
             for p in pts:
-                eq = ""
+                ceil = real = ""
                 if name not in REFERENCES:
-                    best = [interp_kbps(res[r], p["psnr_y"]) for r in refs]
-                    best = [b for b in best if b]
-                    eq = f"{p['kbps'] / min(best):.1f}×" if best else "n/a"
+                    ceil = fmt_x(equal_quality(res, CEILING_REFS, p))
+                    real = fmt_x(equal_quality(res, REALTIME_REFS, p))
                 L.append(f"| {name} | {p['setting']} | {p['kbps']:.0f} | {p['psnr_y']:.2f} | {p['ssim']:.4f} | "
-                         f"{p['encode_x_realtime']:.2f} | {eq} |")
+                         f"{p['encode_x_realtime']:.2f} | {ceil} | {real} |")
         L.append("")
 
-    L += ["## Audio, lossless", "", "| clip | PCM | Aura | FLAC-5 | FLAC-8 | FLAC-12 | LPC estimate | Aura vs FLAC-8 | Aura bit-exact |",
+    k = lambda b: "n/a" if b is None else f"{b / 1000:.0f} kB"
+    L += ["## Audio, lossless", "", "| clip | PCM | Aura | FLAC-8 | WavPack | ALAC | LPC estimate | Aura ÷ best reference | Aura bit-exact |",
           "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: |"]
     for name, r in cur["audio"].items():
-        k = lambda b: f"{b / 1000:.0f} kB"
         L.append(f"| {name} | {k(r['pcm_bytes'])} | {k(r['aura']['bytes'])} ({r['aura']['bytes'] / r['pcm_bytes']:.1%}) | "
-                 f"{k(r['flac-5']['bytes'])} | {k(r['flac-8']['bytes'])} | {k(r['flac-12']['bytes'])} | "
-                 f"{k(r['lpc_estimate']['bytes'])} | {r['aura']['bytes'] / r['flac-8']['bytes']:.2f}× | "
-                 f"{'yes' if r['aura']['bit_exact'] else '**NO**'} |")
+                 f"{k(r.get('flac-8', {}).get('bytes'))} | {k(r.get('wavpack', {}).get('bytes'))} | "
+                 f"{k(r.get('alac', {}).get('bytes'))} | {k(r['lpc_estimate']['bytes'])} | "
+                 f"{fmt_x(lossless_ratio(r))} | {'yes' if r['aura']['bit_exact'] else '**NO**'} |")
     L.append("")
 
     L += ["## Audio, lossy: rate needed for a given SNR", "",
@@ -559,15 +746,14 @@ def report():
     for name, r in cur["audio"].items():
         if "cinder" not in r:
             continue
-        L += [f"### {name}", "", "| SNR (dB) | Cinder kbps | Opus kbps | Gaussian bound kbps | Entropy-coding proxy kbps | Cinder ÷ bound | Opus ÷ bound |",
-              "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+        L += [f"### {name}", "", "| SNR (dB) | Cinder kbps | Opus kbps | AAC-LC kbps | Gaussian bound kbps | Entropy-coding proxy kbps | Cinder ÷ bound | Opus ÷ bound | AAC-LC ÷ bound |",
+              "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
         proxy = {p["snr_db"]: p["kbps"] for p in r.get("entropy_proxy", [])}
         for t in SNR_TARGETS:
-            c, o = rate_for_snr(r["cinder"], t), rate_for_snr(r["opus"], t)
-            b = next((p["kbps"] for p in r["rd_bound"] if p["snr_db"] >= t), None)
-            f = lambda v: "n/a" if v is None else f"{v:.0f}"
-            ratio = lambda v: "n/a" if (v is None or b is None) else f"{v / b:.2f}×"
-            L.append(f"| {t} | {f(c)} | {f(o)} | {f(b)} | {f(proxy.get(t))} | {ratio(c)} | {ratio(o)} |")
+            c, o, a = (rate_for_snr(r.get(key, []), t) for key in ("cinder", "opus", "aac"))
+            b = bound_at(r, t)
+            L.append(f"| {t} | {fmt_kbps(c)} | {fmt_kbps(o)} | {fmt_kbps(a)} | {fmt_kbps(b)} | {fmt_kbps(proxy.get(t))} | "
+                     f"{ratio_of(c, b)} | {ratio_of(o, b)} | {ratio_of(a, b)} |")
         L.append("")
         L += ["Cinder points (best step per bit depth):", "", "| bits | step | kbps | SNR dB |", "| ---: | ---: | ---: | ---: |"]
         for bits in CINDER_BITS:
@@ -578,54 +764,50 @@ def report():
         for p in r["opus"]:
             L.append(f"| {p['setting']} | {p['kbps']:.1f} | {p['snr_db']:.2f} |")
         L.append("")
+        if r.get("aac"):
+            L += ["AAC-LC points:", "", "| bitrate | kbps | SNR dB |", "| ---: | ---: | ---: |"]
+            for p in r["aac"]:
+                L.append(f"| {p['setting']} | {p['kbps']:.1f} | {p['snr_db']:.2f} |")
+            L.append("")
 
     if cur.get("speech"):
+        sp = cur["speech"]
         L += ["## Speech, perceptual: narrowband PESQ", "",
-              "ITU-T P.862 PESQ (MOS-LQO, 1 to 4.5) on Open Speech Repository clips, downsampled to 8 kHz on both sides. "
-              "PESQ is a speech metric, so it says nothing about music. Each row is the lowest rate that reaches that score "
-              "over the codec's sweep (an oracle choice, as above). The reference scores 4.5 against itself.", "",
-              "| PESQ | Cinder kbps | Opus kbps | Cinder ÷ Opus |", "| ---: | ---: | ---: | ---: |"]
+              "ITU-T P.862 PESQ (MOS-LQO, 1 to 4.5) on two Open Speech Repository clips, both sides at 8 kHz. Each cell is the "
+              "lowest rate that reaches that PESQ on each clip, averaged over the clips (n/a if a clip never reaches it). "
+              "Codec 2 and Reed are narrowband codecs and run only at 8 kHz. The reference scores 4.5 against itself.", "",
+              "| PESQ | Opus kbps | Cinder kbps | Codec 2 kbps | Reed kbps | Cinder ÷ Opus |", "| ---: | ---: | ---: | ---: | ---: | ---: |"]
         for t in PESQ_TARGETS:
-            rates = {}
-            for codec in ("cinder", "opus"):
-                vals = [p["kbps"] for clip in cur["speech"].values() for p in clip
-                        if p["codec"] == codec and p["pesq"] >= t]
-                rates[codec] = min(vals) if vals else None
-            f = lambda v: "n/a" if v is None else f"{v:.0f}"
-            ratio = "n/a" if None in rates.values() else f"{rates['cinder'] / rates['opus']:.2f}×"
-            L.append(f"| {t} | {f(rates['cinder'])} | {f(rates['opus'])} | {ratio} |")
+            rates = {c: speech_rate(sp, c, t) for c in ("opus", "cinder", "codec2", "reed")}
+            L.append(f"| {t} | {fmt_kbps(rates['opus'])} | {fmt_kbps(rates['cinder'])} | {fmt_kbps(rates['codec2'], 1)} | "
+                     f"{fmt_kbps(rates['reed'], 1)} | {ratio_of(rates['cinder'], rates['opus'])} |")
+        L.append("")
+        L += ["Codec 2 and Reed points (mean over the clips):", "", "| codec | setting | kbps | PESQ |", "| --- | --- | ---: | ---: |"]
+        for codec in ("codec2", "reed"):
+            settings = [p["setting"] for p in next(iter(sp.values())) if p["codec"] == codec]
+            for s in settings:
+                pts = [p for clip in sp.values() for p in clip if p["codec"] == codec and p["setting"] == s]
+                L.append(f"| {codec} | {s} | {np.mean([p['kbps'] for p in pts]):.2f} | {np.mean([p['pesq'] for p in pts]):.2f} |")
         L.append("")
 
-    L += ["## Progress", "", "One row per recorded run. Video: each tpt codec's size relative to the best reference at the same "
-          "luma PSNR (median over the points where it is defined). Audio: Aura vs FLAC-8 (lossless); Cinder and Opus vs the "
-          "Gaussian bound at 20 dB (lossy; n/a for runs made before that codec was measured).", "",
-          "| date | commit | Thrum (×ref) | Vault (×ref) | Aura/FLAC-8 | Cinder @20 dB ÷ bound | Opus @20 dB ÷ bound |",
-          "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+    L += ["## Progress", "", "One row per recorded run, all recomputed with the current definitions. Video: each tpt codec's size "
+          "relative to the offline ceiling at the same luma PSNR (median over the points where it is defined). Audio: Aura vs "
+          "FLAC-8 (lossless); Cinder, Opus and AAC-LC vs the Gaussian bound at 20 dB (lossy; n/a where that codec was not measured).", "",
+          "| date | commit | Thrum (×ceiling) | Vault (×ceiling) | Aura/FLAC-8 | Cinder @20 dB ÷ bound | Opus @20 dB ÷ bound | AAC-LC @20 dB ÷ bound |",
+          "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for r in runs:
         cells = []
         for codec in ("thrum", "vault"):
-            vals = []
-            for res in r["video"].values():
-                refs = [n for n in res if n in REFERENCES]
-                for p in res[codec]:
-                    best = [b for b in (interp_kbps(res[x], p["psnr_y"]) for x in refs) if b]
-                    if best:
-                        vals.append(p["kbps"] / min(best))
+            vals = [v for res in r["video"].values() for p in res[codec]
+                    for v in [equal_quality(res, CEILING_REFS, p)] if v is not None]
             cells.append(f"{np.median(vals):.1f}×" if vals else "n/a")
         a = np.mean([v["aura"]["bytes"] / v["flac-8"]["bytes"] for v in r["audio"].values()])
         lossy = []
-        for key in ("cinder", "opus"):
-            vals = []
-            for v in r["audio"].values():
-                if key not in v:
-                    continue
-                c = rate_for_snr(v[key], 20)
-                b = next((p["kbps"] for p in v["rd_bound"] if p["snr_db"] >= 20), None)
-                if c is not None and b:
-                    vals.append(c / b)
+        for key in ("cinder", "opus", "aac"):
+            vals = lossy_ratios({"audio": r["audio"]}, key)
             lossy.append(f"{np.mean(vals):.2f}×" if vals else "n/a")
         L.append(f"| {r['meta']['date'][:10]} | `{r['meta']['commit']}`{'*' if r['meta']['dirty'] else ''} | "
-                 f"{cells[0]} | {cells[1]} | {a:.2f}× | {lossy[0]} | {lossy[1]} |")
+                 f"{cells[0]} | {cells[1]} | {a:.2f}× | {lossy[0]} | {lossy[1]} | {lossy[2]} |")
     L += ["", "`*` = run on a tree with uncommitted changes.", ""]
     REPORT.write_text("\n".join(L), encoding="utf-8")
     print("wrote", REPORT)
@@ -638,11 +820,13 @@ if __name__ == "__main__":
     elif cmd == "run":
         fetch(); run()
     elif cmd == "speech":
-        run_speech_only(); report()
+        remeasure(("speech",)); report()
     elif cmd == "proxy":
         run_proxy_only(); report()
     elif cmd == "audio":
-        fetch(); run_audio_only(); report()
+        fetch(); remeasure(("audio",)); report()
+    elif cmd == "video":
+        fetch(); remeasure(("video",)); report()
     elif cmd == "report":
         report()
     elif cmd == "all":
