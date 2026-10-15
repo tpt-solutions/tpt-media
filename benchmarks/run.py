@@ -212,11 +212,11 @@ MAX_LAG = 2048  # codec delay search, +/- samples (AAC's priming delay is 1024)
 
 def best_lag(ref, test):
     """Integer offset d with test[i + d] ~ ref[i], by FFT cross-correlation of a
-    10 s excerpt from the middle of the clip. Codecs add a fixed delay that
+    ~3 s excerpt from the middle of the clip. Codecs add a fixed delay that
     decoders do not always trim (AAC in ADTS does not), which would otherwise
     read as noise and understate SNR."""
     n = min(len(ref), len(test))
-    seg_len = min(480000, n // 2)
+    seg_len = min(131072, n // 2)
     start = (n - seg_len) // 2
     seg = ref[start:start + seg_len]
     lo = max(0, start - MAX_LAG)

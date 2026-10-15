@@ -22,14 +22,16 @@ and a psychoacoustically driven lossy mode. Part of the
 | Version | `0.1.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
-| Modes | `lossless` (LPC + Exp-Golomb), `lossy` (MDCT + Bark masking + noise shaping) |
+| Modes | `lossless` (LPC + adaptive Rice), `lossy` (MDCT + Bark masking + noise shaping) |
 | Real-time | **Neither** encoder nor decoder claimed real-time — archival by design |
 | Measured peak memory | 25 330 B against a documented < 256 KiB budget |
 
 ## Modes
 
 **Lossless** — autocorrelation LPC analysis (Levinson-Durbin) up to order 32,
-residuals Exp-Golomb-coded after a zigzag map. Round trips are **bit-exact**,
+residuals adaptive-Rice-coded after a zigzag map, with one Rice parameter per
+256-sample partition. The LPC analysis is Hann-windowed; prediction uses the
+unwindowed samples. Round trips are **bit-exact**,
 pinned by tests and used as the workspace's reference lossless path (including
 the C ABI's integration test).
 
@@ -97,7 +99,7 @@ at 48 kHz (2026-09-14, release profile, criterion):
 | `aura_lossless/encode` (32 × 1024 samples = 0.68 s) | 1.80 ms | 56 µs/block | ~380× |
 | `aura_lossless/decode` (32 packets) | 2.37 ms | 74 µs/packet | ~290× |
 
-Lossless decode is ~4× Cinder's decode: LPC synthesis plus Exp-Golomb per
+Lossless decode is ~4× Cinder's decode: LPC synthesis plus Rice decoding per
 residual, versus band-quantised MDCT coefficients. Aura's profile is
 archival, not real-time. Tables:
 [`docs/performance.md`](../../docs/performance.md).
@@ -123,10 +125,9 @@ cargo test -p tpt-audio-aura
 - **Mono only.** There is no stereo model; no consumer needs one yet.
 - The lossy path uses `f64` and large windows — it is an archival encoder, not
   a real-time one, and `Capabilities::real_time_encoder` says so.
-- Residual coding is **Exp-Golomb**, not Rice. The `tpt-media-bitstream` Rice
-  coder is the right tool for Aura's residual distribution (todo.md §30's
-  unchecked item), but switching would break every existing packet, so the
-  code was documented to match reality instead of the reverse.
+- Packets are independent: each block carries its own LPC coefficients and
+  starts with zero history. Carrying history across packets would save about
+  5% but would make a packet undecodable on its own, so it is not done.
 
 ## License
 

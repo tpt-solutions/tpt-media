@@ -3,8 +3,8 @@
 //! ## Modes
 //!
 //! - **Lossless** — linear-predictive coding (LPC) up to order 32
-//!   followed by Exp-Golomb-coded residuals (zigzag-mapped). Bit-exact
-//!   round-trip.
+//!   followed by adaptive Rice-coded residuals (zigzag-mapped, one Rice
+//!   parameter per packet). Bit-exact round-trip.
 //! - **Lossy** — large-window MDCT (2048/4096) with Bark-band,
 //!   masking-driven quantisation and spectral noise shaping. Uses `f64`
 //!   internally.
@@ -12,12 +12,9 @@
 //! This v0.1 implementation includes:
 //!
 //! - Autocorrelation-based LPC analysis (Levinson-Durbin recursion).
-//! - Exp-Golomb-coded residuals (a tiny local `write_exp_golomb` /
-//!   `read_exp_golomb`, NOT the `Rice` coder in `tpt-media-bitstream` —
-//!   see `Known Issues` in `todo.md`; the v0.1 wire format uses
-//!   Exp-Golomb and changing it would break every existing packet, so
-//!   the doc is being brought into line with the code rather than vice
-//!   versa).
+//! - Adaptive Rice-coded residuals (`write_rice` / `read_rice`, with an
+//!   Exp-Golomb escape for huge residuals). Version 1 used Exp-Golomb for
+//!   every residual, which cost about 2× FLAC on music.
 //! - MDCT analysis and synthesis.
 //! - **Lossy quantization is psychoacoustically driven** (`tpt-dsp-core`'s
 //!   `bark`/`psychoacoustic`/`noise_shaping` modules, §10-11 of
@@ -53,7 +50,7 @@ use alloc::vec::Vec;
 use tpt_dsp_core::{
     aggregate_bands, autocorrelation, bark_to_hz, classify_tonal_bins, combined_threshold_db,
     db_to_power, hz_to_bark, imdct, levinson_durbin, mdct, noise_shape_step, simultaneous_masking,
-    threshold_in_quiet,
+    threshold_in_quiet, windowed, WindowType,
 };
 use tpt_media_bitstream::{BitReader, BitWriter};
 use tpt_media_codec::{
@@ -67,8 +64,19 @@ use tpt_media_core::{
 /// Codec id for Aura.
 pub const CODEC_ID: [u8; 4] = *b"AURA";
 
-/// Bitstream version.
-pub const VERSION: u16 = 1;
+/// Bitstream version. 2 switched lossless residuals from Exp-Golomb to
+/// adaptive Rice (version 1 packets are rejected, see `CHANGELOG.md`).
+pub const VERSION: u16 = 2;
+
+/// Rice parameter field width, one per partition. `k` is `0..=RICE_K_MAX`.
+const RICE_K_BITS: u32 = 5;
+/// Samples per Rice partition: each gets its own `k`, so a block that changes
+/// loudness or tone mid-way does not pay for its loudest part everywhere.
+const RICE_PARTITION: usize = 256;
+const RICE_K_MAX: u32 = 30;
+/// Unary prefix length at which a residual falls back to an Exp-Golomb code,
+/// so a rare huge residual cannot blow up the unary part.
+const RICE_ESCAPE: u32 = 32;
 
 /// Size in bytes of the per-packet CRC-32 trailer.
 pub const CRC_TRAILER_BYTES: usize = 4;
@@ -267,7 +275,7 @@ impl Encoder for AuraEncoder {
         // `+ 64 * 32` covers the lossy per-band scale-factor table (a 32-bit
         // float per Bark band; ~25 bands max for any audible sample rate).
         // `+ 16` covers the leading wire-version field.
-        let max_bits = 64 + order * 16 + fs * 96 + 64 * 32 + 16;
+        let max_bits = 64 + order * COEFF_BITS as usize + fs * 96 + 64 * 32 + 16;
         let mut buf = vec![0u8; max_bits.div_ceil(8)];
         let written = {
             let mut w = BitWriter::new(&mut buf);
@@ -290,8 +298,14 @@ impl Encoder for AuraEncoder {
                 .map_err(|_| CodecError::Internal)?;
             match self.enc.mode {
                 AuraMode::Lossless => {
+                    // Analyse a Hann-windowed copy: the block edges otherwise
+                    // bias the autocorrelation (about 12% more bytes on music).
+                    // Prediction below still runs on the unwindowed samples.
+                    let mut win = vec![0f32; fs];
+                    windowed(WindowType::Hann, fs, &mut win);
+                    let xw: Vec<f64> = x.iter().zip(&win).map(|(v, w)| v * *w as f64).collect();
                     let mut r = vec![0f64; order + 1];
-                    autocorrelation(&x, order, &mut r);
+                    autocorrelation(&xw, order, &mut r);
                     let mut a = vec![0f64; order];
                     let mut scratch = vec![0f64; order];
                     levinson_durbin(&r, &mut a, &mut scratch);
@@ -303,9 +317,10 @@ impl Encoder for AuraEncoder {
                         })
                         .collect();
                     for c in &coeffs_q {
-                        w.write(16, (*c as i16 as u16) as u64)
+                        w.write(COEFF_BITS, (*c as i64 as u64) & ((1u64 << COEFF_BITS) - 1))
                             .map_err(|_| CodecError::Internal)?;
                     }
+                    let mut residuals = Vec::with_capacity(fs);
                     for i in 0..fs {
                         let take = order.min(i);
                         let predicted = if take == 0 {
@@ -314,8 +329,14 @@ impl Encoder for AuraEncoder {
                             integer_predict(&samples_i32[..i], &coeffs_q[..take])
                         };
                         let residual = samples_i32[i] as i64 - predicted;
-                        write_exp_golomb(&mut w, zigzag_encode(residual))
-                            .map_err(|_| CodecError::Internal)?;
+                        residuals.push(zigzag_encode(residual));
+                    }
+                    for part in residuals.chunks(RICE_PARTITION) {
+                        let k = best_rice_k(part);
+                        w.write(RICE_K_BITS, k as u64).map_err(|_| CodecError::Internal)?;
+                        for &u in part {
+                            write_rice(&mut w, u, k).map_err(|_| CodecError::Internal)?;
+                        }
                     }
                 }
                 AuraMode::Lossy => {
@@ -403,15 +424,20 @@ impl Encoder for AuraEncoder {
     }
 }
 
-/// Fixed-point scale for quantized LPC coefficients (Q15): a coefficient
-/// magnitude of 1.0 maps to ±32767/32768.
-const COEFF_SHIFT: u32 = 15;
-const COEFF_SCALE: f64 = 32768.0;
+/// Fixed-point scale for quantized LPC coefficients (Q14), in a signed
+/// `COEFF_BITS`-bit field: magnitudes up to ±32 are representable. High-order
+/// LPC on music routinely exceeds 1.0 (measured ~11 on a bass-heavy clip),
+/// and clamping those to Q15's ±1 cost about 60% more bytes.
+const COEFF_SHIFT: u32 = 14;
+const COEFF_SCALE: f64 = 16384.0;
+const COEFF_BITS: u32 = 20;
+const COEFF_MIN: i64 = -(1 << (COEFF_BITS - 1));
+const COEFF_MAX: i64 = (1 << (COEFF_BITS - 1)) - 1;
 
-/// Quantize float LPC coefficients to Q15 fixed point, clamped to `i16`.
+/// Quantize float LPC coefficients to Q14 fixed point, clamped to the field.
 fn quantize_coeffs(a: &[f64]) -> Vec<i32> {
     a.iter()
-        .map(|ai| (*ai * COEFF_SCALE).round().clamp(-32768.0, 32767.0) as i32)
+        .map(|ai| (*ai * COEFF_SCALE).round().clamp(COEFF_MIN as f64, COEFF_MAX as f64) as i32)
         .collect()
 }
 
@@ -477,6 +503,73 @@ fn read_exp_golomb(r: &mut BitReader) -> CodecResult<u64> {
     }
     let val = r.read(n + 1).map_err(|_| CodecError::MalformedPacket)?;
     Ok(val - 1)
+}
+
+/// Bits an Exp-Golomb code of `v` takes (see [`write_exp_golomb`]).
+fn exp_golomb_len(v: u64) -> u64 {
+    let val = v + 1;
+    2 * (63 - val.leading_zeros() as u64) + 1
+}
+
+/// The Rice parameter that codes `residuals` in the fewest bits, by exact
+/// cost over every `k` in `0..=RICE_K_MAX`. Ties go to the smaller `k`.
+fn best_rice_k(residuals: &[u64]) -> u32 {
+    (0..=RICE_K_MAX)
+        .min_by_key(|&k| {
+            residuals
+                .iter()
+                .map(|&u| {
+                    let q = u >> k;
+                    if q < RICE_ESCAPE as u64 {
+                        q + 1 + k as u64
+                    } else {
+                        RICE_ESCAPE as u64 + exp_golomb_len(u)
+                    }
+                })
+                .sum::<u64>()
+        })
+        .unwrap_or(0)
+}
+
+/// Rice code for `u` with parameter `k`: the quotient `u >> k` in unary
+/// (zeros then a one), then the low `k` bits. A quotient of [`RICE_ESCAPE`]
+/// or more is written as [`RICE_ESCAPE`] zeros and an Exp-Golomb code of `u`.
+fn write_rice(w: &mut BitWriter, u: u64, k: u32) -> Result<(), tpt_media_bitstream::WriteError> {
+    let q = u >> k;
+    if q < RICE_ESCAPE as u64 {
+        for _ in 0..q {
+            w.write(1, 0)?;
+        }
+        w.write(1, 1)?;
+        if k > 0 {
+            w.write(k, u & ((1u64 << k) - 1))?;
+        }
+    } else {
+        for _ in 0..RICE_ESCAPE {
+            w.write(1, 0)?;
+        }
+        write_exp_golomb(w, u)?;
+    }
+    Ok(())
+}
+
+/// Inverse of [`write_rice`].
+fn read_rice(r: &mut BitReader, k: u32) -> CodecResult<u64> {
+    let mut q = 0u64;
+    while q < RICE_ESCAPE as u64 && r.peek(1).map_err(|_| CodecError::MalformedPacket)? == 0 {
+        r.skip(1).map_err(|_| CodecError::MalformedPacket)?;
+        q += 1;
+    }
+    if q == RICE_ESCAPE as u64 {
+        return read_exp_golomb(r);
+    }
+    r.skip(1).map_err(|_| CodecError::MalformedPacket)?;
+    let low = if k > 0 {
+        r.read(k).map_err(|_| CodecError::MalformedPacket)?
+    } else {
+        0
+    };
+    Ok((q << k) | low)
 }
 
 /// Aura decoder.
@@ -550,8 +643,10 @@ impl AuraDecoder {
                 )?;
                 let mut coeffs_q = vec![0i32; lpc_order as usize];
                 for c in coeffs_q.iter_mut() {
-                    let bits = r.read(16).map_err(|_| CodecError::MalformedPacket)? as u16;
-                    *c = bits as i16 as i32;
+                    let bits = r.read(COEFF_BITS).map_err(|_| CodecError::MalformedPacket)? as i64;
+                    // Sign-extend the field.
+                    let signed = if bits > COEFF_MAX { bits - (1 << COEFF_BITS) } else { bits };
+                    *c = signed as i32;
                 }
                 // Reconstructed sample-by-sample: each `samples_i32[i]`
                 // depends only on already-reconstructed history, which by
@@ -559,8 +654,15 @@ impl AuraDecoder {
                 // (see `integer_predict`'s doc) — this is what makes
                 // lossless mode bit-exact.
                 let mut samples_i32 = vec![0i32; fs];
+                let mut k = 0u32;
                 for i in 0..fs {
-                    let s = read_exp_golomb(&mut r)?;
+                    if i % RICE_PARTITION == 0 {
+                        k = r.read(RICE_K_BITS).map_err(|_| CodecError::MalformedPacket)? as u32;
+                        if k > RICE_K_MAX {
+                            return Err(CodecError::MalformedPacket);
+                        }
+                    }
+                    let s = read_rice(&mut r, k)?;
                     let residual = zigzag_decode(s);
                     let take = (lpc_order as usize).min(i);
                     let predicted = if take == 0 {

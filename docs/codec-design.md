@@ -240,8 +240,9 @@ cancellation token are separate open items; this change touches neither.
 | `mode` | 1 bit | `1` = lossless (LPC), `0` = lossy (MDCT) |
 | `lpc_order` | 5 bits | LPC order, 1–32 (used by both modes) |
 | `mdct_size` | 8 bits | `size/256 − 1` (so 2048 → 7, 4096 → 15) |
-| **lossless:** coefficients | 16 bits × order | Q15 fixed-point LPC coefficients |
-| **lossless:** residuals | Exp-Golomb each | zigzag-mapped prediction residual per sample — exact integer arithmetic over the *quantized* coefficients is what makes the round trip bit-exact |
+| **lossless:** coefficients | 20 bits × order | Q14 fixed-point LPC coefficients, range ±32 (Q15's ±1 clamp cost about 60% on music) |
+| **lossless:** Rice parameter | 5 bits per 256 samples | `k` for the partition that follows |
+| **lossless:** residuals | adaptive Rice each | zigzag-mapped prediction residual per sample, Exp-Golomb escape for huge residuals — exact integer arithmetic over the *quantized* coefficients is what makes the round trip bit-exact |
 | **lossy:** step table | 32 bits × n_bands | f32 quantization step per Bark band, transmitted so the decoder needs no side information |
 | **lossy:** spectrum | 16 bits per bin | quantized MDCT bin index (noise-shaped before quantization) |
 | `crc32` | 32 bits | IEEE 802.3 CRC-32 (little-endian) over all preceding bytes, verified before parsing |
