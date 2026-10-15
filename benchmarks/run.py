@@ -38,6 +38,7 @@ AUDIO_SRC = {  # name -> (url path, start seconds)
     "ed_music": ("ED/ED-CM-St-16bit.flac", 60),
 }
 AUDIO_SECONDS = 30
+STEREO_WAV = CORPUS / "audio" / "ed_music_stereo_30s.wav"  # ED-CM stereo, not downmixed
 
 TPT_QUALITIES = [10, 30, 50, 70, 90]
 REFERENCES = {  # name -> (ffmpeg encoder args, rate-control values, container ext)
@@ -95,6 +96,9 @@ def fetch():
         out = CORPUS / "audio" / f"{name}_{AUDIO_SECONDS}s.wav"
         if not out.exists():
             ff("-ss", start, "-i", src, "-t", AUDIO_SECONDS, "-ac", 1, "-ar", 48000, "-c:a", "pcm_s16le", out)
+    if not STEREO_WAV.exists():
+        src = CORPUS / "audio_src" / Path(AUDIO_SRC["ed_music"][0]).name
+        ff("-ss", AUDIO_SRC["ed_music"][1], "-i", src, "-t", AUDIO_SECONDS, "-ac", 2, "-ar", 48000, "-c:a", "pcm_s16le", STEREO_WAV)
 
 
 # --------------------------------------------------------------------------
@@ -420,6 +424,21 @@ def run_audio():
     return out
 
 
+def run_stereo():
+    """Stereo lossless: Aura (per-block L/R, L/S, R/S, M/S) against FLAC-8,
+    WavPack and ALAC on the same stereo excerpt. Mono downmixes do not show
+    the stereo modes at all, so this is measured separately."""
+    out = dict(pcm_bytes=STEREO_WAV.stat().st_size - 44)
+    j = json.loads(sh([TPT, "benchmark", "--codec", "aura", "--runs", 1, "--json", STEREO_WAV]).stdout)
+    out["aura"] = dict(bytes=j["payload_bytes"], bit_exact=j["bit_exact"])
+    with tempfile.TemporaryDirectory() as t:
+        for lname, (args, ext) in LOSSLESS_REFS.items():
+            f = Path(t) / f"o.{ext}"
+            ff("-i", STEREO_WAV, *args, f)
+            out[lname] = dict(bytes=f.stat().st_size)
+    return out
+
+
 # --------------------------------------------------------------------------
 # speech (perceptual): narrowband PESQ (ITU-T P.862) on Open Speech Repository clips
 # --------------------------------------------------------------------------
@@ -555,6 +574,10 @@ def remeasure(sections):
             data[key] = measure[key]()
         elif key in latest:
             data[key] = latest[key]
+    if "audio" in sections:
+        data["stereo"] = run_stereo()
+    elif "stereo" in latest:
+        data["stereo"] = latest["stereo"]
     f = RESULTS / f"{meta['date'][:10]}-{meta['commit']}{'-dirty' if meta['dirty'] else ''}.json"
     f.write_text(json.dumps(data, indent=1))
     print("wrote", f)
@@ -566,7 +589,7 @@ def run():
     meta = dict(date=datetime.datetime.now().isoformat(timespec="seconds"), commit=git("rev-parse", "--short", "HEAD"),
                 dirty=bool(git("status", "--porcelain", "--untracked-files=no")), frames=FRAMES,
                 ffmpeg=sh(["ffmpeg", "-version"]).stdout.splitlines()[0])
-    data = dict(meta=meta, video=run_video(), audio=run_audio(), speech=measure_speech())
+    data = dict(meta=meta, video=run_video(), audio=run_audio(), speech=measure_speech(), stereo=run_stereo())
     f = RESULTS / f"{meta['date'][:10]}-{meta['commit']}{'-dirty' if meta['dirty'] else ''}.json"
     f.write_text(json.dumps(data, indent=1))
     print("wrote", f)
@@ -643,6 +666,10 @@ def summary_rows(cur):
             vals = video_ratios(cur, codec, refs)
             value = fmt_x(float(np.median(vals))) if vals else "n/a"
             rows.append((f"{codec.title()}, size at equal PSNR vs {label} (median)", value))
+    if cur.get("stereo"):
+        st = cur["stereo"]
+        best = min(st[c]["bytes"] for c in ("flac-8", "wavpack", "alac") if c in st)
+        rows.append(("Aura, stereo size vs best lossless reference (one clip)", fmt_x(st["aura"]["bytes"] / best)))
     vals = [v for v in (lossless_ratio(r) for r in cur["audio"].values()) if v is not None]
     rows.append(("Aura, size vs best lossless reference (mean over clips)", fmt_x(float(np.mean(vals))) if vals else "n/a"))
     for key, label in (("cinder", "Cinder"), ("opus", "Opus"), ("aac", "AAC-LC")):
@@ -691,6 +718,9 @@ def report():
          "- **Audio, lossless:** Aura is compared by size against FLAC (compression level 8), WavPack (level 3) and ALAC "
          "(muxed into m4a, so a few kB of container is included), and against an *estimate* of an ideal predictor "
          "(order-32 LPC per 4096-sample block, ideal Laplace entropy coder, side info ignored). The estimate is not a proven bound.",
+         "- **Audio, stereo:** the Elephants Dream stereo excerpt (not downmixed) through Aura's stereo lossless path against FLAC-8, "
+         "WavPack and ALAC at the same settings as the mono table. Aura is measured at its CLI block size (8192 samples); the "
+         "mono table is measured the same way.",
          "- **Audio, lossy:** Cinder is swept over bit depth (4–12, via `--quality`) and per-band step (`--band-step`, "
          "half-octave grid from 1/1024 to about 45). Rate is the codec's payload, not the file size. The Cinder rows use the "
          "lowest rate that reaches each SNR over the whole grid, which is an oracle choice: a shipped encoder would need rate "
@@ -738,6 +768,17 @@ def report():
                  f"{k(r.get('alac', {}).get('bytes'))} | {k(r['lpc_estimate']['bytes'])} | "
                  f"{fmt_x(lossless_ratio(r))} | {'yes' if r['aura']['bit_exact'] else '**NO**'} |")
     L.append("")
+
+    if cur.get("stereo"):
+        st = cur["stereo"]
+        best = min(st[c]["bytes"] for c in ("flac-8", "wavpack", "alac") if c in st)
+        L += ["## Audio, lossless, stereo", "",
+              "The Elephants Dream stereo excerpt, not downmixed. Aura picks L/R, L/S, R/S or M/S per block, as FLAC does.", "",
+              "| PCM | Aura | FLAC-8 | WavPack | ALAC | Aura ÷ best reference | Aura bit-exact |",
+              "| ---: | ---: | ---: | ---: | ---: | ---: | :---: |",
+              f"| {k(st['pcm_bytes'])} | {k(st['aura']['bytes'])} | {k(st['flac-8']['bytes'])} | "
+              f"{k(st['wavpack']['bytes'])} | {k(st['alac']['bytes'])} | {fmt_x(st['aura']['bytes'] / best)} | "
+              f"{'yes' if st['aura']['bit_exact'] else '**NO**'} |", ""]
 
     L += ["## Audio, lossy: rate needed for a given SNR", "",
           "Lowest kbps that reaches each SNR (oracle choice over each codec's own sweep). Ratios are against the Gaussian bound. "

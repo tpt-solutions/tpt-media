@@ -32,8 +32,8 @@
 //!   information beyond what's in the packet — see [`AuraEncoder::encode`]
 //!   / the `AuraMode::Lossy` decode arm for the exact wire layout. This is
 //!   a breaking change to the v0.1 lossy wire format (see `CHANGELOG.md`);
-//!   there is no stereo model since Aura is mono-only (no consumer needs
-//!   stereo yet).
+//!   the lossy path has no stereo model. Lossless packets code stereo with
+//!   FLAC's four modes (L/R, L/S, R/S, M/S), chosen per block.
 //! - Per-packet integrity: every packet ends with a CRC-32 over its
 //!   payload (`crc32` + [`CRC_TRAILER_BYTES`]); the decoder verifies it
 //!   before parsing anything.
@@ -65,8 +65,16 @@ use tpt_media_core::{
 pub const CODEC_ID: [u8; 4] = *b"AURA";
 
 /// Bitstream version. 2 switched lossless residuals from Exp-Golomb to
-/// adaptive Rice (version 1 packets are rejected, see `CHANGELOG.md`).
-pub const VERSION: u16 = 2;
+/// adaptive Rice; 3 adds a stereo bit and mode to lossless packets.
+pub const VERSION: u16 = 3;
+
+/// Stereo modes for lossless packets, as FLAC names them: the two coded
+/// channels are (L, R), (L, S), (R, S) or (M, S), with S = L - R and
+/// M = (L + R) >> 1.
+const STEREO_LR: u64 = 0;
+const STEREO_LS: u64 = 1;
+const STEREO_RS: u64 = 2;
+const STEREO_MS: u64 = 3;
 
 /// Rice parameter field width, one per partition. `k` is `0..=RICE_K_MAX`.
 const RICE_K_BITS: u32 = 5;
@@ -256,16 +264,25 @@ impl Encoder for AuraEncoder {
                 "aura lossy block_size must be even",
             ));
         }
-        let n_samples = frame.samples.len() / 2;
+        let stereo = frame.channel_layout == ChannelLayout::Stereo;
+        if stereo && self.enc.mode == AuraMode::Lossy {
+            return Err(CodecError::InvalidConfig("aura lossy is mono-only"));
+        }
+        let channels = if stereo { 2 } else { 1 };
+        let n_samples = frame.samples.len() / (2 * channels);
         if n_samples < fs {
             return Err(CodecError::InvalidConfig(
                 "not enough samples for one block",
             ));
         }
-        let x: Vec<f64> = frame.samples[..fs * 2]
-            .chunks_exact(2)
-            .map(|s| i16::from_le_bytes([s[0], s[1]]) as f64 / i16::MAX as f64)
-            .collect();
+        let x: Vec<f64> = if stereo {
+            Vec::new()
+        } else {
+            frame.samples[..fs * 2]
+                .chunks_exact(2)
+                .map(|s| i16::from_le_bytes([s[0], s[1]]) as f64 / i16::MAX as f64)
+                .collect()
+        };
         let order = self.enc.lpc_order as usize;
         // Upper bound: ~64 bits of header slack, `order` 16-bit LPC
         // coefficients, and up to 96 bits/sample (a generous bound on the
@@ -275,7 +292,7 @@ impl Encoder for AuraEncoder {
         // `+ 64 * 32` covers the lossy per-band scale-factor table (a 32-bit
         // float per Bark band; ~25 bands max for any audible sample rate).
         // `+ 16` covers the leading wire-version field.
-        let max_bits = 64 + order * COEFF_BITS as usize + fs * 96 + 64 * 32 + 16;
+        let max_bits = 64 + order * COEFF_BITS as usize + fs * 96 * 2 + 64 * 32 + 16;
         let mut buf = vec![0u8; max_bits.div_ceil(8)];
         let written = {
             let mut w = BitWriter::new(&mut buf);
@@ -298,45 +315,42 @@ impl Encoder for AuraEncoder {
                 .map_err(|_| CodecError::Internal)?;
             match self.enc.mode {
                 AuraMode::Lossless => {
-                    // Analyse a Hann-windowed copy: the block edges otherwise
-                    // bias the autocorrelation (about 12% more bytes on music).
-                    // Prediction below still runs on the unwindowed samples.
-                    let mut win = vec![0f32; fs];
-                    windowed(WindowType::Hann, fs, &mut win);
-                    let xw: Vec<f64> = x.iter().zip(&win).map(|(v, w)| v * *w as f64).collect();
-                    let mut r = vec![0f64; order + 1];
-                    autocorrelation(&xw, order, &mut r);
-                    let mut a = vec![0f64; order];
-                    let mut scratch = vec![0f64; order];
-                    levinson_durbin(&r, &mut a, &mut scratch);
-                    let coeffs_q = quantize_coeffs(&a);
-                    let samples_i32: Vec<i32> = (0..fs)
-                        .map(|i| {
-                            i16::from_le_bytes([frame.samples[2 * i], frame.samples[2 * i + 1]])
-                                as i32
+                    let chans: Vec<Vec<i32>> = (0..channels)
+                        .map(|c| {
+                            (0..fs)
+                                .map(|i| {
+                                    let at = 2 * (i * channels + c);
+                                    i16::from_le_bytes([frame.samples[at], frame.samples[at + 1]])
+                                        as i32
+                                })
+                                .collect()
                         })
                         .collect();
-                    for c in &coeffs_q {
-                        w.write(COEFF_BITS, (*c as i64 as u64) & ((1u64 << COEFF_BITS) - 1))
-                            .map_err(|_| CodecError::Internal)?;
-                    }
-                    let mut residuals = Vec::with_capacity(fs);
-                    for i in 0..fs {
-                        let take = order.min(i);
-                        let predicted = if take == 0 {
-                            0
-                        } else {
-                            integer_predict(&samples_i32[..i], &coeffs_q[..take])
+                    w.write(1, stereo as u64).map_err(|_| CodecError::Internal)?;
+                    if stereo {
+                        let (l, r) = (&chans[0], &chans[1]);
+                        let mid: Vec<i32> = l.iter().zip(r).map(|(a, b)| (a + b) >> 1).collect();
+                        let side: Vec<i32> = l.iter().zip(r).map(|(a, b)| a - b).collect();
+                        let (cl, cr) = (analyse_lossless_channel(l, order), analyse_lossless_channel(r, order));
+                        let (cm, cs) = (analyse_lossless_channel(&mid, order), analyse_lossless_channel(&side, order));
+                        let (lb, rb, mb, sb) = (cl.bits(), cr.bits(), cm.bits(), cs.bits());
+                        let mode = [(STEREO_LR, lb + rb), (STEREO_LS, lb + sb), (STEREO_RS, rb + sb), (STEREO_MS, mb + sb)]
+                            .into_iter()
+                            .min_by_key(|&(_, bits)| bits)
+                            .map(|(m, _)| m)
+                            .unwrap_or(STEREO_LR);
+                        w.write(2, mode).map_err(|_| CodecError::Internal)?;
+                        let (first, second) = match mode {
+                            STEREO_LR => (&cl, &cr),
+                            STEREO_LS => (&cl, &cs),
+                            STEREO_RS => (&cr, &cs),
+                            _ => (&cm, &cs),
                         };
-                        let residual = samples_i32[i] as i64 - predicted;
-                        residuals.push(zigzag_encode(residual));
-                    }
-                    for part in residuals.chunks(RICE_PARTITION) {
-                        let k = best_rice_k(part);
-                        w.write(RICE_K_BITS, k as u64).map_err(|_| CodecError::Internal)?;
-                        for &u in part {
-                            write_rice(&mut w, u, k).map_err(|_| CodecError::Internal)?;
-                        }
+                        write_lossless_channel(&mut w, first).map_err(|_| CodecError::Internal)?;
+                        write_lossless_channel(&mut w, second).map_err(|_| CodecError::Internal)?;
+                    } else {
+                        let c = analyse_lossless_channel(&chans[0], order);
+                        write_lossless_channel(&mut w, &c).map_err(|_| CodecError::Internal)?;
                     }
                 }
                 AuraMode::Lossy => {
@@ -518,14 +532,7 @@ fn best_rice_k(residuals: &[u64]) -> u32 {
         .min_by_key(|&k| {
             residuals
                 .iter()
-                .map(|&u| {
-                    let q = u >> k;
-                    if q < RICE_ESCAPE as u64 {
-                        q + 1 + k as u64
-                    } else {
-                        RICE_ESCAPE as u64 + exp_golomb_len(u)
-                    }
-                })
+                .map(|&u| rice_len(u, k))
                 .sum::<u64>()
         })
         .unwrap_or(0)
@@ -570,6 +577,123 @@ fn read_rice(r: &mut BitReader, k: u32) -> CodecResult<u64> {
         0
     };
     Ok((q << k) | low)
+}
+
+/// Bits the Rice code of `u` with parameter `k` takes (see [`write_rice`]).
+fn rice_len(u: u64, k: u32) -> u64 {
+    let q = u >> k;
+    if q < RICE_ESCAPE as u64 {
+        q + 1 + k as u64
+    } else {
+        RICE_ESCAPE as u64 + exp_golomb_len(u)
+    }
+}
+
+/// One lossless channel after analysis: its LPC coefficients (Q14) and the
+/// zigzag-mapped residual of every sample.
+struct LosslessChannel {
+    coeffs: Vec<i32>,
+    residuals: Vec<u64>,
+}
+
+impl LosslessChannel {
+    /// Bits this channel costs on the wire: coefficients, then per partition
+    /// the Rice parameter and the residual codes.
+    fn bits(&self) -> u64 {
+        let side = (self.coeffs.len() * COEFF_BITS as usize) as u64;
+        let body: u64 = self
+            .residuals
+            .chunks(RICE_PARTITION)
+            .map(|part| {
+                let k = best_rice_k(part);
+                RICE_K_BITS as u64 + part.iter().map(|&u| rice_len(u, k)).sum::<u64>()
+            })
+            .sum();
+        side + body
+    }
+}
+
+/// LPC analysis and prediction of one channel's integer samples. Analysis is
+/// on a Hann-windowed copy (block edges otherwise bias the autocorrelation);
+/// prediction runs on the samples themselves with the quantised coefficients,
+/// so the decoder can reproduce them exactly.
+fn analyse_lossless_channel(samples: &[i32], order: usize) -> LosslessChannel {
+    let fs = samples.len();
+    let mut win = vec![0f32; fs];
+    windowed(WindowType::Hann, fs, &mut win);
+    let xw: Vec<f64> = samples
+        .iter()
+        .zip(&win)
+        .map(|(&v, w)| v as f64 * *w as f64)
+        .collect();
+    let mut r = vec![0f64; order + 1];
+    autocorrelation(&xw, order, &mut r);
+    let mut a = vec![0f64; order];
+    let mut scratch = vec![0f64; order];
+    levinson_durbin(&r, &mut a, &mut scratch);
+    let coeffs = quantize_coeffs(&a);
+    let residuals = (0..fs)
+        .map(|i| {
+            let take = order.min(i);
+            let predicted = if take == 0 {
+                0
+            } else {
+                integer_predict(&samples[..i], &coeffs[..take])
+            };
+            zigzag_encode(samples[i] as i64 - predicted)
+        })
+        .collect();
+    LosslessChannel { coeffs, residuals }
+}
+
+/// Write one channel: coefficients, then residuals in Rice partitions.
+fn write_lossless_channel(
+    w: &mut BitWriter,
+    ch: &LosslessChannel,
+) -> Result<(), tpt_media_bitstream::WriteError> {
+    for c in &ch.coeffs {
+        w.write(COEFF_BITS, (*c as i64 as u64) & ((1u64 << COEFF_BITS) - 1))?;
+    }
+    for part in ch.residuals.chunks(RICE_PARTITION) {
+        let k = best_rice_k(part);
+        w.write(RICE_K_BITS, k as u64)?;
+        for &u in part {
+            write_rice(w, u, k)?;
+        }
+    }
+    Ok(())
+}
+
+/// Read one channel of `fs` samples written by [`write_lossless_channel`].
+/// Not clamped to i16: the side channel of a stereo pair needs 17 bits.
+fn read_lossless_channel(r: &mut BitReader, order: usize, fs: usize) -> CodecResult<Vec<i32>> {
+    let mut coeffs = vec![0i32; order];
+    for c in coeffs.iter_mut() {
+        let bits = r.read(COEFF_BITS).map_err(|_| CodecError::MalformedPacket)? as i64;
+        // Sign-extend the field.
+        *c = if bits > COEFF_MAX { bits - (1 << COEFF_BITS) } else { bits } as i32;
+    }
+    let mut samples: Vec<i32> = Vec::with_capacity(fs);
+    let mut k = 0u32;
+    for i in 0..fs {
+        if i % RICE_PARTITION == 0 {
+            k = r.read(RICE_K_BITS).map_err(|_| CodecError::MalformedPacket)? as u32;
+            if k > RICE_K_MAX {
+                return Err(CodecError::MalformedPacket);
+            }
+        }
+        let residual = zigzag_decode(read_rice(r, k)?);
+        let take = order.min(i);
+        let predicted = if take == 0 {
+            0
+        } else {
+            integer_predict(&samples[..i], &coeffs[..take])
+        };
+        // Defensive bound on malformed streams; valid samples fit in 18 bits.
+        let sample = (residual + predicted).clamp(-(1 << 24), 1 << 24);
+        samples.push(sample as i32);
+    }
+    Ok(samples)
 }
 
 /// Aura decoder.
@@ -634,50 +758,59 @@ impl AuraDecoder {
         let lpc_order = r.read(5).map_err(|_| CodecError::MalformedPacket)? as u8;
         let _mdct_size_bits = r.read(8).map_err(|_| CodecError::MalformedPacket)?;
         let fs = self.enc.block_size as usize;
-        self.cfg.limits.check_frame_bytes(fs * 2)?;
+        self.cfg.limits.check_frame_bytes(fs * 4)?;
+        let mut out_stereo = false;
         let samples = match mode {
             AuraMode::Lossless => {
+                let stereo = r.read(1).map_err(|_| CodecError::MalformedPacket)? == 1;
+                let channels = if stereo { 2 } else { 1 };
                 self.cfg.limits.check_allocation(
-                    (fs * core::mem::size_of::<i32>())
+                    (fs * channels * core::mem::size_of::<i32>())
                         .max(lpc_order as usize * core::mem::size_of::<i32>()),
                 )?;
-                let mut coeffs_q = vec![0i32; lpc_order as usize];
-                for c in coeffs_q.iter_mut() {
-                    let bits = r.read(COEFF_BITS).map_err(|_| CodecError::MalformedPacket)? as i64;
-                    // Sign-extend the field.
-                    let signed = if bits > COEFF_MAX { bits - (1 << COEFF_BITS) } else { bits };
-                    *c = signed as i32;
-                }
-                // Reconstructed sample-by-sample: each `samples_i32[i]`
-                // depends only on already-reconstructed history, which by
-                // induction exactly equals the encoder's original samples
-                // (see `integer_predict`'s doc) — this is what makes
-                // lossless mode bit-exact.
-                let mut samples_i32 = vec![0i32; fs];
-                let mut k = 0u32;
-                for i in 0..fs {
-                    if i % RICE_PARTITION == 0 {
-                        k = r.read(RICE_K_BITS).map_err(|_| CodecError::MalformedPacket)? as u32;
-                        if k > RICE_K_MAX {
-                            return Err(CodecError::MalformedPacket);
+                // Each coded channel is reconstructed exactly from its own
+                // history (see `integer_predict`'s doc); the stereo mode then
+                // maps the two coded channels back to L and R.
+                let chans: Vec<Vec<i32>> = if stereo {
+                    let mode = r.read(2).map_err(|_| CodecError::MalformedPacket)?;
+                    let a = read_lossless_channel(&mut r, lpc_order as usize, fs)?;
+                    let b = read_lossless_channel(&mut r, lpc_order as usize, fs)?;
+                    let (l, rr): (Vec<i32>, Vec<i32>) = match mode {
+                        STEREO_LR => (a, b),
+                        STEREO_LS => {
+                            let rr = a.iter().zip(&b).map(|(l, s)| l - s).collect();
+                            (a, rr)
                         }
-                    }
-                    let s = read_rice(&mut r, k)?;
-                    let residual = zigzag_decode(s);
-                    let take = (lpc_order as usize).min(i);
-                    let predicted = if take == 0 {
-                        0
-                    } else {
-                        integer_predict(&samples_i32[..i], &coeffs_q[..take])
+                        STEREO_RS => {
+                            let l = b.iter().zip(&a).map(|(s, r)| s + r).collect();
+                            (l, a)
+                        }
+                        _ => {
+                            // Mid/side: mid = (L + R) >> 1, side = L - R. The
+                            // low bit of L + R is the side's low bit, which
+                            // restores it exactly.
+                            let mid: Vec<i32> = a
+                                .iter()
+                                .zip(&b)
+                                .map(|(m, s)| (m << 1) | (s & 1))
+                                .collect();
+                            let l = mid.iter().zip(&b).map(|(m, s)| (m + s) >> 1).collect();
+                            let rr = mid.iter().zip(&b).map(|(m, s)| (m - s) >> 1).collect();
+                            (l, rr)
+                        }
                     };
-                    let sample = residual + predicted;
-                    // Defensive clamp against malformed streams; a stream
-                    // produced by our own encoder always fits exactly.
-                    samples_i32[i] = sample.clamp(i16::MIN as i64, i16::MAX as i64) as i32;
-                }
-                let mut bytes = vec![0u8; fs * 2];
-                for (i, v) in samples_i32.iter().enumerate() {
-                    bytes[2 * i..2 * i + 2].copy_from_slice(&(*v as i16).to_le_bytes());
+                    out_stereo = stereo;
+                    vec![l, rr]
+                } else {
+                    vec![read_lossless_channel(&mut r, lpc_order as usize, fs)?]
+                };
+                let mut bytes = vec![0u8; fs * channels * 2];
+                for i in 0..fs {
+                    for (c, ch) in chans.iter().enumerate() {
+                        let v = ch[i].clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                        let at = 2 * (i * channels + c);
+                        bytes[at..at + 2].copy_from_slice(&v.to_le_bytes());
+                    }
                 }
                 bytes
             }
@@ -723,7 +856,11 @@ impl AuraDecoder {
             samples,
             sample_count: fs as u32,
             format: SampleFormat::S16,
-            channel_layout: ChannelLayout::Mono,
+            channel_layout: if out_stereo {
+                ChannelLayout::Stereo
+            } else {
+                ChannelLayout::Mono
+            },
             sample_rate: self.enc.sample_rate,
         }])
     }

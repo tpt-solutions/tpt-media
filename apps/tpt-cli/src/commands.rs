@@ -739,7 +739,9 @@ struct EncodeJob {
     rate: u32,
     bits_per_coef: u8,
     band_step: Option<f32>,
-    /// S16 LE mono samples; the final partial block is zero-padded by
+    /// Interleaved channels in `samples`: 1, or 2 for Aura.
+    channels: usize,
+    /// S16 LE interleaved samples; the final partial block is zero-padded by
     /// [`run_encode_job`].
     samples: Vec<u8>,
     /// The original (pre-padding) sample count recorded in track metadata
@@ -750,10 +752,29 @@ struct EncodeJob {
     extra_meta: Vec<(String, MetadataValue)>,
 }
 
-/// Aura's lossless block: one LPC analysis and one packet per 4096 samples.
-/// Measured on the benchmark corpus, 4096 beats 1024 by about 7% on music
-/// (LPC side info is amortised, and the 16-tap predictor adapts less often).
-const AURA_SAMPLES_PER_BLOCK: usize = 4096;
+/// Aura's lossless block: one LPC analysis and one packet per 8192 samples
+/// (about 170 ms at 48 kHz). Measured on the benchmark corpus, 8192 is no
+/// worse than 4096 on any clip, and beats 1024 by about 7% on music: the LPC
+/// side information is amortised over more samples.
+const AURA_SAMPLES_PER_BLOCK: usize = 8192;
+
+/// The frame layout for `channels` interleaved S16 channels.
+fn layout_for(channels: usize) -> ChannelLayout {
+    if channels == 2 {
+        ChannelLayout::Stereo
+    } else {
+        ChannelLayout::Mono
+    }
+}
+
+/// Whether `codec` accepts a WAV with `channels` channels: Aura takes mono or
+/// stereo, the other audio codecs mono only.
+fn audio_channels_ok(codec: AudioCodec, channels: u8) -> bool {
+    match codec {
+        AudioCodec::Aura => channels == 1 || channels == 2,
+        _ => channels == 1,
+    }
+}
 
 /// Samples per encode block per codec — Cinder's 512 = two 256-sample hops,
 /// Aura's 4096, Reed's 20 ms frame (160/320 samples at 8/16 kHz, hence the
@@ -797,7 +818,7 @@ fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
     };
     track.media = TrackMedia {
         sample_rate: Some(job.rate),
-        channel_layout: Some(ChannelLayout::Mono),
+        channel_layout: Some(layout_for(job.channels)),
         ..TrackMedia::default()
     };
     track.metadata = job.extra_meta.clone();
@@ -813,14 +834,15 @@ fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
     }
     muxer.register_track(&track);
 
-    let total = job.samples.len() / 2;
+    let total = job.samples.len() / (2 * job.channels);
     let mut written = 0usize;
     let mut block_index = 0usize;
     while block_index * samples_per_block < total {
         let start = block_index * samples_per_block;
         let end = (start + samples_per_block).min(total);
-        let mut block = vec![0u8; samples_per_block * 2];
-        block[..(end - start) * 2].copy_from_slice(&job.samples[start * 2..end * 2]);
+        let mut block = vec![0u8; samples_per_block * 2 * job.channels];
+        let (bs, be) = (start * 2 * job.channels, end * 2 * job.channels);
+        block[..be - bs].copy_from_slice(&job.samples[bs..be]);
         let chunk = tpt_media_core::AudioFrame {
             frame: tpt_media_core::Frame {
                 pts: Timestamp {
@@ -833,7 +855,7 @@ fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
             samples: block,
             sample_count: samples_per_block as u32,
             format: SampleFormat::S16,
-            channel_layout: ChannelLayout::Mono,
+            channel_layout: layout_for(job.channels),
             sample_rate: job.rate,
         };
         let packets = encoder
@@ -1183,14 +1205,14 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Err(e) => return Outcome::fail(1, format!("input is not a readable wav: {e}")),
     };
     if frame.format != SampleFormat::S16
-        || frame.channel_layout.channels() != 1
+        || !audio_channels_ok(codec, frame.channel_layout.channels())
         || !supported_input_rates(codec).contains(&frame.sample_rate)
     {
         return Outcome::fail(
             1,
             format!(
-                "encode requires 16-bit mono wav at {} Hz for this codec \
-                 (got {:?}, {} ch, {} Hz)",
+                "encode requires 16-bit mono (or, for Aura, stereo) wav at {} Hz \
+                 for this codec (got {:?}, {} ch, {} Hz)",
                 supported_input_rates(codec)
                     .iter()
                     .map(|r| r.to_string())
@@ -1207,6 +1229,7 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         rate: frame.sample_rate,
         bits_per_coef: quality_param(codec, spec.quality),
         band_step: spec.band_step,
+        channels: frame.channel_layout.channels() as usize,
         samples: frame.samples,
         sample_count: frame.sample_count as usize,
         extra_meta: spec
@@ -1332,7 +1355,8 @@ fn trim_padding(frames: &mut Vec<tpt_media_core::AudioFrame>, track: &tpt_media_
             excess -= last_count;
         } else {
             last.sample_count = (last_count - excess) as u32;
-            last.samples.truncate(last.sample_count as usize * 2);
+            let width = 2 * last.channel_layout.channels() as usize;
+            last.samples.truncate(last.sample_count as usize * width);
             excess = 0;
         }
     }
@@ -1612,8 +1636,16 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                 .flat_map(|f| f.samples.iter().copied())
                 .collect();
             let sample_count: usize = frames.iter().map(|f| f.sample_count as usize).sum();
+            let channels = frames.first().map_or(1, |f| f.channel_layout.channels());
+            if !audio_channels_ok(target, channels) {
+                return Outcome::fail(
+                    1,
+                    format!("transcode to {} cannot take a {channels}-channel source", target.name()),
+                );
+            }
             let job = EncodeJob {
                 codec: target,
+                channels: channels as usize,
                 rate,
                 bits_per_coef: quality_param(target, spec.quality),
                 band_step: spec.band_step,
@@ -2025,14 +2057,14 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Err(e) => return Outcome::fail(1, format!("input is not a readable wav: {e}")),
     };
     if frame.format != SampleFormat::S16
-        || frame.channel_layout.channels() != 1
+        || !audio_channels_ok(codec, frame.channel_layout.channels())
         || !supported_input_rates(codec).contains(&frame.sample_rate)
     {
         return Outcome::fail(
             1,
             format!(
-                "benchmark requires 16-bit mono wav at {} Hz for this codec \
-                 (got {:?}, {} ch, {} Hz)",
+                "benchmark requires 16-bit mono (or, for Aura, stereo) wav at {} Hz \
+                 for this codec (got {:?}, {} ch, {} Hz)",
                 supported_input_rates(codec)
                     .iter()
                     .map(|r| r.to_string())
@@ -2075,12 +2107,14 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     // does, so the packet stream benchmarked here is the one `tpt encode`
     // would produce.
     let track_timebase = Timebase::new(1, rate);
+    let channels = frame.channel_layout.channels() as usize;
     let mut blocks = Vec::new();
     let mut start = 0usize;
     while start < total {
         let end = (start + block).min(total);
-        let mut samples = vec![0u8; block * 2];
-        samples[..(end - start) * 2].copy_from_slice(&frame.samples[start * 2..end * 2]);
+        let mut samples = vec![0u8; block * 2 * channels];
+        let (bs, be) = (start * 2 * channels, end * 2 * channels);
+        samples[..be - bs].copy_from_slice(&frame.samples[bs..be]);
         blocks.push(tpt_media_core::AudioFrame {
             frame: tpt_media_core::Frame {
                 pts: Timestamp {
@@ -2093,7 +2127,7 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
             samples,
             sample_count: block as u32,
             format: SampleFormat::S16,
-            channel_layout: ChannelLayout::Mono,
+            channel_layout: layout_for(channels),
             sample_rate: rate,
         });
         start += block;
@@ -2137,11 +2171,12 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     let payload_bytes: u64 = packets.iter().map(|p| p.data.len() as u64).sum();
 
     // Quality of the round trip against the original samples.
-    let mut decoded_samples: Vec<u8> = Vec::with_capacity(total * 2);
+    let width = 2 * frame.channel_layout.channels() as usize;
+    let mut decoded_samples: Vec<u8> = Vec::with_capacity(total * width);
     for f in &frames {
         decoded_samples.extend_from_slice(&f.samples);
     }
-    decoded_samples.truncate(total * 2);
+    decoded_samples.truncate(total * width);
     let reference = crate::signals::from_s16_le_bytes(&frame.samples);
     let candidate = crate::signals::from_s16_le_bytes(&decoded_samples);
     let snr = crate::quality::snr_db(&reference, &candidate);

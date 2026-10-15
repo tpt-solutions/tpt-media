@@ -240,6 +240,7 @@ cancellation token are separate open items; this change touches neither.
 | `mode` | 1 bit | `1` = lossless (LPC), `0` = lossy (MDCT) |
 | `lpc_order` | 5 bits | LPC order, 1–32 (used by both modes) |
 | `mdct_size` | 8 bits | `size/256 − 1` (so 2048 → 7, 4096 → 15) |
+| **lossless:** stereo | 1 bit (+2 bits mode if set) | `1` = stereo; the mode is L/R, L/S, R/S or M/S, as FLAC names them. Each coded channel then carries its own coefficients and residuals |
 | **lossless:** coefficients | 20 bits × order | Q14 fixed-point LPC coefficients, range ±32 (Q15's ±1 clamp cost about 60% on music) |
 | **lossless:** Rice parameter | 5 bits per 256 samples | `k` for the partition that follows |
 | **lossless:** residuals | adaptive Rice each | zigzag-mapped prediction residual per sample, Exp-Golomb escape for huge residuals — exact integer arithmetic over the *quantized* coefficients is what makes the round trip bit-exact |

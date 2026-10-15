@@ -122,7 +122,9 @@ cargo test -p tpt-audio-aura
 
 ## Known limitations
 
-- **Mono only.** There is no stereo model; no consumer needs one yet.
+- **Lossless is mono or stereo; lossy is mono only.** A stereo lossless packet picks
+  L/R, L/S, R/S or M/S per block (FLAC's four modes), by exact cost. The lossy MDCT
+  path has no stereo model yet.
 - The lossy path uses `f64` and large windows — it is an archival encoder, not
   a real-time one, and `Capabilities::real_time_encoder` says so.
 - Packets are independent: each block carries its own LPC coefficients and
