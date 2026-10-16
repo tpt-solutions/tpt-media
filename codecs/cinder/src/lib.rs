@@ -12,7 +12,9 @@
 //! - Entropy: the levels are range-coded under one of 16 geometric models,
 //!   chosen per packet by a 4-bit loudness class (wire version 5). The header
 //!   fields are raw bits inside the same range-coded body.
-//! - PLC: phase-randomised sign perturbation of previous frame's MDCT.
+//! - PLC: repeats the last pitch period over the gap (`spec.txt` 5.1), fading over
+//!   consecutive losses; with no usable period it falls back to the last spectrum with
+//!   pseudo-random sign flips.
 //!
 //! ## Framing and latency
 //!
@@ -68,6 +70,19 @@ use tpt_media_core::{
 pub const FRAME_128: u16 = 128;
 /// Supported frame size.
 pub const FRAME_256: u16 = 256;
+
+/// Decoded samples kept for pitch-period concealment (about 43 ms at 48 kHz).
+const PLC_HISTORY: usize = 2048;
+/// Shortest and longest pitch period searched, in samples (1.2 kHz down to 75 Hz at 48 kHz).
+const PITCH_MIN: usize = 40;
+const PITCH_MAX: usize = 640;
+/// Samples the periodicity is measured over.
+const PITCH_WINDOW: usize = 512;
+/// Normalised correlation below this (0.5 squared) means no usable period.
+const PITCH_MIN_CORRELATION_SQ: f32 = 0.25;
+/// Gain kept per consecutively concealed frame, so a long gap fades out
+/// instead of droning.
+const PLC_FADE: f32 = 0.9;
 
 /// Codec id for Cinder.
 pub const CODEC_ID: [u8; 4] = *b"CIND";
@@ -625,6 +640,10 @@ pub struct CinderDecoder {
     enc: CinderEncoderConfig,
     last_spectrum: Vec<f32>,
     plc_phase: u32,
+    /// Recent decoded output: the source for pitch-period concealment.
+    history: Vec<f32>,
+    /// Frames concealed in a row since the last decoded packet (drives the fade).
+    lost_run: u32,
     mdct_plan_128: FastMdctPlan,
     mdct_plan_256: FastMdctPlan,
     /// Second half of the previous windowed inverse block, overlap-added
@@ -657,6 +676,8 @@ impl CinderDecoder {
             enc,
             last_spectrum: Vec::new(),
             plc_phase: 0,
+            history: Vec::with_capacity(PLC_HISTORY + FRAME_256 as usize),
+            lost_run: 0,
             mdct_plan_128: FastMdctPlan::new(FRAME_128 as usize),
             mdct_plan_256: FastMdctPlan::new(FRAME_256 as usize),
             primed: false,
@@ -697,14 +718,109 @@ impl CinderDecoder {
         block
     }
 
-    /// Packet-loss concealment for the packet timestamped `pts`: synthesise
-    /// the block that packet would have carried, from the last decoded
-    /// spectrum, and overlap-add it so the stream continues without a
-    /// seam. The returned frame carries `pts`, as a received packet's frame
-    /// would.
+    /// Record decoded output for pitch-period concealment, keeping the newest
+    /// [`PLC_HISTORY`] samples. Stays within the capacity reserved in `new`.
+    fn push_history(&mut self, block: &[f32]) {
+        self.history.extend_from_slice(block);
+        if self.history.len() > PLC_HISTORY {
+            let excess = self.history.len() - PLC_HISTORY;
+            self.history.drain(..excess);
+        }
+    }
+
+    /// The pitch period of the recent output, by normalised autocorrelation
+    /// over the last [`PITCH_WINDOW`] samples, or `None` when the history is
+    /// too short, silent, or not periodic enough to repeat. Compares squared
+    /// correlation so no square root is needed (the crate is `no_std`).
+    fn pitch_period(&self) -> Option<usize> {
+        let h = &self.history;
+        if h.len() < PITCH_MAX + PITCH_WINDOW {
+            return None;
+        }
+        let end = h.len();
+        let recent = &h[end - PITCH_WINDOW..];
+        let energy: f32 = recent.iter().map(|v| v * v).sum();
+        if energy < 1e-6 {
+            return None;
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for lag in PITCH_MIN..=PITCH_MAX {
+            let earlier = &h[end - PITCH_WINDOW - lag..end - lag];
+            let num: f32 = recent.iter().zip(earlier).map(|(a, b)| a * b).sum();
+            if num <= 0.0 {
+                continue;
+            }
+            let earlier_energy: f32 = earlier.iter().map(|v| v * v).sum();
+            if earlier_energy < 1e-6 {
+                continue;
+            }
+            let corr_sq = num * num / (energy * earlier_energy);
+            if corr_sq > best.map_or(PITCH_MIN_CORRELATION_SQ, |(_, c)| c) {
+                best = Some((lag, corr_sq));
+            }
+        }
+        best.map(|(lag, _)| lag)
+    }
+
+    /// Packet-loss concealment for the packet timestamped `pts`.
+    ///
+    /// When the recent output is periodic, the decoder finds its pitch period
+    /// and repeats the last period across the gap (`spec.txt` section 5.1),
+    /// fading over consecutive losses. The repeated signal is run through the
+    /// forward MDCT and the normal synthesis, so the overlap tail the next
+    /// real packet adds to stays consistent. With no usable period (stream
+    /// start, silence, noise) it falls back to the last decoded spectrum with
+    /// pseudo-random sign flips. Either way the returned frame carries `pts`,
+    /// as a received packet's frame would.
     pub fn conceal(&mut self, pts: Timestamp) -> CodecResult<AudioFrame> {
-        let fs = self.enc.frame_size;
-        let n = fs as usize;
+        let n = self.enc.frame_size as usize;
+        let block = match self.pitch_period() {
+            Some(period) => self.conceal_by_pitch(n, period),
+            None => self.conceal_by_spectrum(n),
+        };
+        self.lost_run = self.lost_run.saturating_add(1);
+        self.primed = true;
+        self.push_history(&block);
+        let rate = self.enc.sample_rate;
+        Ok(audio_frame(&block, pts, rate))
+    }
+
+    /// Repeat the last pitch period over the lost frame's `2N` samples, then
+    /// re-enter the MDCT chain through that signal's own spectrum.
+    fn conceal_by_pitch(&mut self, n: usize, period: usize) -> Vec<f32> {
+        let hist_len = self.history.len();
+        let mut gain_start = 1.0f32;
+        for _ in 0..self.lost_run {
+            gain_start *= PLC_FADE;
+        }
+        let gain_end = gain_start * PLC_FADE;
+        let mut ext = vec![0f32; 2 * n];
+        for i in 0..2 * n {
+            let src = hist_len + i - period;
+            let v = if src < hist_len { self.history[src] } else { ext[src - hist_len] };
+            let t = i as f32 / (2 * n) as f32;
+            ext[i] = v * (gain_start + (gain_end - gain_start) * t);
+        }
+        // Forward path exactly as the encoder's: sine window, then MDCT.
+        let w = sine_window(2 * n);
+        let windowed: Vec<f32> = ext.iter().zip(w.iter()).map(|(a, b)| a * b).collect();
+        let mut spec = vec![0f32; n];
+        self.mdct_plan_for(n).forward(&windowed, &mut spec);
+        self.last_spectrum = spec.clone();
+        // The block is the extension itself; the synthesised second half
+        // becomes the tail that alias-cancels against the next real packet.
+        let y = self.synthesize(&spec);
+        if self.tail.len() != n {
+            self.tail = vec![0.0; n];
+        }
+        self.tail.copy_from_slice(&y[n..]);
+        ext.truncate(n);
+        ext
+    }
+
+    /// The pre-pitch method: the last decoded spectrum with pseudo-random sign
+    /// flips, overlap-added so the stream continues without a seam.
+    fn conceal_by_spectrum(&mut self, n: usize) -> Vec<f32> {
         let mut spec = self.last_spectrum.clone();
         if spec.is_empty() {
             spec = alloc::vec![0.0; n];
@@ -717,10 +833,7 @@ impl CinderDecoder {
         }
         self.plc_phase = self.plc_phase.wrapping_add(1);
         let y = self.synthesize(&spec);
-        let block = self.overlap_add(&y);
-        self.primed = true;
-        let rate = self.enc.sample_rate;
-        Ok(audio_frame(&block, pts, rate))
+        self.overlap_add(&y)
     }
 }
 
@@ -739,6 +852,8 @@ impl Decoder for CinderDecoder {
     /// stream. Nothing is held back, so there is nothing to drain.
     fn flush(&mut self) -> CodecResult<Vec<AudioFrame>> {
         self.tail.iter_mut().for_each(|s| *s = 0.0);
+        self.history.clear();
+        self.lost_run = 0;
         self.primed = false;
         Ok(Vec::new())
     }
@@ -820,6 +935,8 @@ impl CinderDecoder {
             self.primed = true;
             return Ok(Vec::new());
         }
+        self.lost_run = 0;
+        self.push_history(&block);
         // The packet's timestamp is the start of the block it completes
         // (see `CinderEncoder::encode_block`), so the output frame takes it
         // directly and its stamp depends only on this packet.
@@ -1198,6 +1315,66 @@ mod tests {
         // The stream's first block is the first `N` reference samples.
         let snr = snr_against(&reference, &frames);
         assert!(snr > 10.0, "overlap-add SNR {snr:.2} dB must clear 10 dB");
+    }
+
+    #[test]
+    fn pitch_concealment_reproduces_a_periodic_signal() {
+        // `spec.txt` 5.1: a lost packet is concealed by repeating the last
+        // pitch period. On a steady tone the concealed block must land close
+        // to what the lost packet itself decodes to; the older
+        // sign-flipped-spectrum method scored far below this threshold.
+        let cfg = CodecConfig::default();
+        let fs = 256usize;
+        let enc_cfg = CinderEncoderConfig {
+            frame_size: fs as u16,
+            n_bands: 16,
+            band_steps: alloc::vec![0.25; 16],
+            bits_per_coef: 10,
+            ..Default::default()
+        };
+        let mut encoder = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut packets = alloc::vec![];
+        for k in 0..30usize {
+            let mut f = AudioFrame::alloc(2 * fs as u32, SampleFormat::S16, ChannelLayout::Mono, 48_000);
+            for (i, s) in f.samples.chunks_mut(2).enumerate() {
+                // A voiced-speech stand-in: the first eight harmonics of 140 Hz.
+                let t = (k * 2 * fs + i) as f32 / 48_000.0;
+                let phase = 2.0 * core::f32::consts::PI * 140.0 * t;
+                let sum: f32 = (1..=8).map(|h| (phase * h as f32).sin() / h as f32).sum();
+                let v = (0.25 * sum * i16::MAX as f32) as i16;
+                s.copy_from_slice(&v.to_le_bytes());
+            }
+            f.frame.pts = Timestamp {
+                ticks: (k * 2 * fs) as i64,
+                timebase: timebase_48k(),
+            };
+            packets.extend(encoder.encode(&f).unwrap());
+        }
+        let lost = 40usize;
+        let mut reference = CinderDecoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut lossy = CinderDecoder::new(cfg, enc_cfg).unwrap();
+        let mut wanted = None;
+        let mut got = None;
+        for (idx, pkt) in packets.iter().enumerate() {
+            let full = reference.decode(pkt).unwrap();
+            if idx == lost {
+                wanted = Some(full[0].clone());
+                got = Some(lossy.conceal(pkt.pts).unwrap());
+            } else {
+                lossy.decode(pkt).unwrap();
+            }
+        }
+        let pcm = |f: &AudioFrame| -> Vec<f64> {
+            f.samples
+                .chunks_exact(2)
+                .map(|c| f64::from(i16::from_le_bytes([c[0], c[1]])))
+                .collect()
+        };
+        let (want, have) = (pcm(&wanted.unwrap()), pcm(&got.unwrap()));
+        let signal: f64 = want.iter().map(|x| x * x).sum();
+        let noise: f64 = want.iter().zip(&have).map(|(a, b)| (a - b).powi(2)).sum();
+        let snr = 10.0 * (signal / noise.max(1e-9)).log10();
+        assert!(snr > 20.0, "concealed block is only {snr:.1} dB from the lost one");
     }
 
     #[test]

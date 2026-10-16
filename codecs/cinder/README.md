@@ -34,7 +34,11 @@ conversation rather than for archival quality. Part of the
 - **Quantisation** — uniform scalar, per-band step size.
 - **Entropy** — fixed-width bit fields for the uniform quantiser index. No
   adaptive coder: at these block sizes the coder was not the bottleneck.
-- **PLC** — phase-randomised sign perturbation of the previous frame's MDCT.
+- **PLC** — finds the pitch period of the recent output and repeats it across the gap,
+  fading over consecutive losses (`spec.txt` 5.1). With no usable period (stream start,
+  silence, noise) it falls back to the last spectrum with pseudo-random sign flips. On the
+  speech benchmark clip at 10% random loss, concealed output scores 16.0 dB against the
+  lossless decode, up from 6.8 dB with sign flips alone (`tests/diag_plc.rs`).
 - **Optional perceptual weighting** (`CinderEncoderConfig::perceptual_weighting`,
   off by default) — scales each band's step by that band's absolute threshold
   of hearing relative to 1 kHz, computed **once at construction**. It only
