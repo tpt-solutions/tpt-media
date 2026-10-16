@@ -1100,7 +1100,12 @@ All decoders must support bounded resources.
       would be a new contract (which clock, which thread, what
       happens to partial state on abort), and that is a decision to
       take against a real consumer, not in the abstract
-* [ ] cancellation support — `CodecError::Cancelled` exists but no codec produces/checks a cancellation token yet
+* [x] cancellation support — 2026-10-15: `tpt-media-codec::CancelToken`
+      plus `CancellableDecoder`/`CancellableEncoder` and the `Dyn` variants
+      check the token before every call and return `CodecError::Cancelled`.
+      The check is at call granularity, deliberately: codecs are not
+      edited, and a call in progress is not interrupted (§19's bounded
+      work, no wall-clock deadline). The web player does not wire it up
 * [x] malformed-input termination guarantees
 
 ---
@@ -2081,11 +2086,20 @@ Create reference corpora.
 * [ ] speech — partial, 2026-10-15: two real clips from the Open Speech
       Repository (20 s each) are scored with narrowband PESQ by
       `benchmarks/run.py speech` (Cinder v5 against Opus; see
-      `docs/benchmarks.md`). Still unchecked: two clips are not a corpus, and
-      the §37 quality tests do not yet read them. Not approximated
-      synthetically (consistent with §7's honest pitch-corpus stance)
-* [ ] music — same: no real recordings; `signals::mixed` is labelled as
-      a synthetic stand-in, not a substitute
+      `docs/benchmarks.md`), and the §37 tests now round-trip them too
+      (`cinder_real_recordings_meet_quality_floors`, Cinder at 10 bits:
+      19.70 and 19.55 dB; `aura_real_recordings_are_bit_exact`). Those tests
+      are `#[ignore]`d because the corpus is git-ignored; run them with
+      `cargo test -p tpt-cli --test quality -- --ignored` after `python
+      benchmarks/run.py fetch`. Still unchecked: two clips are not a corpus.
+      Not approximated synthetically (consistent with §7's honest
+      pitch-corpus stance)
+* [ ] music — partial, 2026-10-15: real excerpts exist (Elephants Dream's
+      music and the Sintel trailer's audio, 30 s mono each, in
+      `benchmarks/corpus/audio/`) and the §37 tests now round-trip them
+      (Cinder at 10 bits: 10.47 and 23.72 dB). Still unchecked: two excerpts
+      are not a corpus, and `signals::mixed` remains a labelled synthetic
+      stand-in, not a substitute
 * [x] transient-heavy material — 2026-09-14: synthetic click trains
       (`signals::click_train`, sparse imcinders with exponential
       ring-down) driven through both codecs in the §37 corpus tests;
@@ -2370,7 +2384,12 @@ work — this section was silently re-asking for it; reconciled
       target-unknown compiler, and criterion's `alloca` keeps
       `--all-targets` off). Still open: *executing* the test suite on
       AArch64 (QEMU or a runner) and cross-`target-feature` builds,
-      which is what the SIMD-equivalence story really wants
+      which is what the SIMD-equivalence story really wants.
+      _Update 2026-10-15: CI now has an `aarch64-test` job on the native
+      `ubuntu-24.04-arm` runner that runs `cargo test --workspace --exclude
+      tpt-media-sys --locked`, so the suite executes on AArch64. It has not
+      run yet (no runner in the authoring environment), so it is unverified
+      until its first CI run. Cross-`target-feature` builds remain open._
 
 ---
 

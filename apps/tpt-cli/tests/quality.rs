@@ -430,3 +430,122 @@ fn benchmark_rejects_non_wav_input() {
     assert_eq!(o.code, 2);
     assert!(o.err.contains("requires --codec"));
 }
+
+// --- Real recordings (benchmarks/corpus) ---------------------------------
+//
+// These clips are git-ignored and fetched by `python benchmarks/run.py
+// fetch`. The tests are `#[ignore]`d rather than skipped, so a missing
+// corpus fails loudly when they are run instead of passing without
+// checking anything. Run them with `cargo test -- --ignored`.
+
+/// A real recording from the benchmark corpus.
+struct Recording {
+    /// Stable name used in assertion messages and floor lookups.
+    name: &'static str,
+    /// Path relative to `benchmarks/corpus/`.
+    path: &'static str,
+}
+
+/// Open Speech Repository clips: 20 s, 48 kHz mono S16.
+const SPEECH: [Recording; 2] = [
+    Recording {
+        name: "speech_0010",
+        path: "speech48/OSR_us_000_0010_8k_48k.wav",
+    },
+    Recording {
+        name: "speech_0011",
+        path: "speech48/OSR_us_000_0011_8k_48k.wav",
+    },
+];
+
+/// Music recordings: 30 s, 48 kHz mono S16 excerpts (Elephants Dream's
+/// music, downmixed, and the Sintel trailer's audio).
+const MUSIC: [Recording; 2] = [
+    Recording {
+        name: "music_elephants_dream",
+        path: "audio/ed_music_30s.wav",
+    },
+    Recording {
+        name: "music_sintel_trailer",
+        path: "audio/sintel_trailer_30s.wav",
+    },
+];
+
+fn load_recording(rec: &Recording) -> Vec<u8> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../benchmarks/corpus")
+        .join(rec.path);
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+        panic!(
+            "{}: {e}. Run `python benchmarks/run.py fetch` first.",
+            path.display()
+        )
+    });
+    let frame = tpt_media_io::decode_wav(&bytes).expect("recording is a valid WAV");
+    assert_eq!(frame.sample_rate, RATE, "{}: expected 48 kHz", rec.name);
+    assert_eq!(
+        frame.channel_layout,
+        ChannelLayout::Mono,
+        "{}: expected mono",
+        rec.name
+    );
+    frame.samples
+}
+
+/// Per-recording Cinder round-trip SNR floors (dB) at 10 bits/coefficient.
+/// Pinned about 1 dB under the measured values, like `cinder_floor`; a drop
+/// below means a regression on real material, not on the synthetic corpus.
+fn recording_cinder_floor(name: &str) -> f64 {
+    match name {
+        "speech_0010" => 18.5,          // measured 19.70
+        "speech_0011" => 18.5,          // measured 19.55
+        "music_elephants_dream" => 9.5, // measured 10.47
+        "music_sintel_trailer" => 22.5, // measured 23.72
+        other => panic!("no floor pinned for {other}"),
+    }
+}
+
+#[test]
+#[ignore = "needs benchmarks/corpus (python benchmarks/run.py fetch)"]
+fn cinder_real_recordings_meet_quality_floors() {
+    for rec in SPEECH.iter().chain(MUSIC.iter()) {
+        let original = load_recording(rec);
+        let decoded = cinder_round_trip(&original, 10);
+        assert_eq!(
+            decoded.len(),
+            original.len(),
+            "{}: length must survive",
+            rec.name
+        );
+        let reference = s16_bytes_to_f32(&original);
+        let back = s16_bytes_to_f32(&decoded);
+        let snr = snr_db(&reference, &back)
+            .unwrap_or_else(|| panic!("{}: SNR should be defined", rec.name));
+        let floor = recording_cinder_floor(rec.name);
+        assert!(
+            snr >= floor,
+            "{}: SNR {snr:.1} dB fell below floor {floor:.1} dB",
+            rec.name
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs benchmarks/corpus (python benchmarks/run.py fetch)"]
+fn aura_real_recordings_are_bit_exact() {
+    for rec in SPEECH.iter().chain(MUSIC.iter()) {
+        let original = load_recording(rec);
+        let decoded = aura_round_trip(&original);
+        assert_eq!(
+            decoded.len(),
+            original.len(),
+            "{}: length must survive",
+            rec.name
+        );
+        assert_eq!(
+            decoded, original,
+            "{}: lossless aura must be bit-exact",
+            rec.name
+        );
+    }
+}

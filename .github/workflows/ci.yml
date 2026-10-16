@@ -143,3 +143,17 @@ jobs:
       # item.
       - name: cargo check (aarch64)
         run: cargo check --workspace --exclude tpt-media-sys --locked --target aarch64-unknown-linux-gnu
+
+  aarch64-test:
+    name: AArch64 test execution
+    # Native arm64 runner, so the test suite runs on AArch64 rather than
+    # only being type-checked there (todo.md §40). tpt-media-sys is
+    # excluded for the same C-compiler reason as the cross-check above.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: cargo test (aarch64, native)
+        run: cargo test --workspace --exclude tpt-media-sys --locked

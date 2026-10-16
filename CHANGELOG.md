@@ -7,6 +7,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+Added
+
+- **Cooperative cancellation for codecs (2026-10-15).** `tpt-media-codec`
+  gains a `CancelToken` (a shared one-way flag) and four adapters:
+  `CancellableDecoder`/`CancellableEncoder` for the generic traits and
+  `CancellableDynDecoder`/`CancellableDynEncoder` for registry-built
+  codecs. Each checks the token before every `decode`/`encode`/`flush`/
+  `drain` and returns `CodecError::Cancelled` once it is set, without
+  calling into the codec. Granularity is one call: a call already in
+  progress is not interrupted, and no wall-clock deadline is added (§19).
+- **§37 quality tests on real recordings (2026-10-15).** Cinder (10
+  bits/coefficient) and Aura round-trip the two Open Speech clips and the
+  two 30 s music excerpts in `benchmarks/corpus`. Cinder SNR floors are
+  pinned about 1 dB under the measured values (speech 19.70 and 19.55 dB,
+  Elephants Dream 10.47 dB, Sintel 23.72 dB); Aura must be bit-exact. The
+  tests are `#[ignore]`d because the corpus is git-ignored: run them with
+  `cargo test -p tpt-cli --test quality -- --ignored` after
+  `python benchmarks/run.py fetch`.
+- **CI: AArch64 test execution (2026-10-15).** A new `aarch64-test` job runs
+  the workspace suite on the native `ubuntu-24.04-arm` runner, excluding
+  `tpt-media-sys`. It has not run yet.
+
 Changed
 
 - **Cinder v5: range-coded levels under a per-packet loudness class (wire

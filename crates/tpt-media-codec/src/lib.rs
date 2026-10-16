@@ -17,6 +17,12 @@ use alloc::vec::Vec;
 use core::fmt;
 use tpt_media_core::Packet;
 
+mod cancel;
+pub use cancel::{
+    CancelToken, CancellableDecoder, CancellableDynDecoder, CancellableDynEncoder,
+    CancellableEncoder,
+};
+
 /// Result of a codec operation.
 pub type CodecResult<T> = Result<T, CodecError>;
 

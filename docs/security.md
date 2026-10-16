@@ -81,8 +81,10 @@ are in [`web-design.md`](web-design.md) section 7. In summary:
   natively and against the built wasm under Node (`web/check.mjs`: 300 files,
   zero traps).
 
-Not yet bounded: `max_decode_micros` and cancellation (no codec checks them;
-§19), and the browser main thread itself (decoding is not in a Worker), so a
+Not yet bounded: `max_decode_micros` (no codec checks it; §19). Cancellation
+is available through `tpt-media-codec`'s `CancelToken` adapters, but the web
+player does not use it, and it acts between calls rather than inside one. The
+browser main thread itself (decoding is not in a Worker), so a
 pathological-but-legal stream can still make a page unresponsive for the
 duration of one packet's decode.
 
