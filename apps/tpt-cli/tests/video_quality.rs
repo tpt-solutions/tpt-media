@@ -221,3 +221,20 @@ fn thrum_preserves_frame_order_and_timestamps() {
     }
     assert_eq!(count, FRAMES, "no frames lost, duplicated, or reordered");
 }
+
+/// Diagnostic: every scene's rate and quality at the default configuration, so a change to the
+/// codec's operating point can be read off directly. Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn corpus_summary() {
+    for s in all_scenes() {
+        let r = measure(&s, &default_cfg());
+        println!(
+            "{:>20}: {:.4} bpp  {:.1} dB  SSIM {:.3}",
+            s.name,
+            r.bpp((W * H) as u64).expect("defined"),
+            r.psnr_db.expect("finite"),
+            r.ssim.expect("defined")
+        );
+    }
+}

@@ -72,7 +72,7 @@ use tpt_media_codec::{Decoder, Encoder};
 use tpt_media_core::CodecConfig;
 
 let cfg = CodecConfig::new(*b"THRM", 1);
-let tc = ThrumConfig::default(); // qp 26, search_range 8, intra refresh 5%
+let tc = ThrumConfig::default(); // qp 19, search_range 8, intra refresh 5%
 
 let mut enc = ThrumEncoder::new(cfg, tc.clone())?;
 let packets = enc.encode(&frame_176x144_yuv420)?;
@@ -121,7 +121,7 @@ P-frame encoding costs ~2× an I-frame because every macroblock pays
 `search_range = 8`) on top of the intra path's own mode search.
 `search_range` is the knob, and the cost is quadratic in it.
 
-Mean packet sizes at the default `qp = 26` on the bench's synthetic clip:
+Mean packet sizes at the earlier default `qp = 26` on the bench's synthetic clip:
 1 074 B/packet at 176×144 4:2:0, 4 357 B at 640×480 mono. These are
 *bench-input* rates, not a bitrate target — a real talking head codes
 considerably smaller, because skip and intra refresh both key on small

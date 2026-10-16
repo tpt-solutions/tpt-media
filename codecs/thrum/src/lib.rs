@@ -318,6 +318,10 @@ const DEAD_ZONE: f32 = 0.2;
 const ROUND_INTRA: f32 = 0.33;
 const ROUND_INTER: f32 = 0.15;
 
+/// Lagrangian weight for dropping a whole inter block: the block is zeroed when the squared error
+/// this adds is below `RDO_LAMBDA * step^2` per bit it saves. `0` keeps every block.
+const RDO_LAMBDA: f32 = 0.6;
+
 /// Deblocking filter, on a 4x4 grid.
 const DEBLOCK_GRID: usize = 4;
 
@@ -785,6 +789,38 @@ fn rice_cost(v: i32, k: u32) -> u32 {
     (zigzag_encode(v) >> k) + 1 + k
 }
 /// Write one 8x8 residual block. `levels` is in raster order.
+/// Bits [`write_block`] spends on `levels`: the coded flag, and for a coded block the Rice
+/// parameter, the last position and the run/level tokens at the best parameter.
+fn block_bits(levels: &[i32; BLOCK_COEFFS]) -> u32 {
+    let mut last = 0usize;
+    let mut any = false;
+    for p in 0..BLOCK_COEFFS {
+        if levels[ZIGZAG[p]] != 0 {
+            last = p;
+            any = true;
+        }
+    }
+    if !any {
+        return 1;
+    }
+    let mut best_cost = u32::MAX;
+    for k in 0..=RICE_K_MAX {
+        let mut cost = 0u32;
+        let mut run = 0i32;
+        for p in 0..=last {
+            let v = levels[ZIGZAG[p]];
+            if v == 0 {
+                run += 1;
+                continue;
+            }
+            cost += rice_cost(run, k) + rice_cost(v, k);
+            run = 0;
+        }
+        best_cost = best_cost.min(cost);
+    }
+    1 + RICE_K_BITS + 6 + best_cost
+}
+
 fn write_block(w: &mut BitWriter, levels: &[i32; BLOCK_COEFFS]) -> CodecResult<()> {
     // Highest non-zero position in zigzag order.
     let mut last: usize = 0;
@@ -1128,6 +1164,9 @@ fn encode_block(s: &mut BlockScratch) -> [i32; BLOCK_COEFFS] {
     for i in 0..BLOCK_COEFFS {
         s.levels[i] = quantize(s.coeffs[i], s.step, s.rounding);
     }
+    if s.rounding == ROUND_INTER {
+        drop_block_if_cheaper(s);
+    }
     for (i, level) in s.levels.iter().enumerate() {
         s.coeffs[i] = dequantize(*level, s.step);
     }
@@ -1136,6 +1175,26 @@ fn encode_block(s: &mut BlockScratch) -> [i32; BLOCK_COEFFS] {
         s.recon[i] = to_u8(s.pred[i] as f32 + s.coeffs[i]);
     }
     s.levels
+}
+
+/// Zero an inter block's levels when that is the better trade (see [`RDO_LAMBDA`]): the squared
+/// error added is the energy the quantised levels were removing, and the bits saved are the whole
+/// coded block, from [`block_bits`].
+fn drop_block_if_cheaper(s: &mut BlockScratch) {
+    let mut added_error = 0.0f32;
+    let mut any = false;
+    for i in 0..BLOCK_COEFFS {
+        let l = s.levels[i];
+        if l != 0 {
+            any = true;
+            let c = s.coeffs[i];
+            let r = l as f32 * s.step;
+            added_error += c * c - (c - r) * (c - r);
+        }
+    }
+    if any && added_error < RDO_LAMBDA * s.step * s.step * block_bits(&s.levels) as f32 {
+        s.levels.fill(0);
+    }
 }
 
 /// Inverse path: `s.recon = clamp(s.pred + IDCT(DEQUANT(levels)))`,
@@ -1330,7 +1389,10 @@ impl Default for ThrumConfig {
             width: 128,
             height: 96,
             format: PixelFormat::Yuv420,
-            qp: 26,
+            // 19, not the earlier 26: biased rounding and block dropping spend fewer bits at any
+            // given qp, so the same qp now lands at lower quality. 19 keeps the corpus tests'
+            // quality floors and ordering, and beats the old default's quality on realistic scenes.
+            qp: 19,
             search_range: DEFAULT_SEARCH_RANGE,
             intra_refresh_percent: DEFAULT_INTRA_REFRESH_PERCENT,
         }
