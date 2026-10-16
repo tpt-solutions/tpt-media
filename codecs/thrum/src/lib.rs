@@ -313,6 +313,11 @@ const MAX_RICE_BITS: u32 = 260;
 /// fidelity on flat detail and buys a lot of zeros in smooth areas.
 const DEAD_ZONE: f32 = 0.2;
 
+/// Quantiser rounding offsets: `0.5` rounds to nearest, smaller values bias toward zero. Intra
+/// blocks have no prediction to fall back on, so they are biased less than inter blocks.
+const ROUND_INTRA: f32 = 0.33;
+const ROUND_INTER: f32 = 0.15;
+
 /// Deblocking filter, on a 4x4 grid.
 const DEBLOCK_GRID: usize = 4;
 
@@ -721,12 +726,14 @@ fn inverse_dct(block: &mut [f32], scratch: &mut [f32]) {
 /// to `+/-LEVEL_CLAMP` so an absurd coefficient can never produce an
 /// unbounded value downstream.
 #[inline]
-fn quantize(coef: f32, step: f32) -> i32 {
+fn quantize(coef: f32, step: f32, rounding: f32) -> i32 {
     let a = fabs(coef) / step;
     if a < DEAD_ZONE {
         return 0;
     }
-    let level = roundf(a) as i32;
+    // Truncating `a + offset` rounds down for a positive `a`: an offset below 0.5 biases
+    // every level toward zero, trading a little distortion for a lot of bits.
+    let level = (a + rounding) as i32;
     let level = level.clamp(-MAX_LEVEL, MAX_LEVEL);
     if coef < 0.0 {
         -level
@@ -1084,6 +1091,8 @@ struct BlockScratch {
     /// frame (it is a header field), so it lives here rather than being
     /// threaded through every block helper.
     step: f32,
+    /// Quantiser rounding offset for the block being coded (see [`ROUND_INTRA`]).
+    rounding: f32,
 }
 
 impl BlockScratch {
@@ -1099,6 +1108,7 @@ impl BlockScratch {
             mb_block: vec![0; MB_SIZE * MB_SIZE],
             mb_cand: vec![0; MB_SIZE * MB_SIZE],
             step: quant_step(MIN_QP),
+            rounding: ROUND_INTRA,
         }
     }
 }
@@ -1116,7 +1126,7 @@ fn encode_block(s: &mut BlockScratch) -> [i32; BLOCK_COEFFS] {
     s.coeffs.copy_from_slice(&s.residual);
     forward_dct(&mut s.coeffs, &mut s.dct_scratch);
     for i in 0..BLOCK_COEFFS {
-        s.levels[i] = quantize(s.coeffs[i], s.step);
+        s.levels[i] = quantize(s.coeffs[i], s.step, s.rounding);
     }
     for (i, level) in s.levels.iter().enumerate() {
         s.coeffs[i] = dequantize(*level, s.step);
@@ -1179,6 +1189,7 @@ fn code_intra_block(
 ) -> CodecResult<()> {
     src.load_block(pos.x0, pos.y0, BLOCK, BLOCK, &mut s.src);
     intra_predict(recon, pos.x0, pos.y0, mode, &mut s.pred);
+    s.rounding = ROUND_INTRA;
     let levels = encode_block(s);
     write_block(w, &levels)?;
     recon.store_block(pos.x0, pos.y0, BLOCK, BLOCK, &s.recon);
@@ -1208,6 +1219,7 @@ fn code_inter_block(
         mv.dy,
         &mut s.pred,
     );
+    s.rounding = ROUND_INTER;
     let levels = encode_block(s);
     write_block(w, &levels)?;
     recon.store_block(pos.x0, pos.y0, BLOCK, BLOCK, &s.recon);
@@ -1504,6 +1516,36 @@ pub struct ThrumEncoder {
     /// Frames encoded so far (drives the I/P decision).
     frames: u64,
     keyframe_interval: u64,
+    /// Where the bits went, accumulated across frames.
+    stats: EncodeStats,
+}
+
+/// Where an encoder's bits went, accumulated across frames: macroblock counts
+/// by kind, and bits by part. For diagnostics and tuning; reading it costs
+/// nothing and the counters cost a few additions per macroblock.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EncodeStats {
+    /// Macroblocks coded intra (including refresh macroblocks and I-frames).
+    pub intra_mbs: u64,
+    /// Macroblocks coded as skip.
+    pub skip_mbs: u64,
+    /// Macroblocks coded inter with a vector and residual.
+    pub inter_mbs: u64,
+    /// Bits spent on intra macroblocks (flags, modes and residual).
+    pub intra_bits: u64,
+    /// Bits spent on skip macroblocks (their two flags).
+    pub skip_bits: u64,
+    /// Bits spent on inter headers: the two flags and the motion vector.
+    pub mv_bits: u64,
+    /// Bits spent on inter luma residual.
+    pub luma_bits: u64,
+    /// Bits spent on inter chroma residual.
+    pub chroma_bits: u64,
+}
+
+/// Bits written so far.
+fn bit_pos(w: &BitWriter) -> usize {
+    w.position_bytes() * 8 + w.bits_buffered() as usize
 }
 
 impl ThrumEncoder {
@@ -1546,7 +1588,13 @@ impl ThrumEncoder {
             packet_buf,
             frames: 0,
             keyframe_interval,
+            stats: EncodeStats::default(),
         })
+    }
+
+    /// Where the bits have gone so far (see [`EncodeStats`]).
+    pub fn stats(&self) -> EncodeStats {
+        self.stats
     }
 
     /// Whether the next frame will be coded as an I-frame.
@@ -1737,6 +1785,7 @@ impl ThrumEncoder {
         let mx = mbx * MB_SIZE;
         let my = mby * MB_SIZE;
 
+        let start_bits = bit_pos(w);
         if intra {
             w.write(1, 1).map_err(|_| CodecError::Internal)?;
             for (bx, by) in LUMA_BLOCK_OFFSETS {
@@ -1761,6 +1810,8 @@ impl ThrumEncoder {
                     &mut self.scratch,
                 )?;
             }
+            self.stats.intra_mbs += 1;
+            self.stats.intra_bits += (bit_pos(w) - start_bits) as u64;
             return Ok(());
         }
 
@@ -1791,6 +1842,8 @@ impl ThrumEncoder {
         if skip {
             w.write(1, 1).map_err(|_| CodecError::Internal)?;
             copy_mb_from_reference(reference, recon, mx, my, 0, 0);
+            self.stats.skip_mbs += 1;
+            self.stats.skip_bits += (bit_pos(w) - start_bits) as u64;
             return Ok(());
         }
         w.write(1, 0).map_err(|_| CodecError::Internal)?;
@@ -1798,6 +1851,9 @@ impl ThrumEncoder {
             .map_err(|_| CodecError::Internal)?;
         w.write(MV_BITS, (dy + i32::from(MAX_SEARCH_RANGE)) as u64)
             .map_err(|_| CodecError::Internal)?;
+        self.stats.inter_mbs += 1;
+        let after_header = bit_pos(w);
+        self.stats.mv_bits += (after_header - start_bits) as u64;
 
         let mv = MotionVector { dx, dy };
         for (bx, by) in LUMA_BLOCK_OFFSETS {
@@ -1814,6 +1870,8 @@ impl ThrumEncoder {
                 &mut self.scratch,
             )?;
         }
+        let after_luma = bit_pos(w);
+        self.stats.luma_bits += (after_luma - after_header) as u64;
         if src.has_chroma() {
             code_inter_chroma(
                 w,
@@ -1831,6 +1889,7 @@ impl ThrumEncoder {
                 &mut self.scratch,
             )?;
         }
+        self.stats.chroma_bits += (bit_pos(w) - after_luma) as u64;
         Ok(())
     }
 }
@@ -2471,17 +2530,17 @@ mod tests {
     #[test]
     fn quantize_dead_zone_and_clamp() {
         let step = quant_step(10);
-        assert_eq!(quantize(0.0, step), 0);
+        assert_eq!(quantize(0.0, step, 0.5), 0);
         // Below the dead zone quantises to zero regardless of sign.
-        assert_eq!(quantize(step * 0.1, step), 0);
-        assert_eq!(quantize(-step * 0.1, step), 0);
+        assert_eq!(quantize(step * 0.1, step, 0.5), 0);
+        assert_eq!(quantize(-step * 0.1, step, 0.5), 0);
         // A large coefficient saturates at MAX_LEVEL, not beyond. That
         // bound is what makes the encoder's packet-size proof hold.
-        assert_eq!(quantize(1e9, step), MAX_LEVEL);
-        assert_eq!(quantize(-1e9, step), -MAX_LEVEL);
+        assert_eq!(quantize(1e9, step, 0.5), MAX_LEVEL);
+        assert_eq!(quantize(-1e9, step, 0.5), -MAX_LEVEL);
         // Sign is preserved for representable values.
-        assert!(quantize(step * 10.0, step) > 0);
-        assert!(quantize(-step * 10.0, step) < 0);
+        assert!(quantize(step * 10.0, step, 0.5) > 0);
+        assert!(quantize(-step * 10.0, step, 0.5) < 0);
     }
 
     #[test]
