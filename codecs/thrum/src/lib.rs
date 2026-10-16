@@ -1271,32 +1271,19 @@ fn copy_mb_from_reference(
     dx: i32,
     dy: i32,
 ) {
-    load_mc_block(
-        &reference.luma,
-        mx,
-        my,
-        MB_SIZE,
-        MB_SIZE,
-        dx,
-        dy,
-        &mut recon.luma.data[my * recon.luma.stride + mx..][..MB_SIZE * MB_SIZE],
-    );
+    // Predict into a dense block and store it with the plane's stride. Writing
+    // straight into `plane.data` treated the picture as contiguous, so every
+    // row after the first landed in the wrong place.
+    let mut luma = [0u8; MB_SIZE * MB_SIZE];
+    load_mc_block(&reference.luma, mx, my, MB_SIZE, MB_SIZE, dx, dy, &mut luma);
+    recon.luma.store_block(mx, my, MB_SIZE, MB_SIZE, &luma);
     if recon.has_chroma() {
         let (cx, cy) = (mx / 2, my / 2);
         let (cdx, cdy) = (chroma_mv(dx), chroma_mv(dy));
         for c in 0..2 {
-            let plane = &mut recon.chroma[c];
-            let start = cy * plane.stride + cx;
-            load_mc_block(
-                &reference.chroma[c],
-                cx,
-                cy,
-                BLOCK,
-                BLOCK,
-                cdx,
-                cdy,
-                &mut plane.data[start..][..BLOCK * BLOCK],
-            );
+            let mut chroma = [0u8; BLOCK * BLOCK];
+            load_mc_block(&reference.chroma[c], cx, cy, BLOCK, BLOCK, cdx, cdy, &mut chroma);
+            recon.chroma[c].store_block(cx, cy, BLOCK, BLOCK, &chroma);
         }
     }
 }
@@ -1793,8 +1780,12 @@ impl ThrumEncoder {
                 &mut s.mb_cand,
             )
         };
-        let total_sad = macroblock_sad(src, reference, mx, my, dx, dy);
-        let skip = total_sad < skip_threshold(self.scratch.step);
+        // A skipped macroblock is reconstructed at zero motion (the skip flag
+        // carries no vector), so the skip test must judge that same
+        // prediction. Judging the searched vector let a moving block skip
+        // with a wrong, zero-motion reconstruction.
+        let zero_sad = macroblock_sad(src, reference, mx, my, 0, 0);
+        let skip = zero_sad < skip_threshold(self.scratch.step);
 
         w.write(1, 0).map_err(|_| CodecError::Internal)?;
         if skip {
@@ -2917,6 +2908,35 @@ mod tests {
             "P-frame {} B vs I-frame {} B",
             sizes[1],
             sizes[0]
+        );
+    }
+
+    #[test]
+    fn a_repeated_frame_reconstructs_as_well_as_the_intra_frame() {
+        // Regression: a skipped macroblock is copied from the reference, and
+        // the copy must keep the picture's row stride. A repeated frame is
+        // all skip, so its reconstruction must match the intra frame's
+        // quality. A stride bug once dropped it from about 42 dB to 25 dB.
+        let c = ThrumConfig {
+            qp: 6,
+            ..cfg(128, 96, PixelFormat::Gray8)
+        };
+        let fw = CodecConfig::default();
+        let mut enc = ThrumEncoder::new(fw.clone(), c.clone()).unwrap();
+        let mut dec = ThrumDecoder::new(fw, c).unwrap();
+        let f = test_picture(128, 96, PixelFormat::Gray8, 0);
+        let want = f.pixels.clone();
+        let mut psnr = Vec::new();
+        for _ in 0..2 {
+            let p = enc.encode(&f).unwrap().remove(0);
+            let got = dec.decode(&p).unwrap().remove(0);
+            psnr.push(psnr_db(&want, &got.pixels));
+        }
+        assert!(
+            psnr[1] > psnr[0] - 3.0,
+            "repeated frame {:.1} dB vs intra {:.1} dB",
+            psnr[1],
+            psnr[0]
         );
     }
 
