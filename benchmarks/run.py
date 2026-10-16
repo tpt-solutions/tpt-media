@@ -47,12 +47,24 @@ REFERENCES = {  # name -> (ffmpeg encoder args, rate-control values, container e
     "x265-veryslow": (["-c:v", "libx265", "-preset", "veryslow", "-crf", "{v}", "-x265-params", "log-level=error"], [20, 26, 32, 38, 44], "hevc"),
     "svtav1-p4": (["-c:v", "libsvtav1", "-preset", "4", "-crf", "{v}"], [24, 32, 40, 48, 56], "ivf"),
     "x264-zerolatency": (["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-crf", "{v}"], [20, 26, 32, 38, 44], "h264"),
+    # Same toolset as the spec allows Thrum: CAVLC (no CABAC), full-pixel motion, no RDO, one
+    # reference, no B-frames, no weighted prediction. Everything else is x264's default.
+    "x264-same-tools": (["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+                         "-x264-params", "cabac=0:8x8dct=1:subme=0:ref=1:bframes=0:weightp=0", "-crf", "{v}"],
+                        [20, 26, 32, 38, 44], "h264"),
+    # Vault's comparator: x264 at its slowest preset with only CABAC removed. It keeps quarter-pixel
+    # motion, which the spec forbids, so it is still a stronger tool set than Vault's.
+    "x264-cavlc": (["-c:v", "libx264", "-preset", "veryslow", "-x264-params", "cabac=0", "-crf", "{v}"],
+                   [20, 26, 32, 38, 44], "h264"),
     "vp9-realtime": (["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "0", "-crf", "{v}"], [20, 26, 32, 38, 44], "ivf"),
 }
 # Offline references set the quality ceiling; real-time references are the
 # low-latency settings a real-time codec like Thrum competes with.
 CEILING_REFS = ["x264-veryslow", "x265-veryslow", "svtav1-p4"]
 REALTIME_REFS = ["x264-zerolatency", "vp9-realtime"]
+# The spec's patent-free toolset (no CABAC, no fractional interpolation beyond bilinear half-pel):
+# the fair yardstick for each tpt codec, since the spec forbids the tools the other references use.
+TOOLSET_REF = {"thrum": ["x264-same-tools"], "vault": ["x264-cavlc"]}
 LOSSLESS_REFS = {  # name -> (ffmpeg encoder args, file ext). ALAC is muxed to m4a; its container is a few kB.
     "flac-8": (["-c:a", "flac", "-compression_level", "8"], "flac"),
     "wavpack": (["-c:a", "wavpack", "-compression_level", "3"], "wv"),
@@ -670,6 +682,11 @@ def summary_rows(cur):
         st = cur["stereo"]
         best = min(st[c]["bytes"] for c in ("flac-8", "wavpack", "alac") if c in st)
         rows.append(("Aura, stereo size vs best lossless reference (one clip)", fmt_x(st["aura"]["bytes"] / best)))
+    for codec, label in (("thrum", "x264 with the same tools (CAVLC, full-pixel, no RDO)"),
+                         ("vault", "x264 without CABAC")):
+        vals = video_ratios(cur, codec, TOOLSET_REF[codec])
+        value = fmt_x(float(np.median(vals))) if vals else "n/a"
+        rows.append((f"{codec.title()}, size at equal PSNR vs {label} (median)", value))
     vals = [v for v in (lossless_ratio(r) for r in cur["audio"].values()) if v is not None]
     rows.append(("Aura, size vs best lossless reference (mean over clips)", fmt_x(float(np.mean(vals))) if vals else "n/a"))
     for key, label in (("cinder", "Cinder"), ("opus", "Opus"), ("aac", "AAC-LC")):
@@ -712,6 +729,11 @@ def report():
          "at default tuning. The *real-time references* are x264 `veryfast` with `zerolatency` and libvpx VP9 `realtime` at "
          "`cpu-used 8`, the settings low-latency encoders run with. Thrum is a low-latency codec, so the real-time group is the "
          "fair comparison; the offline ceiling shows the distance to the best encoders.",
+         "- **Same-toolset references:** `spec.txt` forbids CABAC and fractional interpolation, so the other references use "
+         "tools the codecs may not. `x264-same-tools` is x264 `veryfast` + `zerolatency` with CAVLC, full-pixel motion, no RDO, one "
+         "reference and no B-frames (Thrum's toolset). `x264-cavlc` is x264 `veryslow` with only CABAC removed; it still has "
+         "quarter-pixel motion, so it is stronger than Vault's toolset. These are the fair yardsticks: a gap to them is "
+         "implementation, a gap to the others is partly the spec.",
          "- **Video equal-quality columns:** how many times *larger* the tpt stream is than the cheapest reference in that group "
          "at the same luma PSNR (log-linear interpolation). `>1` means tpt is worse; `n/a` means the PSNR is outside the "
          "reference's range.",
@@ -747,16 +769,17 @@ def report():
 
     L += ["## Video", ""]
     for clip, res in cur["video"].items():
-        L += [f"### {clip}", "", "| codec | setting | kbps | PSNR-Y dB | SSIM | enc ×realtime | vs offline ceiling | vs real-time reference |",
-              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+        L += [f"### {clip}", "", "| codec | setting | kbps | PSNR-Y dB | SSIM | enc ×realtime | vs offline ceiling | vs real-time reference | vs same-toolset reference |",
+              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for name, pts in res.items():
             for p in pts:
-                ceil = real = ""
+                ceil = real = tools = ""
                 if name not in REFERENCES:
                     ceil = fmt_x(equal_quality(res, CEILING_REFS, p))
                     real = fmt_x(equal_quality(res, REALTIME_REFS, p))
+                    tools = fmt_x(equal_quality(res, TOOLSET_REF.get(name, []), p)) if name in TOOLSET_REF else ""
                 L.append(f"| {name} | {p['setting']} | {p['kbps']:.0f} | {p['psnr_y']:.2f} | {p['ssim']:.4f} | "
-                         f"{p['encode_x_realtime']:.2f} | {ceil} | {real} |")
+                         f"{p['encode_x_realtime']:.2f} | {ceil} | {real} | {tools} |")
         L.append("")
 
     k = lambda b: "n/a" if b is None else f"{b / 1000:.0f} kB"
