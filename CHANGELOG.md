@@ -9,6 +9,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 Added
 
+- **Mote quality dial and `--target-psnr` (2026-10-19).** Mote's dictionary size, an
+  encoder-only setting the stream already carries, is now the quality dial: `--quality`
+  maps 0 to 100 onto 64 to 4096 entries, and `--target-psnr` searches it. No wire change.
+- **Cinder v6: unclipped escape (2026-10-19).** Breaking: version 6 packets. The
+  level escape now codes unbounded excess (Elias-gamma prefix plus `bits_per_coef`
+  raw bits), so fine band steps no longer clip. The 30 s music SNR at a step of
+  1/16 goes from 12.2 dB to 36.3 dB. The `--bitrate` and `--target-snr` searches go
+  down to 1/1024; `--quality` stops at 1/16. Re-encode Cinder files written by v5.
+- **Container format 0.2 (2026-10-19).** Packets are stored in `PKTS` runs of up
+  to 32 packets of one track, not one `CLUS` per packet. Audio framing falls from
+  about 43 to about 9 bytes per packet, and a 30 s Cinder file goes from 339,273 to
+  162,871 bytes. The version is `0x0002`; version 0.2 readers read 0.1 files.
+  **Breaking for version 0.1 readers**, which skip `PKTS` and see no packets in
+  0.2 files. Format spec in `docs/container-design.md`.
+- **Quality targets, faster searches, and format fixes (2026-10-19, second pass).**
+  `--target-psnr` now works on `transcode` too, and its search runs on the first
+  16 frames before checking the whole clip (about 1.9x faster on CIF). The Cinder
+  SNR search refines
+  between octave grid points before reporting a target out of reach. Streamed WAV
+  (`data` size 0xFFFFFFFF, or running past EOF) is read to end of input, so
+  `ffmpeg ... -f wav - | tpt encode ... -` works. The resampler caches its kernel
+  per phase (checked against the direct form to within 1 LSB). Packaging templates
+  for Homebrew, Scoop and winget are in `packaging/` and nothing is submitted.
+  A static A/B page is in `docs/demo/ab/` (not hosted).
+- **Audio input, quality targets, self-test and completions (2026-10-19).**
+  `tpt encode` and `tpt benchmark` now accept any WAV sample format (converted
+  to 16-bit), downmix stereo for the mono codecs, and resample with
+  `--resample`; each change is named in the output. `--bitrate` also applies to
+  `transcode` and `benchmark`. New `--target-snr` (audio, Cinder and Reed) and
+  `--target-psnr` (video, `encode`) pick the coarsest setting that still meets a
+  quality target. `tpt doctor` round-trips the built-in synthetic signals
+  through every codec; `tpt completions` prints bash, zsh, fish and PowerShell
+  completion scripts.
+- **Independent `.tpt` container reader (`tools/tpt-py`, 2026-10-19).** A
+  Python standard-library reader written from `docs/container-design.md`. It
+  agrees with `tpt probe --json` on four sample files, and it surfaced 15 spec
+  gaps, recorded in `todo.md` §58.
+- **`tpt encode --bitrate` now does something for audio, and `tpt compare`
+  is new (2026-10-19).** `--bitrate` was parsed and silently ignored on the
+  audio path. It now searches for the finest setting whose container averages
+  at or under the target: Cinder's quantiser step by log bisection (its
+  `bits_per_coef` only sets an escape width and barely moves the rate), Reed's
+  LSF bit depth by scan. Aura is lossless and refuses the flag with a usage
+  error; a target below a codec's floor encodes at the floor and says so.
+  `tpt compare <reference> <test>` scores a decoded file against its original
+  (SNR and log-spectral distance for WAV, mean/worst PSNR and mean SSIM for
+  y4m), with `--json`.
 - **Cooperative cancellation for codecs (2026-10-15).** `tpt-media-codec`
   gains a `CancelToken` (a shared one-way flag) and four adapters:
   `CancellableDecoder`/`CancellableEncoder` for the generic traits and
@@ -31,6 +78,32 @@ Added
 
 Changed
 
+- **Workspace version 0.2.0 (2026-10-19).** The wire changes below are breaking, so
+  the lockstep version moves from 0.1.0 to 0.2.0 (CONTRIBUTING §9.1). Internal path
+  dependencies follow it.
+- **Reed wire version 2 (breaking, 2026-10-19).** The gain index is 7 bits over −126 to
+  0 dB. Version 1's −62 dB floor made quiet voiced tones decode about 16 dB loud. Version 1
+  packets are rejected.
+- **Reed voiced level (2026-10-19).** Reed's encoder now sets the excitation gain
+  from the input's power through the quantised synthesis filter, rather than from
+  the residual of the unquantised predictor. Voiced speech and tones came back
+  up to 8 dB loud. Wire format and decoder were unchanged by this step; see the Reed
+  version 2 entry for the breaking change that followed.
+- **Cinder `--quality` now changes the rate (2026-10-19).** Quality maps onto the
+  band step on a log scale from 64 (quality 0) to 0.0625 (quality 100). Before, it
+  set only the escape width, and every setting produced the same payload size.
+  Output of existing Cinder `--quality` runs changes. `--band-step` still overrides
+  it, and Reed and Aura are unchanged.
+- **WAV parsing accepts streamed headers (2026-10-19).** A `data` chunk declared as
+  0xFFFF_FFFF, or running past the end of input, is read to end of input. Before,
+  it was rejected with an unexpected-end error. Truncated WAV files with a
+  declared size larger than the file are now accepted in the same way.
+- **Release workflow publishes checksums (2026-10-19).** The release job now
+  merges the per-platform artifacts into one folder, which the `files:` list
+  needs, and attaches a `SHA256SUMS` file. Not yet run on CI.
+- **Vault's rate-control pass takes a `PassParams` struct** instead of eight
+  positional arguments (clears `clippy::too_many_arguments`; no behaviour
+  change).
 - **Cinder v5: range-coded levels under a per-packet loudness class (wire
   version 5, breaking) (2026-10-15).** Levels were Rice-coded in v4, which
   spends at least one bit per coefficient and so could not go below about

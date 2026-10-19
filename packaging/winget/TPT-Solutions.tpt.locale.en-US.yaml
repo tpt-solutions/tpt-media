@@ -1,0 +1,10 @@
+# winget default-locale manifest TEMPLATE. Not submitted; see ../README.md.
+PackageIdentifier: TPTSolutions.tpt
+PackageVersion: VERSION
+PackageLocale: en-US
+Publisher: TPT Solutions
+PackageName: tpt
+License: MIT OR Apache-2.0
+ShortDescription: Command-line tool for the TPT media codecs
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

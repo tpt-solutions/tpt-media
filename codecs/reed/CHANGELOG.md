@@ -17,6 +17,28 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Reed wire version 2 (breaking, 2026-10-19).** The gain index is 7 bits, not
+  6, and spans −126 to 0 dB in 1 dB steps, not −62 to 0. Version 1 clamped the
+  gain a quiet voiced frame needs: a high-Q resonance makes the synthesis
+  filter's impulse-response energy large, so the gain is far below −62 dB. A
+  −52 dBFS 200 Hz tone came back about 16 dB loud; it now comes back within 2 dB
+  across a 40 dB range of input levels. Packets are 91 bits of parameters, which
+  still round to 12 bytes, so the container-level rate is unchanged. Version 1
+  packets are rejected.
+
+### Fixed
+
+- **Voiced output level (2026-10-19).** A 200 Hz tone came back up to 8 dB loud,
+  and speech came back about 8 dB loud at default quality. The encoder took the
+  excitation gain from the residual of the unquantised predictor, but the decoder
+  synthesises through the quantised one, and for a high-Q resonance those differ
+  a lot. The gain is now the value that gives the input's power through the
+  quantised synthesis filter. Speech at quality 80 is now within 1.5 dB, noise
+  within 0.1 dB. This change alone left the wire format and the decoder
+  unchanged; the quiet-tone case below needed version 2.
+
 ### Added
 
 - **Per-crate README, changelog, keywords and categories** (2026-09-30):

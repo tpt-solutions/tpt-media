@@ -1,0 +1,13 @@
+# winget installer manifest TEMPLATE. Not submitted; see ../README.md.
+PackageIdentifier: TPTSolutions.tpt
+PackageVersion: VERSION
+InstallerLocale: en-US
+InstallerType: portable
+Commands:
+  - tpt
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/TPT-Solutions/tpt-media/releases/download/vVERSION/tpt-windows-x86_64.exe
+    InstallerSha256: SHA256_WINDOWS_X86_64
+ManifestType: installer
+ManifestVersion: 1.6.0

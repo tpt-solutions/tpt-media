@@ -27,12 +27,17 @@
 //!   would mis-decode everything after it.
 //! * A `CLUS` whose embedded CRC-32 does not match is dropped and counted
 //!   rather than decoded.
+//! * A `PKTS` run yields each of its records as a packet, in order. A run
+//!   whose CRC-32 does not match is dropped whole.
+
+use std::collections::VecDeque;
 
 use crate::error::{ContainerFault, WebError};
-use crate::limits::{WebLimits, CLUS_OVERHEAD, MAX_TRAK_BYTES};
+use crate::limits::{run_body_cap, WebLimits, CLUS_OVERHEAD, MAX_TRAK_BYTES};
 use tpt_container::{
-    decode_clus, decode_tmta, decode_trak, read_chunk_header, FileHeader, CHUNK_CLUS, CHUNK_TMTA,
-    CHUNK_TRAK, CLUS_DISCONTINUITY, CLUS_END_OF_FRAME, CLUS_KEYFRAME, MAGIC,
+    decode_clus, decode_tmta, decode_trak, read_chunk_header, run_records, FileHeader,
+    PacketRecord, CHUNK_CLUS, CHUNK_PKTS, CHUNK_TMTA, CHUNK_TRAK, CLUS_DISCONTINUITY,
+    CLUS_END_OF_FRAME, CLUS_KEYFRAME, MAGIC,
 };
 use tpt_media_core::{Duration, Packet, PacketFlags, Timestamp, Track};
 
@@ -46,8 +51,8 @@ pub enum ParseEvent {
     /// A track was declared (`TRAK`), or its metadata was replaced (`TMTA`).
     /// Consumers upsert by [`Track::id`].
     Track(Track),
-    /// A compressed packet (`CLUS`) for a declared track, with its
-    /// timestamps in that track's timebase.
+    /// A compressed packet (a `CLUS` chunk, or one record of a `PKTS` run)
+    /// for a declared track, with its timestamps in that track's timebase.
     Packet(Packet),
 }
 
@@ -56,9 +61,9 @@ pub enum ParseEvent {
 pub struct ParserStats {
     /// Total bytes accepted by [`StreamParser::push`].
     pub bytes_in: u64,
-    /// `CLUS` chunks delivered as packets.
+    /// Packets delivered (`CLUS` chunks and `PKTS` records).
     pub packets: u64,
-    /// `CLUS` chunks dropped: malformed, unknown track, or bad CRC-32.
+    /// Chunks dropped: malformed, unknown track, or bad CRC-32.
     pub dropped_clusters: u64,
     /// Of `dropped_clusters`, those dropped for a CRC-32 mismatch.
     pub crc_failures: u64,
@@ -89,6 +94,8 @@ pub struct StreamParser {
     state: State,
     header: Option<FileHeader>,
     tracks: Vec<Track>,
+    /// Packets already parsed from a `PKTS` run, not yet handed out.
+    pending: VecDeque<ParseEvent>,
     stats: ParserStats,
     error: Option<WebError>,
 }
@@ -104,6 +111,7 @@ impl StreamParser {
             state: State::Header,
             header: None,
             tracks: Vec::new(),
+            pending: VecDeque::new(),
             stats: ParserStats::default(),
             error: None,
         }
@@ -212,6 +220,10 @@ impl StreamParser {
     /// fatal error.
     pub fn poll(&mut self) -> Result<Option<ParseEvent>, WebError> {
         loop {
+            // Packets already parsed from a run come out before anything else.
+            if let Some(ev) = self.pending.pop_front() {
+                return Ok(Some(ev));
+            }
             if let Some(e) = &self.error {
                 return Err(e.clone());
             }
@@ -278,8 +290,11 @@ impl StreamParser {
             Some(x) => x,
             None => return Ok(Step::NeedInput),
         };
+        let max_packet = self.limits.codec.max_packet_bytes as usize;
         let cap = if id == CHUNK_CLUS {
-            self.limits.codec.max_packet_bytes as usize + CLUS_OVERHEAD
+            max_packet + CLUS_OVERHEAD
+        } else if id == CHUNK_PKTS {
+            run_body_cap(max_packet)
         } else if id == CHUNK_TMTA {
             self.limits.codec.max_metadata_bytes as usize
         } else if id == CHUNK_TRAK {
@@ -297,13 +312,15 @@ impl StreamParser {
             return Ok(Step::Continue);
         };
         if size > cap {
-            return Err(self.fail(WebError::Limit(if id == CHUNK_CLUS {
-                "packet size"
-            } else if id == CHUNK_TMTA {
-                "metadata size"
-            } else {
-                "track descriptor size"
-            })));
+            return Err(
+                self.fail(WebError::Limit(if id == CHUNK_CLUS || id == CHUNK_PKTS {
+                    "packet size"
+                } else if id == CHUNK_TMTA {
+                    "metadata size"
+                } else {
+                    "track descriptor size"
+                })),
+            );
         }
         let body_end = body_start + size; // cannot overflow: size <= cap
         if body_end > self.buf.len() {
@@ -360,6 +377,8 @@ impl StreamParser {
                 // demuxer does.
                 None => Ok(Step::Continue),
             }
+        } else if id == CHUNK_PKTS {
+            self.handle_run(body_start, body_end)
         } else {
             // CHUNK_CLUS
             let cluster = match decode_clus(&self.buf[body_start..body_end]) {
@@ -407,6 +426,72 @@ impl StreamParser {
             Ok(Step::Event(ParseEvent::Packet(pkt)))
         }
     }
+}
+
+impl StreamParser {
+    /// A `PKTS` run: every record becomes a packet, queued in order.
+    fn handle_run(&mut self, body_start: usize, body_end: usize) -> Result<Step, WebError> {
+        let (run, records) = match run_records(&self.buf[body_start..body_end]) {
+            Some(x) => x,
+            None => {
+                self.stats.dropped_clusters += 1;
+                return Ok(Step::Continue);
+            }
+        };
+        if !run.crc_valid {
+            self.stats.dropped_clusters += 1;
+            self.stats.crc_failures += 1;
+            return Ok(Step::Continue);
+        }
+        let timebase = match self.tracks.iter().find(|t| t.id == run.track_id) {
+            Some(t) => t.timebase,
+            None => {
+                self.stats.dropped_clusters += 1;
+                return Ok(Step::Continue);
+            }
+        };
+        let max_packet = self.limits.codec.max_packet_bytes as usize;
+        if records.iter().any(|r| r.payload.len() > max_packet) {
+            return Err(self.fail(WebError::Limit("packet size")));
+        }
+        for rec in &records {
+            let pkt = packet_from_record(run.track_id, rec, timebase);
+            self.pending.push_back(ParseEvent::Packet(pkt));
+            self.stats.packets += 1;
+        }
+        Ok(Step::Continue)
+    }
+}
+
+/// A packet from one record, with timestamps in the track's timebase.
+fn packet_from_record(
+    track_id: u8,
+    rec: &PacketRecord<'_>,
+    timebase: tpt_media_core::Timebase,
+) -> Packet {
+    let ts = |ticks: u64| Timestamp {
+        ticks: i64::try_from(ticks).unwrap_or(i64::MAX),
+        timebase,
+    };
+    let mut pkt = Packet::empty(track_id, ts(rec.pts));
+    pkt.dts = ts(rec.dts);
+    pkt.data = rec.payload.to_vec();
+    if rec.flags & CLUS_KEYFRAME != 0 {
+        pkt.flags |= PacketFlags::KEYFRAME;
+    }
+    if rec.flags & CLUS_END_OF_FRAME != 0 {
+        pkt.flags |= PacketFlags::END_OF_FRAME;
+    }
+    if rec.flags & CLUS_DISCONTINUITY != 0 {
+        pkt.flags |= PacketFlags::DISCONTINUITY;
+    }
+    if let Some(d) = rec.duration {
+        pkt.duration = Some(Duration {
+            ticks: i64::from(d),
+            timebase,
+        });
+    }
+    pkt
 }
 
 enum Step {
@@ -477,7 +562,7 @@ mod tests {
 
     #[test]
     fn consumed_bytes_are_released() {
-        let file = synth::audio_tpt(synth::AudioKind::Cinder, 48_000, 1.0);
+        let file = synth::audio_tpt(synth::AudioKind::Cinder, 48_000, 8.0);
         let mut p = StreamParser::new(WebLimits::default());
         let mut peak = 0;
         for chunk in file.chunks(512) {

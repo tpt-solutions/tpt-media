@@ -26,7 +26,9 @@
 //!   pitch estimator ([`autocorrelation_pitch`], speech F0 range,
 //!   confidence-thresholded) classifies the frame and estimates its
 //!   period; the decoder drives an impulse train at that period.
-//! - **Excitation gain** — the LPC residual's RMS, quantized in 1 dB
+//! - **Excitation gain** — the excitation RMS that makes the decoded frame
+//!   carry the input's power through the quantized synthesis filter (equal
+//!   to the residual RMS for a whitening predictor), quantized in 1 dB
 //!   steps over a 62 dB range. Index 0 is *exact mute*: the decoder
 //!   emits digital silence, so all-zero input round-trips to all-zero
 //!   output rather than to dithering noise.
@@ -41,12 +43,12 @@
 //!
 //! Wire layout (bit-exact, little-endian bit packing by
 //! `tpt-media-bitstream`): 16-bit version, 3-bit LPC-order code, 4-bit
-//! per-coefficient LSF bit depth, 1-bit voicing, 6-bit gain index,
+//! per-coefficient LSF bit depth, 1-bit voicing, 7-bit gain index,
 //! 10-bit pitch period (voiced) or codebook index (unvoiced), then
 //! `order` LSF indices of `lsf_bits` bits each, then a CRC-32 trailer
 //! over the preceding bytes (the same per-packet integrity convention
 //! as Aura/Cinder). The default configuration's parameter payload is a
-//! fixed 90 bits per 20 ms frame = **4.5 kbps** of coded parameters;
+//! fixed 91 bits per 20 ms frame = **4.55 kbps** of coded parameters;
 //! packets round up to 12 payload bytes and add the 4-byte CRC, so the
 //! container-level rate (what `tpt probe` reports) is 16 bytes/frame =
 //! 6.4 kbps.
@@ -86,7 +88,7 @@ use tpt_media_core::{
 pub const CODEC_ID: [u8; 4] = *b"REED";
 
 /// Bitstream version.
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 
 /// Size in bytes of the per-packet CRC-32 trailer.
 pub const CRC_TRAILER_BYTES: usize = 4;
@@ -105,13 +107,19 @@ pub const PITCH_MIN_PERIOD: usize = 16;
 /// searchable period range at either supported rate).
 pub const PITCH_BITS: u32 = 10;
 
+/// Impulse-response length used to measure an LPC synthesis filter's power
+/// gain (64 ms at 8 kHz; the response has decayed well before that).
+const SYNTH_IR_LEN: usize = 512;
 /// Bits used to transmit the excitation-gain index.
-pub const GAIN_BITS: u32 = 6;
-/// Gain index 0 means *exact mute* (digital silence out); indices 1..=63
-/// map to excitation gains of `-62 dB .. 0 dB` relative to full scale, in
-/// 1 dB steps. The floor doubles as the silence threshold: a decoded
-/// gain that low is inaudible on any output device.
-pub const GAIN_FLOOR_DB: f64 = -62.0;
+pub const GAIN_BITS: u32 = 7;
+/// Gain index 0 means *exact mute* (digital silence out); indices 1..=127
+/// map to excitation gains of `-126 dB .. 0 dB` relative to full scale, in
+/// 1 dB steps. Version 1 had 6 bits and a floor of -62 dB, which clamped the
+/// gain a quiet voiced frame needs (a high-Q resonance gives a large
+/// impulse-response energy, so the gain is far below -62 dB), and that made
+/// quiet tones decode about 20 dB loud. The floor doubles as the silence
+/// threshold, and a decoded gain that low is inaudible on any output device.
+pub const GAIN_FLOOR_DB: f64 = -126.0;
 
 /// Excitation-gain decay per consecutively concealed frame, in dB — a
 /// packet gap fades toward silence instead of holding its last level.
@@ -341,6 +349,25 @@ fn dequantize_lsf_indices(indices: &[u16], lsf_bits: u8, out: &mut [f64]) {
     }
 }
 
+/// Σh² of the LPC synthesis filter's impulse response, over
+/// [`SYNTH_IR_LEN`] samples. Runs the same recurrence as
+/// `tpt_dsp_core::synthesize` on a unit impulse, on the stack, so it adds no
+/// heap allocation to the encoder's steady state.
+fn synthesis_impulse_energy(lpc: &[f64]) -> f64 {
+    let mut h = [0f64; SYNTH_IR_LEN];
+    h[0] = 1.0;
+    let mut energy = 1.0;
+    for i in 1..SYNTH_IR_LEN {
+        let mut acc = 0f64;
+        for (k, c) in lpc.iter().enumerate().take(i) {
+            acc += c * h[i - 1 - k];
+        }
+        h[i] = acc;
+        energy += acc * acc;
+    }
+    energy
+}
+
 /// Reed encoder.
 pub struct ReedEncoder {
     info: CodecInfo,
@@ -448,16 +475,38 @@ impl Encoder for ReedEncoder {
             self.fallback_lsf()
         };
 
-        // Excitation target: the LPC residual of the *unwindowed* signal.
+        // Excitation target: the LPC residual of the *unwindowed* signal,
+        // taken with the predictor the decoder will rebuild from the
+        // transmitted indices. The unquantised `a` can differ a lot from
+        // that predictor for a high-Q resonance (a pure tone), and the gain
+        // is only right for the quantised one.
+        let mut lsp_q = vec![0f64; order];
+        dequantize_lsf_indices(&lsf_indices, self.enc.lsf_bits, &mut lsp_q);
+        let mut a_q = vec![0f64; order];
+        if lsp_is_stable(&lsp_q) {
+            lsp_to_lpc(&lsp_q, &mut a_q);
+        } else {
+            a_q.copy_from_slice(&a);
+        }
         let mut resid = vec![0f64; fs];
-        lpc_residual(&x, &a, &mut resid);
-        let mean_sq = resid.iter().map(|v| v * v).sum::<f64>() / fs as f64;
-        let rms = libm::sqrt(mean_sq);
+        lpc_residual(&x, &a_q, &mut resid);
+        // Gain: the excitation RMS that makes the decoder's output carry the
+        // input's power through the quantised synthesis filter, i.e. the g
+        // with g²·Σh² = mean(x²), where h is that filter's impulse response.
+        // For a whitening predictor this is the residual RMS; it differs
+        // when the quantised predictor is a poor whitener.
+        let ir_energy = synthesis_impulse_energy(&a_q);
+        let input_power = x.iter().map(|v| v * v).sum::<f64>() / fs as f64;
+        let rms = if ir_energy > 0.0 {
+            libm::sqrt(input_power / ir_energy)
+        } else {
+            0.0
+        };
         let gain_db = (20.0 * libm::log10(rms.max(1e-12))).clamp(GAIN_FLOOR_DB, 0.0);
         let gain_idx = if silent {
             0u64
         } else {
-            (1 + libm::round(gain_db - GAIN_FLOOR_DB) as i64).clamp(1, 63) as u64
+            (1 + libm::round(gain_db - GAIN_FLOOR_DB) as i64).clamp(1, 127) as u64
         };
 
         // Voicing + pitch on the unwindowed signal.

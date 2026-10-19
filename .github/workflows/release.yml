@@ -49,6 +49,12 @@ jobs:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          sha256sum tpt-linux-x86_64 tpt-macos-x86_64 tpt-macos-aarch64 tpt-windows-x86_64.exe > SHA256SUMS
+          cat SHA256SUMS
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -57,3 +63,4 @@ jobs:
             tpt-macos-x86_64
             tpt-macos-aarch64
             tpt-windows-x86_64.exe
+            SHA256SUMS

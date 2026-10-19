@@ -28,6 +28,16 @@ use tpt_media_codec::ResourceLimits;
 /// optional duration and CRC) plus slack, added to `max_packet_bytes` to get
 /// the largest acceptable `CLUS` chunk body.
 pub(crate) const CLUS_OVERHEAD: usize = 64;
+/// Largest `PKTS` body for a codec whose packets are at most `max_packet`
+/// bytes. A writer keeps a run to `RUN_MAX_BYTES` unless it holds one
+/// packet; the sum covers both cases, with the CRC trailer.
+pub(crate) fn run_body_cap(max_packet: usize) -> usize {
+    tpt_container::RUN_MAX_BYTES
+        + max_packet
+        + tpt_container::RECORD_MAX_OVERHEAD
+        + tpt_container::PKTS_HEADER
+        + 4
+}
 /// Largest single slice the C ABI will stage for JavaScript to fill
 /// (`tpt_web_input_ptr`). Bounds the staging buffer independently of the
 /// input limit; the page pushes larger files in slices.
@@ -139,9 +149,11 @@ impl WebLimits {
     /// Smallest input buffer that can hold the largest chunk the parser will
     /// accept (plus its 8-byte chunk header and slack).
     pub(crate) fn min_input_buffer(&self) -> usize {
-        let clus = self.codec.max_packet_bytes as usize + CLUS_OVERHEAD;
+        let max_packet = self.codec.max_packet_bytes as usize;
+        let clus = max_packet + CLUS_OVERHEAD;
+        let run = run_body_cap(max_packet);
         let tmta = self.codec.max_metadata_bytes as usize;
-        clus.max(tmta).max(MAX_TRAK_BYTES) + 8 + 64
+        clus.max(run).max(tmta).max(MAX_TRAK_BYTES) + 8 + 64
     }
 
     /// Upper bound, in bytes, on the memory the player itself owns under

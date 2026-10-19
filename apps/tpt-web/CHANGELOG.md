@@ -12,6 +12,13 @@ lockstep with the workspace.
 
 ## [Unreleased]
 
+### Changed
+
+- **Reads container 0.2 packet runs.** A `PKTS` run yields one packet per
+  record, in order, and a run whose checksum fails is dropped whole. The
+  per-chunk size cap rises to a run's worst case (64 KiB, or one packet), which
+  raises the smallest input buffer by about 64 KiB. Version 0.1 files still read.
+
 ### Added
 
 - **Vault and Mote are playable in the browser** (2026-10-05, closing the

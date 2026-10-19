@@ -46,11 +46,13 @@
 //! audio/raster only.
 
 pub mod args;
+pub mod audio_input;
 pub mod commands;
 pub mod json;
 pub mod memprobe;
 pub mod quality;
 pub mod signals;
+pub mod tools;
 pub mod video;
 pub mod y4m;
 
@@ -146,6 +148,22 @@ mod tests {
     }
 
     /// Serialize a mono S16 WAV at `rate` Hz via `tpt_media_io::write_wav`.
+    /// A context where `-` reads `stdin` and `x.wav` / `x.y4m` read `file`.
+    fn compare_ctx(stdin: &[u8], file: &[u8]) -> Ctx<'static> {
+        let stdin: &'static Vec<u8> = Box::leak(Box::new(stdin.to_vec()));
+        let file: &'static Vec<u8> = Box::leak(Box::new(file.to_vec()));
+        let rf: ReadFile<'static> = Box::leak(Box::new(move |_: &str| Ok(file.clone())));
+        let rs: ReadStdin<'static> = Box::leak(Box::new(move || Ok(stdin.clone())));
+        let wf: WriteFile<'static> = Box::leak(Box::new(|p: &str, _: &[u8]| {
+            Err(format!("no file writes in this test: {p}"))
+        }));
+        Ctx {
+            read_file: rf,
+            read_stdin: rs,
+            write_file: wf,
+        }
+    }
+
     fn io_wav(rate: u32, samples: &[u8]) -> Vec<u8> {
         let frame = tpt_media_core::AudioFrame {
             frame: tpt_media_core::Frame {
@@ -632,6 +650,452 @@ mod tests {
             &file_ctx(&[]),
         );
         assert_eq!(o.code, 2);
+    }
+
+    #[test]
+    fn audio_bitrate_target_is_honoured_and_steers_the_size() {
+        let wav = io_wav(48_000, &sine_samples(48_000));
+        let size_at = |bitrate: &str| {
+            let o = run(
+                &argv(&[
+                    "encode",
+                    "--codec",
+                    "cinder",
+                    "--bitrate",
+                    bitrate,
+                    "-",
+                    "-",
+                ]),
+                &stdin_ctx(wav.clone()),
+            );
+            assert_eq!(o.code, 0, "stderr was: {}", o.err);
+            (o.binary_stdout.expect("tpt bytes").len(), o.out)
+        };
+        // The test tone is ~75 kbit/s at the finest safe step (0.25) and
+        // ~57 kbit/s at the coarsest, so 70k and 60k both fall inside the
+        // range the fit can steer across. The tighter target must give the
+        // smaller file.
+        let (big, big_msg) = size_at("70k");
+        let (small, small_msg) = size_at("60k");
+        assert!(big_msg.contains("met at"), "unexpected: {big_msg}");
+        assert!(small_msg.contains("met at"), "unexpected: {small_msg}");
+        assert!(big > small, "{big} bytes at 70k vs {small} at 60k");
+        // A met target really is met: one second of audio.
+        assert!(small * 8 <= 60_000 + 8 * 64, "{small} bytes at 60k");
+        // An unreachable target encodes at the floor and says so.
+        let (_, floor_msg) = size_at("1k");
+        assert!(
+            floor_msg.contains("below this codec's floor"),
+            "{floor_msg}"
+        );
+    }
+
+    #[test]
+    fn encode_prepares_stereo_44k_input_and_says_what_changed() {
+        // Stereo at 44.1 kHz: Cinder needs mono at 44.1 or 48 kHz, so the
+        // input is downmixed and resampled, and the summary says so.
+        let samples: Vec<u8> = (0..2_000i32)
+            .flat_map(|i| {
+                let v = ((i as f32 * 0.05).sin() * 8_000.0) as i16;
+                [v.to_le_bytes(), v.to_le_bytes()].concat()
+            })
+            .collect();
+        let frame = tpt_media_core::AudioFrame {
+            frame: tpt_media_core::Frame {
+                pts: tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::new(1, 44_100)),
+                duration: None,
+                side_data: Vec::new(),
+            },
+            sample_count: 2_000,
+            samples,
+            format: tpt_media_core::SampleFormat::S16,
+            channel_layout: tpt_media_core::ChannelLayout::Stereo,
+            sample_rate: 44_100,
+        };
+        let wav = tpt_media_io::write_wav(&[frame]).unwrap();
+        let o = run(
+            &argv(&[
+                "encode",
+                "--codec",
+                "cinder",
+                "--resample",
+                "48000",
+                "-",
+                "-",
+            ]),
+            &stdin_ctx(wav.clone()),
+        );
+        assert_eq!(o.code, 0, "stderr was: {}", o.err);
+        assert!(o.out.contains("downmixed 2 channels to mono"), "{}", o.out);
+        assert!(o.out.contains("resampled 44100 to 48000 Hz"), "{}", o.out);
+        assert!(o.binary_stdout.is_some());
+
+        // Without --resample the rate is kept, and the codec's own rate check
+        // speaks, pointing at the flag.
+        let o = run(
+            &argv(&["encode", "--codec", "reed", "-", "-"]),
+            &stdin_ctx(wav),
+        );
+        assert_eq!(o.code, 1);
+        assert!(o.err.contains("--resample converts the rate"), "{}", o.err);
+    }
+
+    #[test]
+    fn resample_zero_is_a_usage_error() {
+        let o = run(
+            &argv(&["encode", "--codec", "cinder", "--resample", "0", "in.wav"]),
+            &file_ctx(&[]),
+        );
+        assert_eq!(o.code, 2);
+    }
+
+    #[test]
+    fn target_snr_is_met_by_a_coarser_step_than_the_finest() {
+        let wav = io_wav(48_000, &sine_samples(24_000));
+        let o = run(
+            &argv(&[
+                "encode",
+                "--codec",
+                "cinder",
+                "--target-snr",
+                "15",
+                "-",
+                "-",
+            ]),
+            &stdin_ctx(wav),
+        );
+        assert_eq!(o.code, 0, "stderr was: {}", o.err);
+        assert!(
+            o.out.contains("--target-snr 15 dB met at band step"),
+            "{}",
+            o.out
+        );
+    }
+
+    #[test]
+    fn quality_targets_are_mutually_exclusive_and_kind_checked() {
+        let wav = io_wav(48_000, &sine_samples(1000));
+        let o = run(
+            &argv(&[
+                "encode",
+                "--codec",
+                "cinder",
+                "--bitrate",
+                "64k",
+                "--target-snr",
+                "10",
+                "-",
+                "-",
+            ]),
+            &stdin_ctx(wav.clone()),
+        );
+        assert_eq!(o.code, 2);
+        assert!(o.err.contains("pick one of"), "{}", o.err);
+
+        let o = run(
+            &argv(&[
+                "encode",
+                "--codec",
+                "cinder",
+                "--target-psnr",
+                "30",
+                "-",
+                "-",
+            ]),
+            &stdin_ctx(wav),
+        );
+        assert_eq!(o.code, 2);
+        assert!(o.err.contains("applies to video"), "{}", o.err);
+    }
+
+    #[test]
+    fn target_psnr_steers_mote_through_its_dictionary() {
+        // Mote has no quantiser, but its dictionary size is a rate-quality
+        // dial, so --target-psnr has something to search over.
+        let clip = b"YUV4MPEG2 W16 H16 F25:1 Ip C420jpeg
+FRAME
+".to_vec();
+        let mut clip = clip;
+        clip.extend(std::iter::repeat_n(128u8, 16 * 16 * 3 / 2));
+        let o = run(
+            &argv(&["encode", "--codec", "mote", "--target-psnr", "30", "-", "-"]),
+            &stdin_ctx(clip),
+        );
+        assert_eq!(o.code, 0, "stderr was: {}", o.err);
+        assert!(o.out.contains("--target-psnr 30 dB met at qp"), "{}", o.out);
+    }
+
+    #[test]
+    fn target_snr_on_video_input_is_refused() {
+        let o = run(
+            &argv(&[
+                "encode",
+                "--codec",
+                "thrum",
+                "--target-snr",
+                "30",
+                "in.y4m",
+                "out.tpt",
+            ]),
+            &file_ctx(&[]),
+        );
+        assert_eq!(o.code, 1);
+    }
+
+    #[test]
+    fn target_psnr_picks_a_quantiser_that_meets_the_target() {
+        let params = y4m::Y4mParams {
+            width: 32,
+            height: 32,
+            fps_num: 25,
+            fps_den: 1,
+            format: tpt_media_core::PixelFormat::Gray8,
+        };
+        let frame = |seed: u32| {
+            let pixels: Vec<u8> = (0..32 * 32u32)
+                .map(|i| ((i.wrapping_mul(7) ^ seed.wrapping_mul(13)) % 251) as u8)
+                .collect();
+            tpt_media_core::VideoFrame {
+                frame: tpt_media_core::Frame {
+                    pts: tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::new(1, 25)),
+                    duration: None,
+                    side_data: Vec::new(),
+                },
+                pixels,
+                width: 32,
+                height: 32,
+                format: tpt_media_core::PixelFormat::Gray8,
+                stride: 32,
+            }
+        };
+        let clip = y4m::write(&params, &[frame(1), frame(2), frame(3)]);
+        let o = run(
+            &argv(&[
+                "encode",
+                "--codec",
+                "thrum",
+                "--target-psnr",
+                "25",
+                "-",
+                "-",
+            ]),
+            &stdin_ctx(clip.clone()),
+        );
+        assert_eq!(o.code, 0, "stderr was: {}", o.err);
+        assert!(o.out.contains("--target-psnr 25 dB met at qp"), "{}", o.out);
+
+        // A target no quantiser can reach is an error, not a silent fallback.
+        let o = run(
+            &argv(&[
+                "encode",
+                "--codec",
+                "thrum",
+                "--target-psnr",
+                "200",
+                "-",
+                "-",
+            ]),
+            &stdin_ctx(clip),
+        );
+        assert_eq!(o.code, 1);
+        assert!(o.err.contains("out of reach"), "{}", o.err);
+    }
+
+    #[test]
+    fn transcode_video_takes_a_psnr_target() {
+        let params = y4m::Y4mParams {
+            width: 32,
+            height: 32,
+            fps_num: 25,
+            fps_den: 1,
+            format: tpt_media_core::PixelFormat::Gray8,
+        };
+        let frame = |t: u32| tpt_media_core::VideoFrame {
+            frame: tpt_media_core::Frame {
+                pts: tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::new(1, 25)),
+                duration: None,
+                side_data: Vec::new(),
+            },
+            pixels: (0..32 * 32u32)
+                .map(|i| ((i % 32) * 5 + (i / 32) * 3 + t * 11) as u8)
+                .collect(),
+            width: 32,
+            height: 32,
+            format: tpt_media_core::PixelFormat::Gray8,
+            stride: 32,
+        };
+        let clip = y4m::write(&params, &[frame(0), frame(1), frame(2)]);
+        let enc = run(
+            &argv(&["encode", "--codec", "thrum", "-", "-"]),
+            &stdin_ctx(clip),
+        );
+        assert_eq!(enc.code, 0, "stderr was: {}", enc.err);
+        let tpt = enc.binary_stdout.expect("tpt bytes");
+        let o = run(
+            &argv(&[
+                "transcode",
+                "--codec",
+                "vault",
+                "--target-psnr",
+                "25",
+                "-",
+                "-",
+            ]),
+            &stdin_ctx(tpt),
+        );
+        assert_eq!(o.code, 0, "stderr was: {}", o.err);
+        assert!(o.out.contains("--target-psnr 25 dB met at qp"), "{}", o.out);
+    }
+
+    #[test]
+    fn benchmark_reports_the_bitrate_it_fitted() {
+        let wav = io_wav(48_000, &sine_samples(24_000));
+        let o = run(
+            &argv(&[
+                "benchmark",
+                "--codec",
+                "cinder",
+                "--bitrate",
+                "100k",
+                "--runs",
+                "1",
+                "-",
+            ]),
+            &stdin_ctx(wav),
+        );
+        assert_eq!(o.code, 0, "stderr was: {}", o.err);
+        assert!(o.out.contains("fit:"), "{}", o.out);
+        assert!(o.out.contains("--bitrate 100000 met at"), "{}", o.out);
+    }
+
+    #[test]
+    fn reed_and_aura_accept_quality_without_a_band_step() {
+        // --quality maps onto Cinder's band step; the other audio codecs must
+        // still take it as their own bit-depth dial, with no band step.
+        let wav = io_wav(16_000, &sine_samples(8_000));
+        let o = run(
+            &argv(&["encode", "--codec", "reed", "--quality", "80", "-", "-"]),
+            &stdin_ctx(wav),
+        );
+        assert_eq!(o.code, 0, "stderr was: {}", o.err);
+    }
+
+    #[test]
+    fn cinder_quality_moves_the_rate() {
+        // Before the band-step mapping, --quality changed only the escape
+        // width and every setting produced the same payload size.
+        let wav = io_wav(48_000, &sine_samples(24_000));
+        let size_at = |q: &str| {
+            let o = run(
+                &argv(&["encode", "--codec", "cinder", "--quality", q, "-", "-"]),
+                &stdin_ctx(wav.clone()),
+            );
+            assert_eq!(o.code, 0, "stderr was: {}", o.err);
+            o.binary_stdout.expect("tpt bytes").len()
+        };
+        let coarse = size_at("0");
+        let fine = size_at("100");
+        assert!(
+            fine > coarse,
+            "quality 100 gave {fine} bytes, quality 0 gave {coarse}"
+        );
+    }
+
+    #[test]
+    fn audio_bitrate_is_refused_for_lossless_aura() {
+        let o = run(
+            &argv(&["encode", "--codec", "aura", "--bitrate", "64k", "-", "-"]),
+            &stdin_ctx(io_wav(48_000, &sine_samples(1000))),
+        );
+        assert_eq!(o.code, 2);
+        assert!(o.err.contains("lossless"), "unexpected err: {}", o.err);
+    }
+
+    #[test]
+    fn compare_scores_wavs_and_flags_identical_files() {
+        let a = io_wav(48_000, &sine_samples(4096));
+        let same = run(&argv(&["compare", "-", "x.wav"]), &compare_ctx(&a, &a));
+        assert_eq!(same.code, 0, "stderr was: {}", same.err);
+        assert!(same.out.contains("identical (bit-exact)"), "{}", same.out);
+
+        let mut noisy_samples = sine_samples(4096);
+        for b in noisy_samples.iter_mut().step_by(7) {
+            *b ^= 0x10;
+        }
+        let noisy = io_wav(48_000, &noisy_samples);
+        let o = run(
+            &argv(&["compare", "--json", "-", "x.wav"]),
+            &compare_ctx(&a, &noisy),
+        );
+        assert_eq!(o.code, 0, "stderr was: {}", o.err);
+        assert!(o.out.contains("\"kind\":\"audio\""), "{}", o.out);
+        assert!(
+            !o.out.contains("null,\"log"),
+            "SNR should be finite: {}",
+            o.out
+        );
+    }
+
+    #[test]
+    fn compare_rejects_mismatched_and_malformed_input() {
+        let a = io_wav(48_000, &sine_samples(1024));
+        let other_rate = io_wav(44_100, &sine_samples(1024));
+        let o = run(
+            &argv(&["compare", "-", "x.wav"]),
+            &compare_ctx(&a, &other_rate),
+        );
+        assert_eq!(o.code, 1);
+        assert!(o.err.contains("differ in format"), "{}", o.err);
+
+        let o = run(&argv(&["compare", "-", "x.wav"]), &compare_ctx(&a, b"nope"));
+        assert_eq!(o.code, 1);
+        assert!(o.err.contains("test is not a readable wav"), "{}", o.err);
+
+        let y4m = b"YUV4MPEG2 W2 H2 F25:1 Ip C420jpeg\n".to_vec();
+        let o = run(&argv(&["compare", "-", "x.wav"]), &compare_ctx(&a, &y4m));
+        assert_eq!(o.code, 1);
+        assert!(o.err.contains("audio file with a video file"), "{}", o.err);
+
+        assert_eq!(run(&argv(&["compare", "only-one"]), &file_ctx(&[])).code, 2);
+        assert_eq!(
+            run(&argv(&["compare", "--bogus", "a", "b"]), &file_ctx(&[])).code,
+            2
+        );
+    }
+
+    #[test]
+    fn compare_scores_video_clips() {
+        let params = y4m::Y4mParams {
+            width: 16,
+            height: 16,
+            fps_num: 25,
+            fps_den: 1,
+            format: tpt_media_core::PixelFormat::Gray8,
+        };
+        let frame = |fill: u8| {
+            let plane = vec![fill; 16 * 16];
+            tpt_media_core::VideoFrame {
+                frame: tpt_media_core::Frame {
+                    pts: tpt_media_core::Timestamp::zero(tpt_media_core::Timebase::new(1, 25)),
+                    duration: None,
+                    side_data: Vec::new(),
+                },
+                width: 16,
+                height: 16,
+                format: tpt_media_core::PixelFormat::Gray8,
+                pixels: plane,
+                stride: 16,
+            }
+        };
+        let clean = y4m::write(&params, &[frame(100), frame(120)]);
+        let off = y4m::write(&params, &[frame(100), frame(124)]);
+        let o = run(
+            &argv(&["compare", "-", "x.y4m"]),
+            &compare_ctx(&clean, &off),
+        );
+        assert_eq!(o.code, 0, "stderr was: {}", o.err);
+        assert!(o.out.contains("Frames compared: 2"), "{}", o.out);
+        assert!(o.out.contains("1 frames bit-exact"), "{}", o.out);
     }
 
     #[test]

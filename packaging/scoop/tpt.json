@@ -1,0 +1,21 @@
+{
+    "version": "VERSION",
+    "description": "Command-line tool for the TPT media codecs",
+    "homepage": "https://github.com/TPT-Solutions/tpt-media",
+    "license": "MIT OR Apache-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/TPT-Solutions/tpt-media/releases/download/vVERSION/tpt-windows-x86_64.exe#/tpt.exe",
+            "hash": "SHA256_WINDOWS_X86_64"
+        }
+    },
+    "bin": "tpt.exe",
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/TPT-Solutions/tpt-media/releases/download/v$version/tpt-windows-x86_64.exe#/tpt.exe"
+            }
+        }
+    }
+}

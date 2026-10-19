@@ -95,11 +95,22 @@ pub const CODEC_ID: [u8; 4] = *b"CIND";
 /// misreconstructed, so each is rejected rather than guessed at. The version
 /// is the packet's first two bytes, big-endian, so it is readable before any
 /// coded data.
-pub const VERSION: u16 = 5;
+pub const VERSION: u16 = 6;
 
 /// Symbols in a level model: 0..ESCAPE code the zigzag value directly. ESCAPE
-/// is followed by the value's excess over ESCAPE, in `bits_per_coef` bits.
+/// is followed by the value's excess over ESCAPE: its low `bits_per_coef` bits
+/// raw, and the rest as an Elias-gamma code. Version 5 coded the excess in
+/// `bits_per_coef` bits alone, which capped a level at about ±127 at 8 bits;
+/// at fine band steps the real levels are far larger, and they clipped.
 const ESCAPE: u32 = 255;
+/// Largest level magnitude the encoder codes (2^20 − 1).
+const MAX_LEVEL: i32 = (1 << 20) - 1;
+/// Largest zigzag code a level can take: the code of −MAX_LEVEL.
+const MAX_ZIGZAG: u32 = 2 * MAX_LEVEL as u32;
+/// Longest Elias-gamma prefix the decoder accepts. A prefix of `n` ones
+/// covers excesses up to about 2^(n + bits), so 20 is far beyond any level
+/// `MAX_LEVEL` can produce, and bounds the loop on hostile input.
+const MAX_GAMMA_PREFIX: u32 = 20;
 const ALPHABET: usize = ESCAPE as usize + 1;
 
 /// Total of every level model. A power of two, well below the range coder's
@@ -166,8 +177,50 @@ fn unzigzag(u: u32) -> i32 {
 /// Exact code length in bits of zigzag value `u` under `table` (encoder only).
 fn level_cost(table: &LevelTable, u: u32, bits: u32) -> f64 {
     let sym = u.min(ESCAPE) as usize;
-    let raw = if sym == ESCAPE as usize { bits as f64 } else { 0.0 };
+    let raw = if sym == ESCAPE as usize {
+        escape_bits(u - ESCAPE, bits) as f64
+    } else {
+        0.0
+    };
     -(table.freq[sym] as f64 / MODEL_TOTAL as f64).log2() + raw
+}
+
+/// Bits an escape excess costs: the Elias-gamma prefix and mantissa of the
+/// high part, plus `k` raw low bits.
+fn escape_bits(excess: u32, k: u32) -> u32 {
+    let high = (excess >> k) + 1;
+    let n = 31 - high.leading_zeros();
+    2 * n + 1 + k
+}
+
+/// Write an escape excess (see [`ESCAPE`]).
+fn put_escape(enc: &mut RangeEncoder<'_>, excess: u32, k: u32) -> CodecResult<()> {
+    let high = (excess >> k) + 1;
+    let n = 31 - high.leading_zeros();
+    for _ in 0..n {
+        put_bits(enc, 1, 1)?;
+    }
+    put_bits(enc, 0, 1)?;
+    put_bits(enc, high & ((1 << n) - 1), n)?;
+    put_bits(enc, excess & ((1 << k) - 1), k)
+}
+
+/// Read an escape excess written by [`put_escape`].
+fn get_escape(dec: &mut RangeDecoder<'_>, k: u32) -> CodecResult<u32> {
+    let mut n = 0u32;
+    while get_bits(dec, 1)? == 1 {
+        n += 1;
+        if n > MAX_GAMMA_PREFIX {
+            return Err(CodecError::MalformedPacket);
+        }
+    }
+    let high = (1u64 << n) | u64::from(get_bits(dec, n)?);
+    let low = u64::from(get_bits(dec, k)?);
+    let excess = ((high - 1) << k) | low;
+    if excess > u64::from(MAX_ZIGZAG - ESCAPE) {
+        return Err(CodecError::MalformedPacket);
+    }
+    Ok(excess as u32)
 }
 
 /// Write `n` bits of `value`, most significant first, as uniform symbols.
@@ -485,7 +538,7 @@ impl CinderEncoder {
         let band_size = (spec.len() / n_bands).max(1);
         let coded = n_bands * band_size;
         let bits = self.enc.bits_per_coef as u32;
-        let max_level = (1i32 << (bits - 1)) - 1;
+        let max_level = MAX_LEVEL;
         // Perceptual weighting can only ever *coarsen* a band's step (weight
         // > 1, for less-sensitive bands), never sharpen it below its
         // configured value. Each step is rounded to the wire's fixed-point
@@ -546,7 +599,7 @@ impl CinderEncoder {
                 enc.encode(table.cum[sym], table.freq[sym], MODEL_TOTAL)
                     .map_err(|_| CodecError::Internal)?;
                 if sym == ESCAPE as usize {
-                    put_bits(&mut enc, u - ESCAPE, bits)?;
+                    put_escape(&mut enc, u - ESCAPE, bits)?;
                 }
             }
             put_bits(&mut enc, 1, 1)?;
@@ -893,7 +946,7 @@ impl CinderDecoder {
             return Err(CodecError::MalformedPacket);
         }
         let bits = self.enc.bits_per_coef as u32;
-        let max_u = (1u32 << bits) - 2; // largest zigzag code a level can take
+        let max_u = MAX_ZIGZAG; // largest zigzag code a level can take
         let malformed = |_| CodecError::MalformedPacket;
         let uniform = get_bits(&mut r, 1)? == 0;
         let n_steps = if uniform { 1 } else { n_bands as usize };
@@ -917,7 +970,7 @@ impl CinderDecoder {
             r.update(table.cum[sym], table.freq[sym], MODEL_TOTAL)
                 .map_err(malformed)?;
             let u = if sym == ESCAPE as usize {
-                ESCAPE + get_bits(&mut r, bits)?
+                ESCAPE + get_escape(&mut r, bits)?
             } else {
                 sym as u32
             };
@@ -1192,6 +1245,30 @@ mod tests {
     }
 
     #[test]
+    fn fine_steps_do_not_clip_large_levels() {
+        // Version 5 clamped each level to about ±127 at 8 bits. At a fine
+        // step the real levels are far larger, so the decode collapsed (about
+        // 0 dB at a step of 1/16 on a tone). Version 6 codes the excess with
+        // an Elias-gamma prefix, so the same setting decodes faithfully.
+        let cfg = CodecConfig::default();
+        let enc_cfg = CinderEncoderConfig {
+            frame_size: 256,
+            n_bands: 16,
+            band_steps: alloc::vec![0.0625; 16],
+            bits_per_coef: 8,
+            ..Default::default()
+        };
+        let mut enc = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
+        let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
+        let frame = make_tone_audio_frame(16_384, 0);
+        let reference: Vec<i16> = (0..16_384).map(|i| frame.s16(0, i).unwrap()).collect();
+        let mut all = enc.encode(&frame).unwrap();
+        all.extend(enc.flush().unwrap());
+        let snr = snr_against(&reference, &decode_all(&mut dec, &all));
+        assert!(snr > 20.0, "fine-step SNR {snr:.2} dB must clear 20 dB");
+    }
+
+    #[test]
     fn rejects_band_steps_the_wire_cannot_carry() {
         let cfg = CodecConfig::default();
         for bad in [0.0, -1.0, 0.0001, 65.0, f32::NAN, f32::INFINITY] {
@@ -1213,7 +1290,7 @@ mod tests {
         let cfg = CodecConfig::default();
         let enc_cfg = CinderEncoderConfig::default();
         let mut dec = CinderDecoder::new(cfg, enc_cfg).unwrap();
-        let mut buf = vec![0u8; 64];
+        let mut buf = [0u8; 64];
         buf[..2].copy_from_slice(&VERSION.to_be_bytes());
         let written = {
             let mut enc = RangeEncoder::new(&mut buf[2..]);

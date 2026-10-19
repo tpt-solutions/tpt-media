@@ -12,21 +12,28 @@ use tpt_media_core::{
 use crate::crc32::crc32;
 use crate::format::{
     encode_chunk, encode_clus, encode_idx, encode_trak, FileHeader, IndexEntry, CHUNK_CLUS,
-    CHUNK_CRC1, CHUNK_IDX, CHUNK_TRAK, CLUS_DISCONTINUITY, CLUS_END_OF_FRAME, CLUS_KEYFRAME,
+    CHUNK_CRC1, CHUNK_IDX, CHUNK_PKTS, CHUNK_TRAK, CLUS_DISCONTINUITY, CLUS_END_OF_FRAME,
+    CLUS_KEYFRAME,
 };
+use crate::runs::RunBuilder;
 
 /// In-memory, append-only muxer for `.tpt` byte streams.
 ///
-/// Chunks are appended as they are produced (no seek-back required), so the
-/// muxer doubles as a live-stream / fragment writer. `finalize()` — or, via
-/// the [`Container`] trait, `finalize` — appends the per-track `IDX ` chunk
-/// and the container-level `CRC1` footer as a trailer, which is the graceful
-/// termination of the stream.
+/// Packets are gathered into `PKTS` runs of one track (see [`crate::runs`]),
+/// and a run is written when it is full, when the next packet belongs to
+/// another track or cannot be stored as a delta, before any `CLUS` chunk,
+/// and at `finalize`. Call [`TptMuxer::flush`] to write the pending run
+/// early, which a live-stream writer does before it sends bytes on.
+///
+/// `finalize()` — or, via the [`Container`] trait, `finalize` — appends the
+/// per-track `IDX ` chunk and the container-level `CRC1` footer as a trailer,
+/// which is the graceful termination of the stream.
 #[derive(Default)]
 pub struct TptMuxer {
     bytes: Vec<u8>,
     stream: Stream,
     index: BTreeMap<u8, Vec<IndexEntry>>,
+    run: Option<RunBuilder>,
     finalized: bool,
     cluster_checksums: bool,
 }
@@ -40,17 +47,19 @@ impl TptMuxer {
             bytes,
             stream: Stream::empty(timebase),
             index: BTreeMap::new(),
+            run: None,
             finalized: false,
             cluster_checksums: false,
         }
     }
 
-    /// Enable optional per-cluster CRC-32 fields (bits in the `CLUS` layout).
+    /// Enable optional CRC-32 fields on the chunks written from now on
+    /// (`PKTS` runs and `CLUS` chunks).
     pub fn enable_cluster_checksums(&mut self) {
         self.cluster_checksums = true;
     }
 
-    /// Append an `CLUS` chunk for `payload`.
+    /// Register a track with a minimal descriptor (version 1, audio).
     pub fn add_track(&mut self, track_id: u8, codec_id: &[u8; 4], codec_private: &[u8]) {
         let mut track = Track::new(
             track_id,
@@ -78,6 +87,7 @@ impl TptMuxer {
         if self.stream.track(track.id).is_some() {
             return;
         }
+        self.flush();
         let body = encode_trak(track);
         self.bytes
             .extend_from_slice(&encode_chunk(&CHUNK_TRAK, &body));
@@ -90,12 +100,16 @@ impl TptMuxer {
     }
 
     /// Append an `CLUS` chunk (simple convenience form, no duration).
+    ///
+    /// Writes the legacy one-packet chunk. Prefer [`TptMuxer::write_packet_raw`],
+    /// which writes packet runs.
     pub fn add_cluster(&mut self, timestamp: u64, flags: u8, track_id: u8, payload: &[u8]) {
+        self.flush();
         let body = encode_clus(timestamp, timestamp, flags, track_id, None, false, payload);
         self.append_cluster(body, timestamp, track_id, (flags & CLUS_KEYFRAME) != 0);
     }
 
-    /// Append a packet as a `CLUS` chunk (write path of [`Container`]).
+    /// Append a packet (write path of [`Container`]).
     pub fn write_packet_raw(&mut self, packet: &Packet) -> ContainerResult<()> {
         if self.finalized {
             return Err(ContainerError::Unsupported("container already finalized"));
@@ -107,22 +121,44 @@ impl TptMuxer {
         let duration = packet
             .duration
             .map(|d| (d.ticks.clamp(0, u32::MAX as i64)) as u32);
-        let body = encode_clus(
-            packet.pts.ticks as u64,
-            packet.dts.ticks as u64,
-            flags,
-            packet.track_id,
-            duration,
-            self.cluster_checksums,
-            &packet.data,
-        );
-        self.append_cluster(
-            body,
-            packet.pts.ticks as u64,
-            packet.track_id,
-            packet.is_keyframe(),
-        );
+        let pts = packet.pts.ticks as u64;
+        let dts = packet.dts.ticks as u64;
+        let fits = match &self.run {
+            Some(run) => run.accepts(packet.track_id, pts, dts, packet.data.len()),
+            None => false,
+        };
+        if !fits {
+            self.flush();
+            self.run = Some(RunBuilder::new(packet.track_id, pts, dts));
+        }
+        if let Some(run) = self.run.as_mut() {
+            run.push(flags, pts, dts, duration, &packet.data);
+        }
         Ok(())
+    }
+
+    /// Write the pending `PKTS` run, if any, to the byte buffer.
+    ///
+    /// Until this runs, the packets of an unfinished run are held in memory
+    /// and do not appear in [`TptMuxer::raw_bytes`].
+    pub fn flush(&mut self) {
+        let run = match self.run.take() {
+            Some(run) if !run.is_empty() => run,
+            _ => return,
+        };
+        debug_assert!(!self.finalized, "cannot write after finalize");
+        let offset = self.bytes.len() as u64;
+        let track_id = run.track_id();
+        let pts = run.base_pts();
+        let keyframe = run.has_keyframe();
+        let body = run.finish(self.cluster_checksums);
+        self.bytes
+            .extend_from_slice(&encode_chunk(&CHUNK_PKTS, &body));
+        self.index.entry(track_id).or_default().push(IndexEntry {
+            pts,
+            offset,
+            keyframe,
+        });
     }
 
     fn append_cluster(&mut self, body: Vec<u8>, pts: u64, track_id: u8, keyframe: bool) {
@@ -137,7 +173,8 @@ impl TptMuxer {
         });
     }
 
-    /// Append the trailer: per-track `IDX ` index plus the `CRC1` footer.
+    /// Append the trailer: the pending run, the per-track `IDX ` index and
+    /// the `CRC1` footer.
     ///
     /// This is the graceful termination of a `.tpt` stream. Files written
     /// without a trailer (e.g. a live stream that ends abruptly) remain
@@ -146,6 +183,7 @@ impl TptMuxer {
         if self.finalized {
             return Ok(());
         }
+        self.flush();
         let idx_body = encode_idx(crate::format::INDEX_VERSION, &self.index);
         self.bytes
             .extend_from_slice(&encode_chunk(&CHUNK_IDX, &idx_body));
@@ -164,7 +202,8 @@ impl TptMuxer {
         mem::take(&mut self.bytes)
     }
 
-    /// Raw bytes written so far, without the trailer.
+    /// Raw bytes written so far, without the trailer and without the pending
+    /// run (call [`TptMuxer::flush`] first to include it).
     ///
     /// This is what a live-stream writer would flush to its sink: the
     /// canonical fragments of a still-in-progress container.
@@ -175,15 +214,16 @@ impl TptMuxer {
     /// Append raw bytes to the stream buffer (live append / reconstruction).
     ///
     /// This lets external writers splice pre-serialized chunks into a
-    /// stream; for most callers `register_track` / `add_cluster` are the
+    /// stream; for most callers `register_track` / `write_packet_raw` are the
     /// canonical way to extend a stream. Writing after `finalize` is a panic.
     pub fn append_raw(&mut self, bytes: &[u8]) {
         debug_assert!(!self.finalized);
+        self.flush();
         self.bytes.extend_from_slice(bytes);
     }
 }
 
-/// Map packet flags to `CLUS` wire flags.
+/// Map packet flags to the wire flags shared by `CLUS` and `PKTS` records.
 pub fn packet_to_clus_flags(packet: &Packet) -> u8 {
     (if packet.is_keyframe() {
         CLUS_KEYFRAME

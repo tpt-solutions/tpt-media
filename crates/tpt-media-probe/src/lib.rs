@@ -806,7 +806,7 @@ mod tests {
         let bytes = build_container();
         let report = probe(&bytes);
         assert_eq!(report.container, ContainerKind::Tpt);
-        assert_eq!(report.version, Some(0x0001));
+        assert_eq!(report.version, Some(0x0002));
         assert_eq!(report.global_timebase, Some(Timebase::MILLISECONDS));
         assert!(report.corruption.is_empty());
         assert_eq!(report.checksum_ok, Some(true));
@@ -884,7 +884,7 @@ mod tests {
             .corruption
             .iter()
             .any(|c| c.contains("truncated") || c.contains("parse error")));
-        assert_eq!(report.version, Some(0x0001));
+        assert_eq!(report.version, Some(0x0002));
     }
 
     #[test]
@@ -995,7 +995,7 @@ mod tests {
         m.register_track(&audio_track());
         let bytes = m.finish();
         let report = probe(&bytes);
-        assert_eq!(report.version, Some(0x0001));
+        assert_eq!(report.version, Some(0x0002));
         assert_eq!(report.audio.len(), 1);
         assert_eq!(report.audio[0].frame_count, None);
         assert_eq!(report.audio[0].first_pts, None);
@@ -1119,7 +1119,9 @@ mod tests {
         assert_eq!(report.track_count(), 2);
     }
 
-    /// Flip one byte inside the payload of the first `CLUS` chunk.
+    /// Flip one byte inside the payload of the first `CLUS` chunk, or, for a
+    /// `PKTS` run (which the current writer produces), the last payload byte
+    /// before the run's CRC trailer.
     fn flip_first_payload_byte(bytes: &mut [u8]) -> bool {
         let mut pos = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
         while pos + 8 <= bytes.len() {
@@ -1138,6 +1140,14 @@ mod tests {
                 // Payload starts after the fixed 18-byte prefix (no duration).
                 let hit = body_start + 18;
                 bytes[hit] ^= 0xFF;
+                return true;
+            }
+            if id == *b"PKTS" {
+                // Requires the run to carry a CRC (the test enables checksums).
+                if body_end - body_start < 4 + 1 {
+                    return false;
+                }
+                bytes[body_end - 4 - 1] ^= 0xFF;
                 return true;
             }
             pos = body_end;

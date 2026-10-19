@@ -18,7 +18,7 @@ Part of the [`tpt-media`](../../README.md) workspace —
 | Role | Command-line application (todo.md §43) |
 | Binary name | `tpt` |
 | Status | All commands implemented |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | Scope | Audio via the WAV bridge **and** video via the y4m bridge |
@@ -33,9 +33,29 @@ tpt decode --codec <name> [..] <in> [<out>]
 tpt transcode --codec <name> [..] <in> [<out>]
 tpt benchmark --codec <name> [..] <in>
 tpt video-corpus [--json] [--fps <n>] [--frames <n>]
+tpt compare [--json] <reference> <test>   score a decoded file vs its original
+tpt compare [--json] <reference> <test>   score a decoded file vs its original
 tpt list-codecs
+tpt completions <bash|zsh|fish|powershell>
+tpt doctor
 tpt --help
 ```
+
+## Install
+
+```bash
+# from a checkout of this repository
+cargo install --path apps/tpt-cli
+
+# or straight from git
+cargo install --git https://github.com/TPT-Solutions/tpt-media tpt-cli
+```
+
+Prebuilt binaries for Linux, macOS and Windows are on the
+[releases page](https://github.com/TPT-Solutions/tpt-media/releases). Each
+release ships a `SHA256SUMS` file; check a download with
+`sha256sum -c SHA256SUMS` (Linux, macOS) or
+`Get-FileHash <file> -Algorithm SHA256` (PowerShell).
 
 ## Build and run
 
@@ -56,8 +76,11 @@ cargo run -p tpt-cli -- benchmark --codec aura --json in.wav
 |---|---|
 | `--codec <name>` | `cinder`, `aura`, `reed`, `thrum`, `vault`, `mote`, or a raw 4-byte codec ID. Unknown codec = usage error (exit 2) |
 | `--container <tpt\|wav>` | Output container. `encode`/`transcode` accept only `tpt`; `decode` writes `wav` for an audio track and y4m (the default) for a video track |
-| `--quality 0..=100` | Maps onto the codec's coefficient bit depth (Cinder/Aura 4–12 bits, Reed LSF bit depth). Out of range = usage error |
-| `--bitrate <n>[k\|m]` | Parsed and validated (`k` = ×1e3, `m` = ×1e6). **No effect yet** — no codec here has rate control |
+| `--quality 0..=100` | Cinder: band step, 64 at 0 to 1/16 at 100 (log scale; overridden by `--band-step`). Aura: coefficient bit depth. Reed: LSF bit depth. Thrum and Vault: quantiser index. Mote: dictionary size, 64 to 4096 entries. Out of range = usage error |
+| `--bitrate <n>[k\|m]` | Target bitrate (`k` = ×1e3, `m` = ×1e6). Video: Vault's frame-level rate control. Audio `encode`, `transcode` and `benchmark`: searches Cinder's quantiser step / Reed's LSF depth for the finest setting at or under the target (overrides `--quality`); Aura is lossless and refuses it. A target below the codec's floor encodes at the floor and says so |
+| `--resample <hz>` | Resample audio input to this rate first (windowed-sinc). Encode and benchmark |
+| `--target-snr <db>` | Audio (cinder, reed): the coarsest setting whose decoded SNR still meets the target. Overrides `--quality`. Not available for Aura (lossless) |
+| `--target-psnr <db>` | Video (`encode`, `transcode`): the coarsest quantiser (Thrum, Vault) or the smallest dictionary (Mote) whose mean PSNR still meets the target. Overrides `--quality` |
 | `--set-meta key=value` | Repeatable; published in order, non-empty keys validated |
 | `--runs <n>` | Measured passes for `benchmark` (default 5) |
 | `--json` | Deterministic machine-readable output for `probe`, `benchmark` and `video-corpus` |
@@ -115,6 +138,55 @@ A video codec on a *non*-video path — `encode --codec thrum` with a WAV, or a
 `.tpt` whose track is audio — fails with an explicit explanation rather than a
 misleading unknown-codec error.
 
+## Checking a round trip
+
+`tpt compare` scores any decoded file against its original with the same
+metrics `benchmark` uses: SNR and log-spectral distance for two WAVs, mean and
+worst-frame PSNR plus mean SSIM for two y4m clips. One input may be `-`.
+
+```bash
+tpt encode --codec cinder --bitrate 96k in.wav out.tpt
+tpt decode out.tpt back.wav
+tpt compare in.wav back.wav
+```
+
+## Other formats (ffmpeg)
+
+`tpt` reads 8/16/24/32-bit integer and float WAV directly, downmixes stereo
+and resamples with `--resample`, so ffmpeg is only needed for formats it
+does not read (MP3, FLAC, M4A and so on). Convert to a WAV file:
+
+```bash
+ffmpeg -i in.mp3 -c:a pcm_s16le out.wav
+tpt encode --codec cinder --target-snr 20 out.wav out.tpt
+```
+
+Piping works too, because `tpt` reads the streamed WAV header ffmpeg writes to
+a pipe (data size `0xFFFFFFFF`):
+
+```bash
+ffmpeg -v error -i in.mp3 -f wav - | tpt encode --codec cinder --target-snr 20 - out.tpt
+```
+
+## Self-test and shell completion
+
+`tpt doctor` round-trips the built-in synthetic signals through every native
+codec and reports each result. It exits 0 only when all of them pass, so it
+is a quick check that a new build or install works on your machine:
+
+```bash
+tpt doctor
+```
+
+`tpt completions <shell>` prints a completion script for `bash`, `zsh`,
+`fish` or `powershell`:
+
+```bash
+eval "$(tpt completions bash)"          # bash: add to ~/.bashrc
+tpt completions fish | source            # fish
+tpt completions powershell | Out-String | Invoke-Expression   # PowerShell
+```
+
 ## What `probe` reports about codecs
 
 `probe`/`inspect` resolve each track's codec against a registry holding the
@@ -154,7 +226,9 @@ allocator behind `tests/memory_budget.rs`).
   progressive only, `C420*`/`Cmono` only, and aspect ratio is parsed and
   discarded rather than round-tripped (the `.tpt` track model has no aspect
   field).
-- `--bitrate` is accepted and validated but has no effect.
+- `--bitrate`, `--target-snr` and `--target-psnr` are per-file averages or per-file settings, not per-second limits.
+- `--quality` on Cinder sets the band step, so it moves the rate; `--bitrate` and `--target-snr` pick the setting for a size or quality instead.
+- Container framing costs about 11 bytes per packet in version 0.2 (43 in 0.1). `--bitrate` measures the whole file, including that framing, so on a very short clip a small target can sit below what the framing alone allows.
 - `transcode` requires a `.tpt` input and a 44.1/48 kHz source track.
 - The JSON writer is hand-rolled (no serde) — which is how three
   malformed-output defects shipped and were then pinned by exact-shape

@@ -16,6 +16,24 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Container format 0.2: packet runs (2026-10-19).** Packets are written in
+  `PKTS` chunks of up to 32 packets of one track, with timestamps as deltas from
+  the run's base, instead of one `CLUS` per packet. Audio framing drops from about
+  43 to about 9 bytes per packet; a 30 s Cinder file goes from 339,273 to 162,871
+  bytes, with the same payload. The version is now `0x0002`. The on-disk `IDX `
+  is version 2, with one entry per chunk.
+  - **Breaking for version 0.1 readers.** They skip `PKTS` and see no packets in a
+    0.2 file. Version 0.2 readers read 0.1 files, which contain only `CLUS`.
+  - `TptMuxer::flush` writes the pending run early. `raw_bytes` does not include
+    an unflushed run.
+  - `ChunkIndexEntry` has a `slot` field: the packet's position within its chunk.
+  - New public items: `PKTS`/`CHUNK_PKTS`, `RunBuilder`, `decode_run`,
+    `run_records`, `run_record`, `PacketRecord`, `RunHeader`, `RUN_MAX_PACKETS`,
+    `RUN_MAX_BYTES`, `PKTS_HEADER`, `RECORD_MAX_OVERHEAD`, `INDEX_VERSIONS`.
+  - Format spec: `docs/container-design.md` ("Packet Runs").
+
 ### Fixed
 
 - **The crate forced `std` onto everything that depends on it** (2026-10-01,

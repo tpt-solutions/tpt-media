@@ -61,13 +61,20 @@ pub fn parse_wav(bytes: &[u8]) -> IoResult<(WavFormat, Vec<u8>)> {
 
     while pos + 8 <= bytes.len() {
         let id = &bytes[pos..pos + 4];
-        let size = u32::from_le_bytes([
+        let mut size = u32::from_le_bytes([
             bytes[pos + 4],
             bytes[pos + 5],
             bytes[pos + 6],
             bytes[pos + 7],
         ]) as usize;
         pos += 8;
+        // A streamed WAV (ffmpeg writing to a pipe) declares the data size as
+        // 0xFFFF_FFFF because it cannot seek back and fix it up. A data chunk
+        // that runs past the end of the input is treated the same way: its
+        // samples are whatever bytes are there.
+        if id == b"data" && (size == 0xFFFF_FFFF || pos + size > bytes.len()) {
+            size = bytes.len() - pos;
+        }
         if pos + size > bytes.len() {
             return Err(IoError::UnexpectedEof);
         }
@@ -381,5 +388,31 @@ mod tests {
         assert_eq!(&exact[0..4], b"RIFF");
         assert_eq!(&f32path[0..4], b"RIFF");
         assert_eq!(&f32path[20..22], &3u16.to_le_bytes()); // format tag = float
+    }
+
+    #[test]
+    fn streamed_wav_with_unknown_data_size_reads_to_end() {
+        // The header ffmpeg writes to a pipe: data size 0xFFFF_FFFF.
+        let samples: Vec<u8> = [1i16, -2, 300]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&48_000u32.to_le_bytes());
+        wav.extend_from_slice(&96_000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        wav.extend_from_slice(&samples);
+        let frame = decode_wav(&wav).expect("streamed wav decodes");
+        assert_eq!(frame.sample_count, 3);
+        assert_eq!(frame.samples, samples);
     }
 }

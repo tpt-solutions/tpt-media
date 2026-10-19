@@ -14,6 +14,42 @@ lockstep with the workspace.
 
 ### Added
 
+- **Quality targets and speed (2026-10-19, second pass).** `--target-psnr` works
+  on `transcode` for video. Its search runs on 16 frames, then checks the whole
+  clip. Cinder's `--target-snr` search runs on 8 seconds, then checks the whole
+  input. `benchmark --json` adds `input_changes` and `fit`.
+- **Mote has a quality dial (2026-10-19).** Mote's dictionary size is encoder-only and
+  transmitted in the stream, so it is a rate-quality dial with no wire change. `--quality`
+  maps onto it, 64 entries at 0 to 4096 at 100 (log scale). `--target-psnr` searches it:
+  on `akiyo_cif_100f`, quality 0 gives 28.5 dB at 15 kB, 50 gives 30.9 dB at 53 kB and 100
+  gives 31.1 dB at 60 kB. Without `--quality`, Mote keeps its 4096-entry default.
+- **Streamed WAV input and ffmpeg pipes (2026-10-19).** The README documents
+  both the file and pipe forms, and the pipe form now works.
+- **Audio input and quality targets (2026-10-19).** `encode` and `benchmark`
+  accept 8/16/24/32-bit integer and float WAV, downmix stereo for mono codecs
+  and resample with `--resample`, reporting each change. `--bitrate` now also
+  applies to `transcode` and `benchmark`. `--target-snr` (Cinder, Reed) and
+  `--target-psnr` (Thrum, Vault, Mote; `encode` only) search for the coarsest
+  setting that meets the target. Cinder's SNR is not monotone in its band step,
+  so its search scans a grid before refining.
+- **`tpt compare <reference> <test>`** scores a decoded file against its
+  original: SNR and log-spectral distance for WAV, mean and worst-frame PSNR and
+  mean SSIM for y4m, with `--json`.
+- **`tpt doctor`** round-trips the built-in synthetic signals through every
+  native codec and exits non-zero if any fails. Its floors (6 dB SNR for lossy
+  audio, 20 dB PSNR for video, a 12 dB level check for the Reed vocoder) are
+  smoke-test bounds, not quality gates.
+- **`tpt completions <bash|zsh|fish|powershell>`** prints a completion script.
+- **`tpt encode --bitrate` now does something for audio, and `tpt compare`
+  is new (2026-10-19).** `--bitrate` was parsed and silently ignored on the
+  audio path. It now searches for the finest setting whose container averages
+  at or under the target: Cinder's quantiser step by log bisection (its
+  `bits_per_coef` only sets an escape width and barely moves the rate), Reed's
+  LSF bit depth by scan. Aura is lossless and refuses the flag with a usage
+  error; a target below a codec's floor encodes at the floor and says so.
+  `tpt compare <reference> <test>` scores a decoded file against its original
+  (SNR and log-spectral distance for WAV, mean/worst PSNR and mean SSIM for
+  y4m), with `--json`.
 - **`vault` and `mote` are driven by the y4m bridge** (2026-10-01,
   todo.md §33's open item): `--codec vault` / `--codec mote` now work for
   `encode`, `decode`, `transcode` and `benchmark` exactly as `--codec thrum`
@@ -158,6 +194,15 @@ lockstep with the workspace.
 - Exit code 3 ("codec not wired yet"): with every listed codec implemented, no
   code path produced it, and the stale documentation claiming otherwise was
   removed.
+
+### Changed
+
+- **`--quality` moves Cinder's rate (2026-10-19).** It maps onto the band step
+  (64 to 0.25, log scale) rather than only the escape width. Explicit
+  `--band-step` still wins.
+- The README gains install instructions, a note on checking downloads against
+  `SHA256SUMS`, an ffmpeg recipe that writes a WAV file first (a streamed WAV
+  pipe is rejected), and the `doctor` and `completions` commands.
 
 ## [0.1.0] — 2026-09-04
 

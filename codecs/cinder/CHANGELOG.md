@@ -19,6 +19,13 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Changed
 
+- **Cinder v6: unclipped escape (wire version 6, breaking) (2026-10-19).**
+  The level escape's excess is now an Elias-gamma prefix plus `bits_per_coef`
+  raw low bits, and levels may reach ±2^20. Version 5 clamped each level to about
+  ±127 at 8 bits, so at fine band steps the decoded SNR collapsed (12.2 dB at a
+  step of 1/16 on the 30 s music corpus; 36.3 dB now). Small levels cost the same
+  as before. Version 5 packets are rejected, so streams written by v5 must be
+  re-encoded. Layout: `docs/codec-design.md`, "Cinder v6".
 - **Cinder v2: overlap-add MDCT (wire version 2, breaking) (2026-10-14).**
   The encoder now analyses hop-`frame_size` blocks (each window is the
   previous block plus the current one) and the decoder overlap-adds

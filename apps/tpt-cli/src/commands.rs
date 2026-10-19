@@ -10,6 +10,8 @@ use tpt_media_core::{
     Timestamp, Track, TrackMedia, VideoFrame,
 };
 use tpt_media_io::{decode_wav, write_wav};
+
+use crate::audio_input;
 use tpt_media_probe::{sniff, ContainerKind, ProbeReport};
 use tpt_video_mote::{MoteConfig, MoteDecoder, MoteEncoder};
 use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
@@ -583,7 +585,7 @@ impl VideoCodec {
         width: u32,
         height: u32,
         format: PixelFormat,
-        qp: u8,
+        qp: Option<u8>,
         bits_per_frame: Option<u32>,
     ) -> Result<(VideoEncoderBox, Vec<u8>), String> {
         let fw = FrameworkCodecConfig::default();
@@ -593,7 +595,7 @@ impl VideoCodec {
                     width,
                     height,
                     format,
-                    qp,
+                    qp: qp.unwrap_or(ThrumConfig::default().qp),
                     ..ThrumConfig::default()
                 };
                 let enc = ThrumEncoder::new(fw, cfg.clone())
@@ -605,7 +607,7 @@ impl VideoCodec {
                     width,
                     height,
                     format,
-                    qp,
+                    qp: qp.unwrap_or(VaultConfig::default().qp),
                     // `--bitrate` / fps: Vault's frame-level rate control
                     // (todo.md §33). Thrum has no rate control yet.
                     target_bits_per_frame: bits_per_frame,
@@ -616,10 +618,15 @@ impl VideoCodec {
                 Ok((Box::new(enc), cfg.to_codec_private()))
             }
             VideoCodec::Mote => {
+                // The dictionary is Mote's only rate-quality dial, and it is
+                // encoder-only: the decoder reads whatever size the stream
+                // carries. `None` keeps the codec's default dictionary.
                 let cfg = MoteConfig {
                     width,
                     height,
                     format,
+                    dictionary_entries: qp
+                        .map_or(MoteConfig::default().dictionary_entries, mote_dictionary_entries),
                     ..MoteConfig::default()
                 };
                 let enc =
@@ -898,6 +905,15 @@ fn supported_input_rates(codec: AudioCodec) -> &'static [u32] {
 /// `--quality 0..=100` mapped onto Thrum's quantiser index: higher
 /// quality means a *lower* `qp`, and the full slider spans the codec's
 /// legal `1..=51` (`51 - q/2`). Unspecified keeps Thrum's own default.
+/// Mote's dictionary size for a quantiser index: log-spaced from 64 entries
+/// at qp 51 (the coarsest, quality 0) to 4096 at qp 1 (the finest). Measured
+/// on `akiyo_cif_100f`: 64 entries give 28.5 dB at 15 kB, 256 give 30.0 dB at
+/// 34 kB, and 1024 give 31.1 dB at 60 kB.
+fn mote_dictionary_entries(qp: u8) -> u16 {
+    let t = f64::from(51 - qp.clamp(1, 51)) / 50.0;
+    (64.0 * 64f64.powf(t)).round().clamp(64.0, 4096.0) as u16
+}
+
 fn quality_to_qp(quality: Option<u8>) -> u8 {
     match quality {
         None => ThrumConfig::default().qp,
@@ -913,7 +929,8 @@ struct VideoEncodeJob {
     codec: VideoCodec,
     fps_num: u32,
     fps_den: u32,
-    qp: u8,
+    /// `None` for the codec default.
+    qp: Option<u8>,
     /// `--bitrate` / fps: the per-frame budget Vault's rate control
     /// encodes toward (`None` = the configured constant `qp`).
     bits_per_frame: Option<u32>,
@@ -1107,6 +1124,26 @@ fn encode_video(spec: &OpSpec, input: &[u8], ctx: &Ctx<'_>, codec: VideoCodec) -
         Ok(r) => r,
         Err(e) => return Outcome::fail(1, format!("input is not a readable y4m: {e}")),
     };
+    if spec.target_snr.is_some() {
+        return Outcome::fail(
+            1,
+            "--target-snr applies to audio input; use --target-psnr for video",
+        );
+    }
+    if spec.target_psnr.is_some() && spec.bitrate_bits_per_second.is_some() {
+        return Outcome::usage("pick one of --bitrate, --target-psnr");
+    }
+    let mut qp = spec.quality.map(|q| quality_to_qp(Some(q)));
+    let mut fit_note = String::new();
+    if let Some(target) = spec.target_psnr {
+        match fit_video_qp(codec, &params, &frames, target) {
+            Ok((q, psnr)) => {
+                qp = Some(q);
+                fit_note = format!(", --target-psnr {target} dB met at qp {q} ({psnr:.2} dB)");
+            }
+            Err(e) => return Outcome::fail(1, e),
+        }
+    }
     // `--bitrate` / fps = the per-frame budget Vault's rate control
     // encodes toward; other video codecs ignore it.
     let bits_per_frame = spec
@@ -1117,7 +1154,7 @@ fn encode_video(spec: &OpSpec, input: &[u8], ctx: &Ctx<'_>, codec: VideoCodec) -
         codec,
         fps_num: params.fps_num,
         fps_den: params.fps_den,
-        qp: quality_to_qp(spec.quality),
+        qp,
         bits_per_frame,
         frames,
         extra_meta: spec
@@ -1135,7 +1172,7 @@ fn encode_video(spec: &OpSpec, input: &[u8], ctx: &Ctx<'_>, codec: VideoCodec) -
         spec,
         bytes,
         format!(
-            "encoded {written} packets ({count} frames, {}x{} @ {}/{} fps)",
+            "encoded {written} packets ({count} frames, {}x{} @ {}/{} fps){fit_note}",
             params.width, params.height, params.fps_num, params.fps_den
         ),
         ctx,
@@ -1150,8 +1187,8 @@ fn encode_video(spec: &OpSpec, input: &[u8], ctx: &Ctx<'_>, codec: VideoCodec) -
 /// container with full track metadata (track timebase `1/sample_rate`,
 /// codec version, sample rate, channel layout, `--set-meta` tags).
 /// `--quality` maps onto Cinder/Aura coefficient bit depth and Reed's
-/// per-coefficient LSF bit depth; `--bitrate` is validated but not yet
-/// applied (no codec here has rate control).
+/// per-coefficient LSF bit depth; `--bitrate` searches that same depth for
+/// the best lossy fit under the target (Aura refuses it).
 ///
 /// A YUV4MPEG2 input (`YUV4MPEG2` magic) takes the video path instead:
 /// it requires a video codec (thrum) and encodes every frame as one
@@ -1204,6 +1241,11 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Ok(f) => f,
         Err(e) => return Outcome::fail(1, format!("input is not a readable wav: {e}")),
     };
+    let (frame, notes) = match audio_input::prepare(frame, codec == AudioCodec::Aura, spec.resample)
+    {
+        Ok(p) => p,
+        Err(e) => return Outcome::fail(1, e),
+    };
     if frame.format != SampleFormat::S16
         || !audio_channels_ok(codec, frame.channel_layout.channels())
         || !supported_input_rates(codec).contains(&frame.sample_rate)
@@ -1211,8 +1253,8 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         return Outcome::fail(
             1,
             format!(
-                "encode requires 16-bit mono (or, for Aura, stereo) wav at {} Hz \
-                 for this codec (got {:?}, {} ch, {} Hz)",
+                "encode requires a wav at {} Hz \
+                 for this codec (got {:?}, {} ch, {} Hz); --resample converts the rate",
                 supported_input_rates(codec)
                     .iter()
                     .map(|r| r.to_string())
@@ -1228,7 +1270,7 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         codec,
         rate: frame.sample_rate,
         bits_per_coef: quality_param(codec, spec.quality),
-        band_step: spec.band_step,
+        band_step: band_step_for(spec, codec),
         channels: frame.channel_layout.channels() as usize,
         samples: frame.samples,
         sample_count: frame.sample_count as usize,
@@ -1238,6 +1280,16 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
             .map(|(k, v)| (k.clone(), MetadataValue::Text(v.clone())))
             .collect(),
     };
+    let mut job = job;
+    let prep = prep_suffix(&notes);
+    let fit_note = match audio_goal(spec) {
+        Ok(Some(goal)) => match fit_audio(&mut job, goal) {
+            Ok(note) => note,
+            Err(e) => return e,
+        },
+        Ok(None) => String::new(),
+        Err(e) => return e,
+    };
     let sample_count = job.sample_count;
     let (bytes, written) = match run_encode_job(&job) {
         Ok(r) => r,
@@ -1246,9 +1298,488 @@ pub fn encode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     write_output(
         spec,
         bytes,
-        format!("encoded {written} packets ({sample_count} samples)"),
+        format!("encoded {written} packets ({sample_count} samples){prep}{fit_note}"),
         ctx,
     )
+}
+
+// ---------------------------------------------------------------------------
+// Quality-targeted encoding: `--bitrate`, `--target-snr`, `--target-psnr`
+// ---------------------------------------------------------------------------
+
+/// Cinder's band-step range. The top is just under 64 because the wire
+/// stores `step * 1024` in a `u16`, so 65535/1024 is the largest step.
+const STEP_MIN: f32 = 1.0 / 1024.0;
+const STEP_MAX: f32 = 63.99;
+/// The finest step the quality dial uses. Finer steps decode correctly since
+/// Cinder version 6 (before it, the level clamp collapsed SNR below about
+/// 0.25), but they produce very large files, so the dial stops here.
+const QUALITY_FINEST_STEP: f32 = 0.0625;
+
+/// What a quality-targeted audio encode must meet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AudioGoal {
+    /// Average container bits/s at or under this target (`--bitrate`).
+    Bitrate(u64),
+    /// Decoded SNR at or above this many dB (`--target-snr`).
+    Snr(f64),
+}
+
+/// The audio goal the options ask for, if any. The quality-target options
+/// are mutually exclusive, and `--target-psnr` belongs to video input.
+fn audio_goal(spec: &OpSpec) -> Result<Option<AudioGoal>, Outcome> {
+    let picked = [
+        spec.bitrate_bits_per_second.is_some(),
+        spec.target_snr.is_some(),
+        spec.target_psnr.is_some(),
+    ];
+    if picked.iter().filter(|p| **p).count() > 1 {
+        return Err(Outcome::usage(
+            "pick one of --bitrate, --target-snr, --target-psnr",
+        ));
+    }
+    if spec.target_psnr.is_some() {
+        return Err(Outcome::usage(
+            "--target-psnr applies to video input; use --target-snr for audio",
+        ));
+    }
+    Ok(match (spec.bitrate_bits_per_second, spec.target_snr) {
+        (Some(b), _) => Some(AudioGoal::Bitrate(b)),
+        (_, Some(s)) => Some(AudioGoal::Snr(s)),
+        _ => None,
+    })
+}
+
+fn goal_label(goal: AudioGoal) -> String {
+    match goal {
+        AudioGoal::Bitrate(t) => format!("--bitrate {t}"),
+        AudioGoal::Snr(t) => format!("--target-snr {t} dB"),
+    }
+}
+
+fn describe(value: f64, goal: AudioGoal) -> String {
+    match goal {
+        AudioGoal::Bitrate(_) => format!("{value:.0} bit/s"),
+        AudioGoal::Snr(_) => format!("{value:.2} dB"),
+    }
+}
+
+fn meets(value: f64, goal: AudioGoal) -> bool {
+    match goal {
+        AudioGoal::Bitrate(t) => value <= t as f64,
+        AudioGoal::Snr(t) => value >= t,
+    }
+}
+
+/// Average container bits/s of `job` at its current settings.
+fn container_bitrate(job: &EncodeJob) -> Result<f64, String> {
+    let total = (job.samples.len() / (2 * job.channels)) as u64;
+    let (bytes, _) = run_encode_job(job)?;
+    Ok((bytes.len() as u64 * 8 * u64::from(job.rate)).div_ceil(total) as f64)
+}
+
+/// Decoded SNR (dB) of `job` at its current settings: encode, decode with
+/// the codec's own decoder, and compare with the input. NaN when the input
+/// is silent, because SNR is undefined there.
+fn roundtrip_snr(job: &EncodeJob) -> Result<f64, String> {
+    let rate = job.rate;
+    let block_samples = samples_per_block(job.codec, rate);
+    let channels = job.channels;
+    let mut encoder = build_encoder(job.codec, rate, job.bits_per_coef, job.band_step)?;
+    let private = match job.codec {
+        AudioCodec::Cinder => vec![job.bits_per_coef],
+        AudioCodec::Aura => (block_samples as u16).to_le_bytes().to_vec(),
+        AudioCodec::Reed => ReedConfig {
+            sample_rate: rate,
+            lsf_bits: job.bits_per_coef,
+            ..ReedConfig::default()
+        }
+        .to_codec_private(),
+    };
+    let mut decoder = make_decoder(job.codec, rate, encoder.info().version, &private)?;
+    let total = job.samples.len() / (2 * channels);
+    let track_timebase = Timebase::new(1, rate);
+    let mut packets = Vec::new();
+    let mut start = 0usize;
+    while start < total {
+        let end = (start + block_samples).min(total);
+        let mut block = vec![0u8; block_samples * 2 * channels];
+        block[..(end - start) * 2 * channels]
+            .copy_from_slice(&job.samples[start * 2 * channels..end * 2 * channels]);
+        let chunk = tpt_media_core::AudioFrame {
+            frame: tpt_media_core::Frame {
+                pts: Timestamp {
+                    ticks: start as i64,
+                    timebase: track_timebase,
+                },
+                duration: None,
+                side_data: Vec::new(),
+            },
+            samples: block,
+            sample_count: block_samples as u32,
+            format: SampleFormat::S16,
+            channel_layout: layout_for(channels),
+            sample_rate: rate,
+        };
+        packets.extend(
+            encoder
+                .encode(&chunk)
+                .map_err(|e| format!("encode failed: {e}"))?,
+        );
+        start = end;
+    }
+    packets.extend(encoder.drain().map_err(|e| format!("drain failed: {e}"))?);
+    let mut out = Vec::new();
+    for pkt in &packets {
+        for f in decoder
+            .decode(pkt)
+            .map_err(|e| format!("decode failed: {e}"))?
+        {
+            out.extend(s16_to_f32(&f.samples));
+        }
+    }
+    let reference = s16_to_f32(&job.samples);
+    let n = reference.len().min(out.len());
+    Ok(crate::quality::snr_db(&reference[..n], &out[..n]).unwrap_or(f64::NAN))
+}
+
+/// The value `goal` is judged on, at the job's current settings.
+fn measure(job: &EncodeJob, goal: AudioGoal) -> Result<f64, String> {
+    match goal {
+        AudioGoal::Bitrate(_) => container_bitrate(job),
+        AudioGoal::Snr(_) => {
+            let snr = roundtrip_snr(job)?;
+            if snr.is_nan() {
+                Err("--target-snr is undefined for silent input".into())
+            } else {
+                Ok(snr)
+            }
+        }
+    }
+}
+
+/// How much of the input the quality-target searches run on. Each trial is
+/// a full encode and decode, so trials on a prefix are cheap; the chosen
+/// setting is then checked on the whole input, so the target is still met.
+const FIT_SEARCH_FRAMES: usize = 16;
+const FIT_SEARCH_SECONDS: usize = 8;
+
+/// Cinder's coarsest band step whose decoded SNR meets an SNR target.
+///
+/// SNR is not monotone in the step. Below about 0.25 the 8-bit escape cannot
+/// hold the large levels, so SNR collapses, and it peaks near a step of 1.
+/// So the search scans a grid of steps and keeps the coarsest that passes
+/// (coarser steps cost fewer bits), then bisects between that point and the
+/// next coarser grid point, where SNR falls below the target.
+///
+/// The search runs on the first few seconds of the input. The caller checks
+/// the step it returns on the whole input and steps finer if needed.
+fn search_cinder_snr_step(search: &mut EncodeJob, goal: AudioGoal) -> Result<f32, String> {
+    let mut grid: Vec<f32> = (-10..=5).map(|k: i32| 2f32.powi(k)).collect();
+    grid.push(STEP_MAX);
+    let mut points: Vec<(f32, f64)> = Vec::with_capacity(grid.len() + 4);
+    for &step in &grid {
+        search.band_step = Some(step);
+        points.push((step, measure(search, goal)?));
+    }
+    let mut passing = points.iter().rposition(|(_, v)| meets(*v, goal));
+    if passing.is_none() {
+        // The grid is only octave-spaced, so the best SNR can sit between
+        // two grid points and the target still be reachable. Probe either
+        // side of the best grid point before reporting it out of reach.
+        let peak = points
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1 .1.total_cmp(&b.1 .1))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let centre = points[peak].0.log2();
+        for offset in [-0.5f32, -0.25, 0.25, 0.5] {
+            let step = (centre + offset).exp2().clamp(STEP_MIN, STEP_MAX);
+            search.band_step = Some(step);
+            points.push((step, measure(search, goal)?));
+        }
+        points.sort_by(|a, b| a.0.total_cmp(&b.0));
+        passing = points.iter().rposition(|(_, v)| meets(*v, goal));
+    }
+    let Some(i) = passing else {
+        let highest = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+        return Err(format!(
+            "{} is out of reach: the best band step gives {highest:.2} dB",
+            goal_label(goal)
+        ));
+    };
+    let (mut g, mut b) = (
+        points[i].0.log2(),
+        points.get(i + 1).map_or(STEP_MAX, |p| p.0).log2(),
+    );
+    while (g - b).abs() > 0.01 {
+        let mid = (g + b) / 2.0;
+        search.band_step = Some(mid.exp2().clamp(STEP_MIN, STEP_MAX));
+        if meets(measure(search, goal)?, goal) {
+            g = mid;
+        } else {
+            b = mid;
+        }
+    }
+    Ok(g.exp2().clamp(STEP_MIN, STEP_MAX))
+}
+
+/// `--target-snr` for Cinder: search on a prefix, then check the step on the
+/// whole input and step finer (by a quarter octave) until it meets the target.
+fn fit_cinder_snr(job: &mut EncodeJob, goal: AudioGoal) -> Result<String, Outcome> {
+    let fail = |e: String| Outcome::fail(1, e);
+    let frame_bytes = 2 * job.channels;
+    let total = job.samples.len() / frame_bytes;
+    let keep = total.min(FIT_SEARCH_SECONDS * job.rate as usize);
+    let mut search = EncodeJob {
+        codec: job.codec,
+        rate: job.rate,
+        bits_per_coef: job.bits_per_coef,
+        band_step: None,
+        channels: job.channels,
+        samples: job.samples[..keep * frame_bytes].to_vec(),
+        sample_count: keep,
+        extra_meta: Vec::new(),
+    };
+    let mut step = search_cinder_snr_step(&mut search, goal).map_err(fail)?;
+    loop {
+        job.band_step = Some(step);
+        let value = measure(job, goal).map_err(fail)?;
+        if meets(value, goal) {
+            return Ok(format!(
+                ", {} met at band step {step:.4} ({})",
+                goal_label(goal),
+                describe(value, goal)
+            ));
+        }
+        if step <= STEP_MIN {
+            return Err(fail(format!(
+                "{} is out of reach: the finest band step ({STEP_MIN}) gives {}",
+                goal_label(goal),
+                describe(value, goal)
+            )));
+        }
+        step = (step.log2() - 0.25).exp2().clamp(STEP_MIN, STEP_MAX);
+    }
+}
+
+/// Pick the setting an audio goal needs and leave `job` at it. Overrides
+/// `--quality` and `--band-step`. Returns the note for the summary line.
+///
+/// Cinder's rate and SNR both follow its quantiser step (`bits_per_coef`
+/// only sets an escape width), so the step is bisected on a log scale.
+/// Reed follows its LSF bit depth, which is discrete, so it is scanned.
+/// Lossless Aura has no quality dial to turn, so it is refused.
+///
+/// When a target cannot be met, `--bitrate` encodes at the codec's floor
+/// (its smallest output) and warns. `--target-snr` is an error instead,
+/// because the user asked for a quality the codec cannot reach.
+fn fit_audio(job: &mut EncodeJob, goal: AudioGoal) -> Result<String, Outcome> {
+    if job.codec == AudioCodec::Aura {
+        return Err(Outcome::usage(
+            "--bitrate and --target-snr need a lossy codec: aura is lossless \
+             (use --codec cinder or reed)",
+        ));
+    }
+    if job.samples.is_empty() {
+        return Ok(", nothing to fit (no samples)".to_string());
+    }
+    let fail = |e: String| Outcome::fail(1, e);
+    match job.codec {
+        AudioCodec::Cinder if matches!(goal, AudioGoal::Snr(_)) => fit_cinder_snr(job, goal),
+        AudioCodec::Cinder => {
+            // Bitrate falls as the step coarsens, so bisect the step.
+            let (good, bad) = match goal {
+                AudioGoal::Bitrate(_) => (STEP_MAX, STEP_MIN),
+                AudioGoal::Snr(_) => (STEP_MIN, STEP_MAX),
+            };
+            let at_step = |job: &mut EncodeJob, step: f32| -> Result<f64, Outcome> {
+                job.band_step = Some(step);
+                measure(job, goal).map_err(fail)
+            };
+            let good_value = at_step(job, good)?;
+            if !meets(good_value, goal) {
+                return match goal {
+                    AudioGoal::Bitrate(_) => Ok(format!(
+                        ", warning: {} is below this codec's floor ({} at band step {STEP_MAX})",
+                        goal_label(goal),
+                        describe(good_value, goal)
+                    )),
+                    AudioGoal::Snr(_) => Err(fail(format!(
+                        "{} is out of reach: the finest band step ({STEP_MIN}) gives {}",
+                        goal_label(goal),
+                        describe(good_value, goal)
+                    ))),
+                };
+            }
+            let bad_value = at_step(job, bad)?;
+            let step = if meets(bad_value, goal) {
+                bad
+            } else {
+                let (mut g, mut b) = (good.log2(), bad.log2());
+                while (g - b).abs() > 0.01 {
+                    let mid = (g + b) / 2.0;
+                    let step = mid.exp2().clamp(STEP_MIN, STEP_MAX);
+                    if meets(at_step(job, step)?, goal) {
+                        g = mid;
+                    } else {
+                        b = mid;
+                    }
+                }
+                g.exp2().clamp(STEP_MIN, STEP_MAX)
+            };
+            let value = at_step(job, step)?;
+            Ok(format!(
+                ", {} met at band step {step:.4} ({})",
+                goal_label(goal),
+                describe(value, goal)
+            ))
+        }
+        AudioCodec::Reed => {
+            let lo = quality_to_lsf_bits(Some(0));
+            let hi = quality_to_lsf_bits(Some(100));
+            // Both rate and SNR grow with depth. Bitrate takes the finest
+            // depth that fits; SNR takes the coarsest depth that reaches
+            // the target. Either way the first hit in the scan wins.
+            let order: Vec<u8> = match goal {
+                AudioGoal::Bitrate(_) => (lo..=hi).rev().collect(),
+                AudioGoal::Snr(_) => (lo..=hi).collect(),
+            };
+            let mut last = (lo, 0.0);
+            for bits in order {
+                job.bits_per_coef = bits;
+                let value = measure(job, goal).map_err(fail)?;
+                if meets(value, goal) {
+                    return Ok(format!(
+                        ", {} met at {bits} LSF bits ({})",
+                        goal_label(goal),
+                        describe(value, goal)
+                    ));
+                }
+                last = (bits, value);
+            }
+            let (bits, value) = last;
+            match goal {
+                AudioGoal::Bitrate(_) => Ok(format!(
+                    ", warning: {} is below this codec's floor ({} at {bits} LSF bits)",
+                    goal_label(goal),
+                    describe(value, goal)
+                )),
+                AudioGoal::Snr(_) => Err(fail(format!(
+                    "{} is out of reach: the finest LSF depth ({bits}) gives {}",
+                    goal_label(goal),
+                    describe(value, goal)
+                ))),
+            }
+        }
+        AudioCodec::Aura => unreachable!("refused above"),
+    }
+}
+
+/// Mean PSNR (dB) of `frames` decoded through `codec` at quantiser `qp`:
+/// the video counterpart of [`roundtrip_snr`]. Bit-exact frames have no
+/// finite PSNR and are left out; a clip where every frame is bit-exact
+/// reports infinity.
+fn video_roundtrip_psnr(
+    codec: VideoCodec,
+    params: &y4m::Y4mParams,
+    frames: &[VideoFrame],
+    qp: u8,
+) -> Result<f64, String> {
+    let (mut encoder, private) =
+        codec.new_encoder(params.width, params.height, params.format, Some(qp), None)?;
+    let mut decoder = codec.new_decoder(
+        params.width,
+        params.height,
+        params.format,
+        &private,
+        encoder.info().version,
+    )?;
+    let mut packets = Vec::new();
+    for f in frames {
+        packets.extend(
+            encoder
+                .encode(f)
+                .map_err(|e| format!("encode failed: {e}"))?,
+        );
+    }
+    let mut decoded = Vec::new();
+    for pkt in &packets {
+        decoded.extend(
+            decoder
+                .decode(pkt)
+                .map_err(|e| format!("decode failed: {e}"))?,
+        );
+    }
+    let finite: Vec<f64> = frames
+        .iter()
+        .zip(&decoded)
+        .filter_map(|(src, out)| crate::quality::psnr_db(src, out))
+        .filter(|p| p.is_finite())
+        .collect();
+    Ok(if finite.is_empty() {
+        f64::INFINITY
+    } else {
+        finite.iter().sum::<f64>() / finite.len() as f64
+    })
+}
+
+/// The coarsest quantiser whose mean PSNR still meets `target` dB, by
+/// bisection over the legal `1..=51`. PSNR falls as qp rises (the search
+/// assumes that, which holds for these codecs' rate-quality curves), so the
+/// coarsest passing qp is the smallest file the target allows.
+///
+/// The bisection runs on the first [`FIT_SEARCH_FRAMES`] frames. The chosen
+/// qp is then checked on the whole clip, and stepped finer until the whole
+/// clip meets the target. Returns the qp and the whole-clip PSNR it reaches.
+fn fit_video_qp(
+    codec: VideoCodec,
+    params: &y4m::Y4mParams,
+    frames: &[VideoFrame],
+    target: f64,
+) -> Result<(u8, f64), String> {
+    let prefix = &frames[..frames.len().min(FIT_SEARCH_FRAMES)];
+    // qp 1 is assumed to pass here; if it does not, the whole-clip check
+    // below reports the target as out of reach.
+    let (mut good, mut bad) = (1u8, 52u8);
+    while bad - good > 1 {
+        let mid = good + (bad - good) / 2;
+        if video_roundtrip_psnr(codec, params, prefix, mid)? >= target {
+            good = mid;
+        } else {
+            bad = mid;
+        }
+    }
+    // Check the candidate on the whole clip. If it fails there, bisect
+    // finer on the whole clip: a bounded search, so an unreachable target
+    // costs a handful of encodes, not one per quantiser step.
+    let psnr = video_roundtrip_psnr(codec, params, frames, good)?;
+    if psnr >= target {
+        return Ok((good, psnr));
+    }
+    let unreachable = |psnr: f64| {
+        format!(
+            "--target-psnr {target} dB is out of reach: the finest quantiser (qp 1) gives {psnr:.2} dB over the whole clip"
+        )
+    };
+    let finest = video_roundtrip_psnr(codec, params, frames, 1)?;
+    if finest < target {
+        return Err(unreachable(finest));
+    }
+    let (mut ok, mut failing) = (1u8, good);
+    let mut ok_psnr = finest;
+    while failing - ok > 1 {
+        let mid = ok + (failing - ok) / 2;
+        let mid_psnr = video_roundtrip_psnr(codec, params, frames, mid)?;
+        if mid_psnr >= target {
+            ok = mid;
+            ok_psnr = mid_psnr;
+        } else {
+            failing = mid;
+        }
+    }
+    Ok((ok, ok_psnr))
 }
 
 /// `tpt decode`: `.tpt` -> codec -> WAV or y4m.
@@ -1370,6 +1901,33 @@ fn quality_param(codec: AudioCodec, quality: Option<u8>) -> u8 {
         AudioCodec::Reed => quality_to_lsf_bits(quality),
         _ => quality_to_bits(quality),
     }
+}
+
+/// The `, notes…` tail appended to an encode summary when the input was
+/// changed on the way in (empty when nothing was).
+fn prep_suffix(notes: &[String]) -> String {
+    notes.iter().map(|n| format!(", {n}")).collect()
+}
+
+/// `--quality 0..=100` mapped onto Cinder's band step: log-scaled from 64
+/// (coarsest, quality 0) down to [`QUALITY_FINEST_STEP`] (finest, quality 100).
+/// Aura and Reed have no band step.
+fn quality_to_band_step(quality: Option<u8>) -> Option<f32> {
+    quality.map(|q| {
+        // 6 = log2(64) and -4 = log2(1/16): ten octaves across the dial.
+        (6.0 - 10.0 * f32::from(q) / 100.0)
+            .exp2()
+            .clamp(QUALITY_FINEST_STEP, STEP_MAX)
+    })
+}
+
+/// The band step for a run: an explicit `--band-step` wins, then, for
+/// Cinder only, `--quality`; otherwise the codec default (unset).
+fn band_step_for(spec: &OpSpec, codec: AudioCodec) -> Option<f32> {
+    spec.band_step.or_else(|| match codec {
+        AudioCodec::Cinder => quality_to_band_step(spec.quality),
+        _ => None,
+    })
 }
 
 /// Map `--quality 0..=100` onto coefficient bit depth (Cinder/Aura support
@@ -1640,18 +2198,29 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
             if !audio_channels_ok(target, channels) {
                 return Outcome::fail(
                     1,
-                    format!("transcode to {} cannot take a {channels}-channel source", target.name()),
+                    format!(
+                        "transcode to {} cannot take a {channels}-channel source",
+                        target.name()
+                    ),
                 );
             }
-            let job = EncodeJob {
+            let mut job = EncodeJob {
                 codec: target,
                 channels: channels as usize,
                 rate,
                 bits_per_coef: quality_param(target, spec.quality),
-                band_step: spec.band_step,
+                band_step: band_step_for(spec, target),
                 samples,
                 sample_count,
                 extra_meta: carry_meta(&track),
+            };
+            let fit_note = match audio_goal(spec) {
+                Ok(Some(goal)) => match fit_audio(&mut job, goal) {
+                    Ok(note) => note,
+                    Err(e) => return e,
+                },
+                Ok(None) => String::new(),
+                Err(e) => return e,
             };
             let (bytes, written) = match run_encode_job(&job) {
                 Ok(r) => r,
@@ -1661,7 +2230,7 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                 spec,
                 bytes,
                 format!(
-                    "transcoded {written} packets ({sample_count} samples, {} -> {})",
+                    "transcoded {written} packets ({sample_count} samples, {} -> {}){fit_note}",
                     source.name(),
                     target.name()
                 ),
@@ -1669,6 +2238,11 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
             )
         }
         DemuxedMedia::Video(track, frames) => {
+            if spec.target_snr.is_some() {
+                return Outcome::usage(
+                    "--target-snr applies to audio; use --target-psnr for video",
+                );
+            }
             let target = match target_video {
                 Some(c) => c,
                 None => {
@@ -1697,11 +2271,23 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                 .bitrate_bits_per_second
                 .map(|b| b.div_ceil(u64::from(params.fps_num)) * u64::from(params.fps_den))
                 .and_then(|v| u32::try_from(v).ok());
+            let mut qp = spec.quality.map(|q| quality_to_qp(Some(q)));
+            let mut fit_note = String::new();
+            if let Some(target_db) = spec.target_psnr {
+                match fit_video_qp(target, &params, &frames, target_db) {
+                    Ok((q, psnr)) => {
+                        qp = Some(q);
+                        fit_note =
+                            format!(", --target-psnr {target_db} dB met at qp {q} ({psnr:.2} dB)");
+                    }
+                    Err(e) => return Outcome::fail(1, e),
+                }
+            }
             let job = VideoEncodeJob {
                 codec: target,
                 fps_num: params.fps_num,
                 fps_den: params.fps_den,
-                qp: quality_to_qp(spec.quality),
+                qp,
                 bits_per_frame,
                 frames,
                 extra_meta: carry_meta(&track),
@@ -1715,7 +2301,7 @@ pub fn transcode_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
                 bytes,
                 format!(
                     "transcoded {written} packets ({count} frames, {}x{}, \
-                     {source} -> {} at --quality {})",
+                     {source} -> {} at --quality {}{fit_note})",
                     params.width,
                     params.height,
                     target.name(),
@@ -1811,7 +2397,8 @@ fn benchmark_video(spec: &OpSpec, input: &[u8], codec: VideoCodec) -> Outcome {
         Ok(r) => r,
         Err(e) => return Outcome::fail(1, format!("input is not a readable y4m: {e}")),
     };
-    let qp = quality_to_qp(spec.quality);
+    let qp = spec.quality.map(|q| quality_to_qp(Some(q)));
+    let qp_shown = qp.unwrap_or(quality_to_qp(None));
     let (mut encoder, private) =
         match codec.new_encoder(params.width, params.height, params.format, qp, None) {
             Ok(v) => v,
@@ -1924,7 +2511,7 @@ fn benchmark_video(spec: &OpSpec, input: &[u8], codec: VideoCodec) -> Outcome {
             None => j.value_null(),
         }
         j.field("qp");
-        j.value_u64(u64::from(qp));
+        j.value_u64(u64::from(qp_shown));
         j.field("width");
         j.value_u64(u64::from(params.width));
         j.field("height");
@@ -1981,7 +2568,7 @@ fn benchmark_video(spec: &OpSpec, input: &[u8], codec: VideoCodec) -> Outcome {
         let mut out = String::new();
         out.push_str(&format!(
             "benchmark: {}, {}x{} @ {:.3} fps, {count} frames ({duration_s:.3} s), \
-             {packet_count} packets, qp {qp}\n",
+             {packet_count} packets, qp {qp_shown}\n",
             codec.name(),
             params.width,
             params.height,
@@ -2056,6 +2643,11 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Ok(f) => f,
         Err(e) => return Outcome::fail(1, format!("input is not a readable wav: {e}")),
     };
+    let (frame, notes) = match audio_input::prepare(frame, codec == AudioCodec::Aura, spec.resample)
+    {
+        Ok(p) => p,
+        Err(e) => return Outcome::fail(1, e),
+    };
     if frame.format != SampleFormat::S16
         || !audio_channels_ok(codec, frame.channel_layout.channels())
         || !supported_input_rates(codec).contains(&frame.sample_rate)
@@ -2063,8 +2655,8 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         return Outcome::fail(
             1,
             format!(
-                "benchmark requires 16-bit mono (or, for Aura, stereo) wav at {} Hz \
-                 for this codec (got {:?}, {} ch, {} Hz)",
+                "benchmark requires a wav at {} Hz \
+                 for this codec (got {:?}, {} ch, {} Hz); --resample converts the rate",
                 supported_input_rates(codec)
                     .iter()
                     .map(|r| r.to_string())
@@ -2081,10 +2673,34 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
     if total == 0 {
         return Outcome::fail(1, "input wav has no samples");
     }
-    let bits_per_coef = quality_param(codec, spec.quality);
+    let mut bits_per_coef = quality_param(codec, spec.quality);
+    let mut band_step = band_step_for(spec, codec);
+    let fit_note = match audio_goal(spec) {
+        Ok(Some(goal)) => {
+            let mut job = EncodeJob {
+                codec,
+                rate,
+                bits_per_coef,
+                band_step,
+                channels: frame.channel_layout.channels() as usize,
+                samples: frame.samples.clone(),
+                sample_count: total,
+                extra_meta: Vec::new(),
+            };
+            let note = match fit_audio(&mut job, goal) {
+                Ok(note) => note,
+                Err(e) => return e,
+            };
+            bits_per_coef = job.bits_per_coef;
+            band_step = job.band_step;
+            note
+        }
+        Ok(None) => String::new(),
+        Err(e) => return e,
+    };
     let runs = spec.runs.unwrap_or(5);
     let block = samples_per_block(codec, rate);
-    let mut encoder = match build_encoder(codec, rate, bits_per_coef, spec.band_step) {
+    let mut encoder = match build_encoder(codec, rate, bits_per_coef, band_step) {
         Ok(e) => e,
         Err(e) => return Outcome::fail(1, e),
     };
@@ -2145,7 +2761,7 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         // garbage quality. The warm-up pass keeps the pair built above;
         // each measured pass gets a fresh one.
         if run > 0 {
-            encoder = match build_encoder(codec, rate, bits_per_coef, spec.band_step) {
+            encoder = match build_encoder(codec, rate, bits_per_coef, band_step) {
                 Ok(e) => e,
                 Err(e) => return Outcome::fail(1, e),
             };
@@ -2221,6 +2837,15 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         j.value_u64(packet_count as u64);
         j.field("runs");
         j.value_u64(runs as u64);
+        j.field("input_changes");
+        j.arr();
+        for n in &notes {
+            j.elem();
+            j.value_str(n);
+        }
+        j.close();
+        j.field("fit");
+        j.value_str(fit_note.trim_start_matches(", "));
         j.field("payload_bytes");
         j.value_u64(payload_bytes);
         j.field("bits_per_sample");
@@ -2263,6 +2888,15 @@ pub fn benchmark_cmd(spec: &OpSpec, ctx: &Ctx<'_>) -> Outcome {
         Outcome::ok(j.finish())
     } else {
         let mut out = String::new();
+        if !notes.is_empty() {
+            out.push_str(&format!("input:    {}\n", notes.join(", ")));
+        }
+        if !fit_note.is_empty() {
+            out.push_str(&format!(
+                "fit:      {}\n",
+                fit_note.trim_start_matches(", ")
+            ));
+        }
         out.push_str(&format!(
             "benchmark: {} @ {} Hz, {} samples ({:.3} s), {} packets, quality {}\n",
             codec.name(),
@@ -2330,7 +2964,7 @@ pub fn video_corpus_cmd(json: bool, codec_id: CodecId, fps: u32, frames: usize) 
 
     let mut rows: Vec<(&'static str, VideoReport)> = Vec::new();
     for scene in corpus(w, h, format, frames, fps, 0x5EED_A11A) {
-        let (mut enc, private) = match codec.new_encoder(w, h, format, 30, None) {
+        let (mut enc, private) = match codec.new_encoder(w, h, format, Some(30), None) {
             Ok(v) => v,
             Err(e) => return Outcome::fail(1, e),
         };
@@ -2522,12 +3156,210 @@ fn render_corpus_table(
     Outcome::ok(out)
 }
 
+/// A JSON number, or `null` when the metric is undefined (or infinite,
+/// which JSON cannot carry).
+fn opt_f64(j: &mut J, v: Option<f64>) {
+    match v {
+        Some(v) if v.is_finite() => j.value_f64(v),
+        _ => j.value_null(),
+    }
+}
+
+/// 16-bit little-endian PCM bytes as `f32` in `-1.0..1.0`.
+fn s16_to_f32(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(2)
+        .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
+        .collect()
+}
+
+/// `tpt compare`: score a decoded (or otherwise degraded) file against its
+/// reference — SNR and log-spectral distance for two WAVs, mean PSNR and
+/// SSIM for two y4m clips — with the same §37 metrics `benchmark` uses, so
+/// a user can check any codec round trip (including other tools') without
+/// writing a script. Exit 0 whenever the comparison could be made.
+pub fn compare_cmd(reference: &str, test: &str, json: bool, ctx: &Ctx<'_>) -> Outcome {
+    if reference == "-" && test == "-" {
+        return Outcome::usage("compare reads at most one of its inputs from stdin");
+    }
+    let (a, b) = match (read_source(reference, ctx), read_source(test, ctx)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return Outcome::fail(1, e),
+    };
+    let video = (a.starts_with(b"YUV4MPEG2"), b.starts_with(b"YUV4MPEG2"));
+    match video {
+        (true, true) => compare_video(&a, &b, json),
+        (false, false) => compare_audio(&a, &b, json),
+        _ => Outcome::fail(
+            1,
+            "cannot compare an audio file with a video file (both must be wav, or both y4m)",
+        ),
+    }
+}
+
+fn compare_audio(a: &[u8], b: &[u8], json: bool) -> Outcome {
+    let (ra, tb) = match (decode_wav(a), decode_wav(b)) {
+        (Ok(x), Ok(y)) => (x, y),
+        (Err(e), _) => return Outcome::fail(1, format!("reference is not a readable wav: {e}")),
+        (_, Err(e)) => return Outcome::fail(1, format!("test is not a readable wav: {e}")),
+    };
+    if ra.format != SampleFormat::S16 || tb.format != SampleFormat::S16 {
+        return Outcome::fail(1, "compare needs 16-bit wav files");
+    }
+    if ra.sample_rate != tb.sample_rate
+        || ra.channel_layout.channels() != tb.channel_layout.channels()
+    {
+        return Outcome::fail(
+            1,
+            format!(
+                "files differ in format ({} ch @ {} Hz vs {} ch @ {} Hz)",
+                ra.channel_layout.channels(),
+                ra.sample_rate,
+                tb.channel_layout.channels(),
+                tb.sample_rate
+            ),
+        );
+    }
+    let (x, y) = (s16_to_f32(&ra.samples), s16_to_f32(&tb.samples));
+    let n = x.len().min(y.len());
+    if n == 0 {
+        return Outcome::fail(1, "nothing to compare: a file has no samples");
+    }
+    let (x, y) = (&x[..n], &y[..n]);
+    let snr = crate::quality::snr_db(x, y);
+    let lsd = crate::quality::log_spectral_distance_db(x, y, 1024);
+    let length_note = (ra.samples.len() != tb.samples.len()).then(|| {
+        format!(
+            "lengths differ ({} vs {} bytes of audio); compared the first {} samples",
+            ra.samples.len(),
+            tb.samples.len(),
+            n
+        )
+    });
+    if json {
+        let mut j = J::new();
+        j.object();
+        j.field("kind");
+        j.value_str("audio");
+        j.field("samples_compared");
+        j.value_u64(n as u64);
+        j.field("snr_db");
+        opt_f64(&mut j, snr);
+        j.field("log_spectral_distance_db");
+        opt_f64(&mut j, lsd);
+        j.field("length_mismatch");
+        j.value_bool(length_note.is_some());
+        j.close();
+        return Outcome::ok(j.finish() + "\n");
+    }
+    let mut out = format!(
+        "SNR: {}\nLog-spectral distance: {}\n",
+        match snr {
+            Some(v) if v.is_infinite() => "identical (bit-exact)".to_string(),
+            Some(v) => format!("{v:.2} dB"),
+            None => "n/a".to_string(),
+        },
+        lsd.map_or("n/a".to_string(), |v| format!("{v:.2} dB"))
+    );
+    if let Some(note) = length_note {
+        out.push_str(&format!("note: {note}\n"));
+    }
+    Outcome::ok(out)
+}
+
+fn compare_video(a: &[u8], b: &[u8], json: bool) -> Outcome {
+    let ((pa, fa), (pb, fb)) = match (y4m::parse(a), y4m::parse(b)) {
+        (Ok(x), Ok(y)) => (x, y),
+        (Err(e), _) => return Outcome::fail(1, format!("reference is not a readable y4m: {e}")),
+        (_, Err(e)) => return Outcome::fail(1, format!("test is not a readable y4m: {e}")),
+    };
+    if (pa.width, pa.height, pa.format) != (pb.width, pb.height, pb.format) {
+        return Outcome::fail(
+            1,
+            format!(
+                "clips differ in geometry ({}x{} vs {}x{})",
+                pa.width, pa.height, pb.width, pb.height
+            ),
+        );
+    }
+    let n = fa.len().min(fb.len());
+    if n == 0 {
+        return Outcome::fail(1, "nothing to compare: a clip has no frames");
+    }
+    // Mean over frames; a bit-exact frame has infinite PSNR, which would
+    // swamp the mean, so identical frames are counted separately.
+    let (mut psnr_sum, mut ssim_sum) = (0f64, 0f64);
+    let (mut finite, mut identical) = (0usize, 0usize);
+    let mut worst: Option<f64> = None;
+    for (r, t) in fa.iter().zip(fb.iter()) {
+        if let Some(p) = crate::quality::psnr_db(r, t) {
+            if p.is_finite() {
+                psnr_sum += p;
+                finite += 1;
+                worst = Some(worst.map_or(p, |w| w.min(p)));
+            } else {
+                identical += 1;
+            }
+        }
+        ssim_sum += crate::quality::ssim(r, t).unwrap_or(1.0);
+    }
+    let mean_psnr = (finite > 0).then(|| psnr_sum / finite as f64);
+    let mean_ssim = ssim_sum / n as f64;
+    let length_mismatch = fa.len() != fb.len();
+    if json {
+        let mut j = J::new();
+        j.object();
+        j.field("kind");
+        j.value_str("video");
+        j.field("frames_compared");
+        j.value_u64(n as u64);
+        j.field("mean_psnr_db");
+        opt_f64(&mut j, mean_psnr);
+        j.field("worst_psnr_db");
+        opt_f64(&mut j, worst);
+        j.field("identical_frames");
+        j.value_u64(identical as u64);
+        j.field("mean_ssim");
+        j.value_f64(mean_ssim);
+        j.field("length_mismatch");
+        j.value_bool(length_mismatch);
+        j.close();
+        return Outcome::ok(j.finish() + "\n");
+    }
+    let mut out =
+        format!(
+        "Frames compared: {n}\nMean PSNR: {}\nWorst-frame PSNR: {}\nMean SSIM: {mean_ssim:.4}\n",
+        mean_psnr.map_or("identical (bit-exact)".to_string(), |v| format!("{v:.2} dB")),
+        worst.map_or("n/a".to_string(), |v| format!("{v:.2} dB")),
+    );
+    if identical > 0 && finite > 0 {
+        out.push_str(&format!(
+            "({identical} frames bit-exact, excluded from PSNR)\n"
+        ));
+    }
+    if length_mismatch {
+        out.push_str(&format!(
+            "note: lengths differ ({} vs {} frames); compared the first {n}\n",
+            fa.len(),
+            fb.len()
+        ));
+    }
+    Outcome::ok(out)
+}
+
 /// Execute a parsed command.
 pub fn execute(cmd: &Command, ctx: &Ctx<'_>) -> Outcome {
     match cmd {
         Command::Probe { input, json } => probe(input, *json, ctx),
         Command::Inspect { input } => probe(input, false, ctx),
         Command::ListCodecs => list_codecs(),
+        Command::Completions { shell } => crate::tools::completions(shell),
+        Command::Doctor => crate::tools::doctor(),
+        Command::Compare {
+            reference,
+            test,
+            json,
+        } => compare_cmd(reference, test, *json, ctx),
         Command::Encode(spec) => encode_cmd(spec, ctx),
         Command::Decode(spec) => decode_cmd(spec, ctx),
         Command::Transcode(spec) => transcode_cmd(spec, ctx),

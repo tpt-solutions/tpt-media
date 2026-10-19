@@ -562,7 +562,8 @@ impl VaultEncoder {
         let ltr_update = !is_b
             && self.enc.long_term_interval > 0
             && self.since_ltr + 1 >= u64::from(self.enc.long_term_interval);
-        let ltr_used = !is_b && !matches!(ftype, crate::ftype::I) && num_refs > 0 && self.ltr.is_some();
+        let ltr_used =
+            !is_b && !matches!(ftype, crate::ftype::I) && num_refs > 0 && self.ltr.is_some();
         let rc = self.enc.target_bits_per_frame.is_some();
         let target = self.enc.target_bits_per_frame.unwrap_or(0) as u64;
         let mut qp = self.rc_qp.clamp(1, i32::from(MAX_QP)) as u8;
@@ -591,11 +592,31 @@ impl VaultEncoder {
         let is_b = ftype == crate::ftype::B;
         let mut weight = 2u8;
         let mut out = if is_b {
-            let mut best =
-                self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight, false, false)?;
+            let mut best = self.encode_at_qp(
+                &src,
+                qp,
+                PassParams {
+                    ftype,
+                    poc,
+                    num_refs,
+                    b_weight_past: weight,
+                    ltr_used: false,
+                    ltr_update: false,
+                },
+            )?;
             for w in [1u8, 3] {
-                let cand =
-                    self.encode_at_qp(&src, qp, ftype, poc, num_refs, w, false, false)?;
+                let cand = self.encode_at_qp(
+                    &src,
+                    qp,
+                    PassParams {
+                        ftype,
+                        poc,
+                        num_refs,
+                        b_weight_past: w,
+                        ltr_used: false,
+                        ltr_update: false,
+                    },
+                )?;
                 if cand.frame_j < best.frame_j {
                     best = cand;
                     weight = w;
@@ -603,7 +624,18 @@ impl VaultEncoder {
             }
             best
         } else {
-            self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight, ltr_used, ltr_update)?
+            self.encode_at_qp(
+                &src,
+                qp,
+                PassParams {
+                    ftype,
+                    poc,
+                    num_refs,
+                    b_weight_past: weight,
+                    ltr_used,
+                    ltr_update,
+                },
+            )?
         };
         let mut bits = out.bits;
         let mut attempts = 1usize;
@@ -615,8 +647,18 @@ impl VaultEncoder {
                     1
                 };
                 qp = (qp + jump).min(MAX_QP);
-                out =
-                    self.encode_at_qp(&src, qp, ftype, poc, num_refs, weight, ltr_used, ltr_update)?;
+                out = self.encode_at_qp(
+                    &src,
+                    qp,
+                    PassParams {
+                        ftype,
+                        poc,
+                        num_refs,
+                        b_weight_past: weight,
+                        ltr_used,
+                        ltr_update,
+                    },
+                )?;
                 bits = out.bits;
                 attempts += 1;
             }
@@ -632,12 +674,14 @@ impl VaultEncoder {
                 let finer = self.encode_at_qp(
                     &src,
                     finer_qp,
-                    ftype,
-                    poc,
-                    num_refs,
-                    weight,
-                    ltr_used,
-                    ltr_update,
+                    PassParams {
+                        ftype,
+                        poc,
+                        num_refs,
+                        b_weight_past: weight,
+                        ltr_used,
+                        ltr_update,
+                    },
                 )?;
                 let credit = (-self.rc_debt) as u64;
                 if finer.bits <= frame_target + credit.min(frame_target.saturating_mul(2)) {
@@ -708,13 +752,16 @@ impl VaultEncoder {
         &mut self,
         src: &Picture,
         qp: u8,
-        ftype: u8,
-        poc: u16,
-        num_refs: usize,
-        b_weight_past: u8,
-        ltr_used: bool,
-        ltr_update: bool,
+        pass: PassParams,
     ) -> CodecResult<EncodedFrame> {
+        let PassParams {
+            ftype,
+            poc,
+            num_refs,
+            b_weight_past,
+            ltr_used,
+            ltr_update,
+        } = pass;
         let intra = ftype == crate::ftype::I;
         let step = quant_step(qp);
         let mut fe = FrameEnc {
@@ -803,6 +850,19 @@ impl VaultEncoder {
             frame_j: fe.chosen_j,
         })
     }
+}
+
+/// The per-frame settings one [`VaultEncoder::encode_at_qp`] pass encodes
+/// with. The quantiser is passed separately because the rate-control loop
+/// moves it between passes while everything here stays fixed.
+#[derive(Clone, Copy)]
+struct PassParams {
+    ftype: u8,
+    poc: u16,
+    num_refs: usize,
+    b_weight_past: u8,
+    ltr_used: bool,
+    ltr_update: bool,
 }
 
 /// The output of one [`VaultEncoder::encode_at_qp`] pass: the

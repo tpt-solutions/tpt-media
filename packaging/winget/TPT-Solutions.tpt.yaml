@@ -1,0 +1,6 @@
+# winget version manifest TEMPLATE. Not submitted; see ../README.md.
+PackageIdentifier: TPTSolutions.tpt
+PackageVersion: VERSION
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

@@ -5,7 +5,7 @@
 //! ```text
 //! FileHeader (20 bytes)
 //!   magic        u8[4]    = "TPTM"
-//!   version      u16      = 0x0001 (major = >> 8, minor = & 0xFF)
+//!   version      u16      = 0x0002 (major = >> 8, minor = & 0xFF)
 //!   header_size  u16      = 20
 //!   timebase_num u32
 //!   timebase_den u32
@@ -27,8 +27,11 @@
 //!   (duration:u32), payload, (crc:u32)]`. Flags: bit 0 = keyframe,
 //!   bit 1 = end-of-frame, bit 2 = discontinuity, bit 3 = duration present,
 //!   bit 4 = checksum present.
+//! - `PKTS` — a run of up to 32 packets of one track, with timestamps as
+//!   deltas from the run's base. Version 0.2 writers use it for every packet;
+//!   see `runs` for the layout. Version 0.1 files contain only `CLUS`.
 //! - `IDX ` — optional per-track index (written by `finalize`), with its own
-//!   version byte.
+//!   version byte. Version 2 has one entry per chunk (a `PKTS` run or a `CLUS`).
 //! - `CRC1` — optional container-level CRC-32 footer (written by `finalize`).
 //!
 //! See `docs/container-design.md` for the full specification.
@@ -42,17 +45,22 @@ mod crc32;
 mod demuxer;
 mod format;
 mod muxer;
+mod runs;
 
 pub use crc32::crc32;
 pub use demuxer::{ChunkIndexEntry, TptDemuxer};
 pub use format::{
     chunk_id_is_reserved, decode_clus, decode_idx, decode_tmta, decode_trak, encode_chunk,
     encode_clus, encode_idx, encode_tmta, encode_trak, read_chunk_header, DecodedCluster,
-    FileHeader, IndexEntry, IndexFile, TptError, CHUNK_CLUS, CHUNK_CRC1, CHUNK_IDX, CHUNK_TMTA,
-    CHUNK_TRAK, CLUS_DISCONTINUITY, CLUS_END_OF_FRAME, CLUS_HAS_CHECKSUM, CLUS_HAS_DURATION,
-    CLUS_KEYFRAME, INDEX_VERSION, MAGIC, VERSION,
+    FileHeader, IndexEntry, IndexFile, TptError, CHUNK_CLUS, CHUNK_CRC1, CHUNK_IDX, CHUNK_PKTS,
+    CHUNK_TMTA, CHUNK_TRAK, CLUS_DISCONTINUITY, CLUS_END_OF_FRAME, CLUS_HAS_CHECKSUM,
+    CLUS_HAS_DURATION, CLUS_KEYFRAME, INDEX_VERSION, INDEX_VERSIONS, MAGIC, VERSION,
 };
 pub use muxer::{packet_to_clus_flags, TptMuxer};
+pub use runs::{
+    decode_run, run_record, run_records, PacketRecord, RunBuilder, RunHeader, PKTS_HEADER,
+    RECORD_MAX_OVERHEAD, RUN_MAX_BYTES, RUN_MAX_PACKETS,
+};
 
 use alloc::vec::Vec;
 use tpt_media_container::Container;
@@ -183,7 +191,7 @@ mod tests {
             Err(TptError::UnsupportedVersion)
         ));
         // Future minor within major 0.
-        b[4] = 0x02;
+        b[4] = 0x03;
         b[5] = 0x00;
         assert!(matches!(
             FileHeader::from_bytes(&b),

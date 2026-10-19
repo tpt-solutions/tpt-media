@@ -1,6 +1,6 @@
 //! `TptDemuxer` — strict and streaming readers for the `.tpt` container.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use tpt_media_codec::ResourceLimits;
@@ -10,9 +10,10 @@ use tpt_media_core::{Packet, PacketFlags, Stream, Timestamp, Track};
 use crate::crc32::crc32;
 use crate::format::{
     chunk_id_is_reserved, decode_clus, decode_idx, decode_tmta, decode_trak, read_chunk_header,
-    FileHeader, IndexFile, TptError, CHUNK_CLUS, CHUNK_CRC1, CHUNK_IDX, CHUNK_TMTA, CHUNK_TRAK,
-    CLUS_KEYFRAME,
+    FileHeader, IndexFile, TptError, CHUNK_CLUS, CHUNK_CRC1, CHUNK_IDX, CHUNK_PKTS, CHUNK_TMTA,
+    CHUNK_TRAK, CLUS_DISCONTINUITY, CLUS_END_OF_FRAME, CLUS_KEYFRAME, INDEX_VERSIONS,
 };
+use crate::runs::{decode_run, run_record, run_records, PacketRecord};
 
 /// One cluster recorded by the scan (and subsequently the in-memory index).
 #[derive(Copy, Clone, Debug)]
@@ -25,6 +26,9 @@ pub struct ChunkIndexEntry {
     pub pts: u64,
     /// Owning track ID.
     pub track_id: u8,
+    /// Index of the packet within its chunk: always 0 for `CLUS`, and the
+    /// record number for a `PKTS` run.
+    pub slot: u16,
 }
 
 /// Demuxer for `.tpt` byte streams.
@@ -185,12 +189,25 @@ impl<'a> TptDemuxer<'a> {
                         keyframe: (cluster.flags & CLUS_KEYFRAME) != 0,
                         pts: cluster.pts,
                         track_id: cluster.track_id,
+                        slot: 0,
                     });
+                }
+            } else if id == CHUNK_PKTS {
+                if let Some((run, records)) = run_records(body) {
+                    for (slot, rec) in records.iter().enumerate() {
+                        self.index.push(ChunkIndexEntry {
+                            offset: self.pos,
+                            keyframe: rec.flags & CLUS_KEYFRAME != 0,
+                            pts: rec.pts,
+                            track_id: run.track_id,
+                            slot: slot as u16,
+                        });
+                    }
                 }
             } else if id == CHUNK_IDX {
                 if let Some(file) = decode_idx(body) {
                     // Index versioning: only an understood version is used.
-                    if file.version == crate::format::INDEX_VERSION {
+                    if INDEX_VERSIONS.contains(&file.version) {
                         self.disk_index = Some(file);
                     }
                 }
@@ -269,8 +286,20 @@ impl<'a> TptDemuxer<'a> {
     /// finalized container.
     pub fn reconstruct_trailer(&self) -> Vec<u8> {
         use crate::format::{encode_chunk, encode_idx, CHUNK_IDX, INDEX_VERSION};
+        // One on-disk entry per chunk: the first packet's pts, and a
+        // keyframe flag that is set if any packet in the chunk is one.
         let mut tracks: BTreeMap<u8, Vec<crate::format::IndexEntry>> = BTreeMap::new();
+        let mut last: Option<(u8, usize)> = None;
         for e in &self.index {
+            if last == Some((e.track_id, e.offset)) {
+                if e.keyframe {
+                    if let Some(entry) = tracks.get_mut(&e.track_id).and_then(|v| v.last_mut()) {
+                        entry.keyframe = true;
+                    }
+                }
+                continue;
+            }
+            last = Some((e.track_id, e.offset));
             tracks
                 .entry(e.track_id)
                 .or_default()
@@ -311,13 +340,22 @@ impl<'a> TptDemuxer<'a> {
     /// can decide what to do.
     pub fn verify_cluster_checksums(&self) -> Result<(), Vec<(u8, usize)>> {
         let mut bad = Vec::new();
+        // A `PKTS` run has one checksum for all its packets: check each chunk once.
+        let mut checked = BTreeSet::new();
         for e in &self.index {
-            let (_id, size, body_start) = read_chunk_header(self.bytes, e.offset)
+            if !checked.insert(e.offset) {
+                continue;
+            }
+            let (id, size, body_start) = read_chunk_header(self.bytes, e.offset)
                 .ok_or_else(|| vec![(e.track_id, e.offset)])?;
-            if let Some(cluster) = decode_clus(&self.bytes[body_start..body_start + size]) {
-                if !cluster.crc_valid {
-                    bad.push((e.track_id, e.offset));
-                }
+            let body = &self.bytes[body_start..body_start + size];
+            let valid = if id == CHUNK_PKTS {
+                decode_run(body).is_none_or(|run| run.crc_valid)
+            } else {
+                decode_clus(body).is_none_or(|cluster| cluster.crc_valid)
+            };
+            if !valid {
+                bad.push((e.track_id, e.offset));
             }
         }
         if bad.is_empty() {
@@ -355,10 +393,13 @@ impl<'a> TptDemuxer<'a> {
             .position(|e| e.keyframe && e.pts as i64 >= target_pts)
             .unwrap_or(entries.len());
         let entry = entries.get(pos).ok_or(ContainerError::Truncated)?;
+        // Land on the keyframe packet itself, which may sit inside a run.
         self.cursor = self
             .index
             .iter()
-            .position(|e| e.offset >= entry.offset)
+            .position(|e| {
+                e.track_id == entry.track_id && e.offset == entry.offset && e.slot == entry.slot
+            })
             .ok_or(ContainerError::Truncated)?;
         Ok(())
     }
@@ -383,37 +424,48 @@ impl<'a> Container for TptDemuxer<'a> {
         while self.cursor < self.index.len() {
             let entry = self.index[self.cursor];
             self.cursor += 1;
-            let (_id, size, body_start) = read_chunk_header(self.bytes, entry.offset)
+            let (id, size, body_start) = read_chunk_header(self.bytes, entry.offset)
                 .ok_or(ContainerError::MalformedChunk)?;
             let body = &self.bytes[body_start..body_start + size];
-            if let Some(cluster) = decode_clus(body) {
+            let record = if id == CHUNK_PKTS {
+                run_record(body, entry.slot as usize)
+            } else {
+                decode_clus(body).map(|c| PacketRecord {
+                    pts: c.pts,
+                    dts: c.dts,
+                    flags: c.flags,
+                    duration: c.duration,
+                    payload: c.payload,
+                })
+            };
+            if let Some(rec) = record {
                 let timebase = self
                     .stream
-                    .track(cluster.track_id)
+                    .track(entry.track_id)
                     .map(|t| t.timebase)
                     .unwrap_or(self.header.timebase);
                 let mut pkt = Packet::empty(
-                    cluster.track_id,
+                    entry.track_id,
                     Timestamp {
-                        ticks: cluster.pts as i64,
+                        ticks: rec.pts as i64,
                         timebase,
                     },
                 );
                 pkt.dts = Timestamp {
-                    ticks: cluster.dts as i64,
+                    ticks: rec.dts as i64,
                     timebase,
                 };
-                pkt.data = cluster.payload.to_vec();
-                if (cluster.flags & CLUS_KEYFRAME) != 0 {
+                pkt.data = rec.payload.to_vec();
+                if rec.flags & CLUS_KEYFRAME != 0 {
                     pkt.flags |= PacketFlags::KEYFRAME;
                 }
-                if cluster.flags & crate::format::CLUS_END_OF_FRAME != 0 {
+                if rec.flags & CLUS_END_OF_FRAME != 0 {
                     pkt.flags |= PacketFlags::END_OF_FRAME;
                 }
-                if cluster.flags & crate::format::CLUS_DISCONTINUITY != 0 {
+                if rec.flags & CLUS_DISCONTINUITY != 0 {
                     pkt.flags |= PacketFlags::DISCONTINUITY;
                 }
-                if let Some(d) = cluster.duration {
+                if let Some(d) = rec.duration {
                     pkt.duration = Some(tpt_media_core::Duration {
                         ticks: d as i64,
                         timebase,

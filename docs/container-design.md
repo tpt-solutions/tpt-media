@@ -22,7 +22,8 @@ All integers are little-endian.
 FileHeader (20 bytes)
   magic        u8[4]   = "TPTM"        — 0x54 0x50 0x54 0x4D
   version      u16                       — major in high byte, minor in low
-                                         — currently 0x0001 (major 0, minor 1)
+                                         — currently 0x0002 (major 0, minor 2);
+                                         —   0x0001 files are still read
   header_size  u16                       — size of this header (currently 20;
                                          — 16-byte files version 0.1 still parse)
   timebase_num u32                       — numerator of global timebase
@@ -65,7 +66,25 @@ TrackMetadata ("TMTA")                   — typed key/value pairs for one track
       bool        1 byte
       bytes       u32 len + bytes
 
-DataCluster ("CLUS")
+PacketRun ("PKTS")                      — since 0.2; written for every packet
+  track_id     u8
+  flags        u8                        — bit 0: checksum present
+  count        u16                       — records, 1 to 32
+  base_pts     u64                       — track timebase
+  base_dts     u64                       — track timebase
+  record × count:
+    flags      u8                        — bit 0 keyframe, bit 1 end-of-frame,
+                                         —   bit 2 discontinuity, bit 3 duration
+                                         —   present, bit 4 dts present
+    pts_delta  i32                       — pts − base_pts
+    dts_delta  i32                       — iff bit 4: dts − base_dts (else dts = pts)
+    duration   u32                       — iff bit 3 (ticks, track timebase)
+    len        u32
+    payload    u8[len]
+  crc32        u32                       — iff flags bit 0: CRC-32 of every byte of
+                                         —   the body before this field
+
+DataCluster ("CLUS")                     — version 0.1 layout; still read
   pts          u64                       — presentation timestamp, track timebase
   dts          u64                       — decode timestamp, track timebase
   flags        u8                        — bit 0 keyframe, bit 1 end-of-frame,
@@ -78,15 +97,16 @@ DataCluster ("CLUS")
                                          —   to but excluding this field)
 
 Index ("IDX ")
-  index_version u8                       — currently 1
+  index_version u8                       — currently 2 (1 is still read)
   track_count  u8
   per track:
     track_id   u8
-    entry_count u32
+    entry_count u32                      — one entry per chunk (version 2) or per
+                                         —   CLUS (version 1)
     per entry:
-      pts      u64                       — presentation timestamp
-      offset   u64                       — absolute byte offset of the CLUS header
-      keyframe u8                        — 1 if keyframe
+      pts      u64                       — pts of the chunk's first packet
+      offset   u64                       — absolute byte offset of the chunk header
+      keyframe u8                        — 1 if any packet in the chunk is a keyframe
 
 Checksum footer ("CRC1")
   crc          u32                       — CRC-32 of every byte up to but excluding
@@ -95,10 +115,14 @@ Checksum footer ("CRC1")
 
 ## Versioning (file header)
 
-- `version` is `major << 8 | minor`. The current version is `0x0001`.
+- `version` is `major << 8 | minor`. The current version is `0x0002`.
 - A reader must accept any version equal to its own or an earlier minor in
   the same major. `version == 0`, a larger minor, or any higher major is
   rejected with `UnsupportedVersion`.
+- Version 0.2 changed the packet framing (`PKTS` runs) and the index
+  (one entry per chunk). A 0.2 reader reads 0.1 files; a 0.1 reader does not
+  know `PKTS`, skips it, and so sees no packets in a 0.2 file. The version
+  field is how it can tell.
 - `header_size` must be at least 16. Chunk parsing begins at `header_size`,
   so larger headers can be added without breaking readers.
 - The `reserved` bytes are ignored on read (forward compatibility: future
@@ -110,11 +134,32 @@ Checksum footer ("CRC1")
 - Any unknown chunk ID is skipped; the parser advances by `chunk_size`.
 - The `CLUS` flags byte is bitwise-mapped; unknown flag bits are ignored.
 - Per-cluster and footer checksums are optional and disabled by default.
+- A `PKTS` run's checksum covers the whole run and is checked once; a
+  mismatch drops every packet in the run.
+
+## Packet Runs (0.2)
+
+A version 0.2 writer puts packets in `PKTS` runs rather than one `CLUS` per
+packet. A run holds up to 32 packets of one track, and its timestamps are
+deltas from the run's base, so the framing for an audio packet is about 9
+bytes, against about 43 for a `CLUS`. The writer closes a run when it holds
+32 packets, when the next packet is for another track or cannot be stored as
+an `i32` delta, when the run would exceed 64 KiB (a run holding one packet may
+be larger), before any `CLUS` chunk, and at `finalize`.
+
+Measured on a 30 s Cinder file (`ed_music_30s.wav`, quality 80): 339,273 bytes
+as version 0.1, 162,871 bytes as version 0.2 (the payload is 97,181 bytes in
+both).
+
+A reader that scans a run yields one packet per record, in order. The scan
+index holds one entry per packet, so seeking works per packet, while the
+on-disk `IDX ` holds one entry per chunk.
 
 ## Backward Compatibility
 
 A reader of version `X` can read a file written by an encoder of version `X`
-or any earlier minor version. Major version bumps are reserved for
+or any earlier minor version. Version 0.2 readers read version 0.1 files,
+which contain only `CLUS` chunks. Major version bumps are reserved for
 binary-incompatible header changes. Files written by version 0.1 (16-byte
 header, `TRAK`/`CLUS` without the extended fields) are no longer recognized
 as *valid* 0.1 files only if their magic matches; older 0.1 tracks parse as
@@ -154,7 +199,10 @@ index (recovery).
 The container supports being written in a streaming mode:
 
 - Chunks are flushed to the underlying writer as they are produced;
-  no seek-back is required.
+  no seek-back is required. A version 0.2 writer holds up to one `PKTS` run
+  per track back until the run is full or the next packet starts another;
+  `TptMuxer::flush` writes it early, which a live writer does before it sends
+  bytes on.
 - The parser (`new_streaming`) tolerates a partial trailing chunk; `feed()`
   resumes scanning once the buffer is extended (required: same prefix).
 - An `IDX ` chunk can be appended at the end of the stream, or omitted

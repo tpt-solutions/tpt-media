@@ -17,12 +17,12 @@ Cinder/Aura, 8/16 kHz for Reed.
 | Aura   | High-fidelity archival | LPC lossless / MDCT lossy | up to 96 kHz  | up to 8   | implemented (S16 mono, 44.1/48 kHz) |
 | Reed    | Edge / IoT speech      | LPC + VQ                  | 8–16 kHz     | mono      | implemented (S16 mono, 8/16 kHz) |
 
-### Reed v0.1 — implemented design (2026-09-28)
+### Reed v2 — implemented design (2026-09-28; wire version 2 on 2026-10-19)
 
 A source-filter (LPC vocoder) model in the LPC-10 tradition, at a fixed
 20 ms frame (160/320 samples at 8/16 kHz). Per frame the encoder
-transmits a 90-bit parameter payload (+4-byte CRC-32 trailer, the family
-convention): 90 bits of coded parameters = 4.5 kbps; the wire-rounded
+transmits a 91-bit parameter payload (+4-byte CRC-32 trailer, the family
+convention): 91 bits of coded parameters = 4.55 kbps; the wire-rounded
 16-byte packet = 6.4 kbps at the container level.
 
 - **Spectral envelope** — Hamming-windowed autocorrelation LPC (order 2–16,
@@ -39,7 +39,7 @@ convention): 90 bits of coded parameters = 4.5 kbps; the wire-rounded
   The codebook is *never transmitted*: both sides derive the identical
   unit-RMS entry from a SplitMix64 stream seeded by the index, so it
   costs zero wire bits and needs no training corpus.
-- **Gain** — LPC-residual RMS in 1 dB steps over a 62 dB range; index 0
+- **Gain** — the excitation RMS that gives the input's power through the quantised synthesis filter (the residual RMS for a whitening predictor), in 1 dB steps over a 126 dB range (7 bits since v2; v1 had 6 bits over 62 dB, which clamped the gain of quiet voiced frames); index 0
   is exact mute, so digital silence round-trips to digital silence.
 - **Packet loss** — `conceal()` repeats the last good envelope/voicing/
   pitch with gain decayed 6 dB per concealed frame (fading to silence).
@@ -50,21 +50,21 @@ convention): 90 bits of coded parameters = 4.5 kbps; the wire-rounded
   vowels can lock onto formant ringing near half the true period (the
   tests assert periodicity at the transmitted lag instead).
 
-### Cinder v5 — wire format (current)
+### Cinder v6 — wire format (current)
 
-`codecs/cinder/src/lib.rs` (`VERSION = 5`). Versions 1–4 are rejected. The reasons for each change are listed after the table, and the earlier layouts follow it.
+`codecs/cinder/src/lib.rs` (`VERSION = 6`). Versions 1–5 are rejected. The reasons for each change are listed after the table, and the earlier layouts follow it.
 
 The packet is a 2-byte big-endian version, readable before any coded data, followed by one range-coded body (`RangeEncoder`, uniform symbols for the raw fields):
 
 | Field | Coding | Contents |
 | ----- | ------ | -------- |
-| `version` | 16 raw bits | `5`; any other value fails with `CodecError::Unsupported` before any further parse |
+| `version` | 16 raw bits | `6`; any other value fails with `CodecError::Unsupported` before any further parse |
 | `frame_size` | 1 bit | `0` = 128 samples, `1` = 256 |
 | `n_bands` | 8 bits | number of spectral bands |
 | step mode | 1 bit | `0` = one step for every band (the common case); `1` = a 16-bit step per band |
 | steps | 16 bits each | one step, or one per band; units of `1 / STEP_UNIT` (1024), so 0.001 to 64 |
 | loudness class | 4 bits | selects one of 16 geometric level models, means growing 1.7× per class from 1/16 |
-| levels | range-coded, one per coded coefficient | zigzag value under the class model (255-symbol alphabet); symbol 255 is an escape, followed by the excess in `bits_per_coef` raw bits |
+| levels | range-coded, one per coded coefficient | zigzag value under the class model (255-symbol alphabet); symbol 255 is an escape, followed by the excess: an Elias-gamma prefix of the excess shifted right by `bits_per_coef`, then `bits_per_coef` raw low bits. Levels are at most 2^20 − 1 |
 
 The encoder costs every class with exact code lengths and sends the shortest. It builds one model at a time, because holding all sixteen breaks the Cinder working-set budget (32 KiB). The models use IEEE multiply and floor only, so encoder and decoder derive identical integer tables on any platform. Nothing carries over between packets, so a lost packet cannot desynchronise the decoder, which the concealment path depends on.
 
@@ -73,6 +73,7 @@ Why each step was taken:
 - **v3** made the step a fixed-point `u16` in 1/1024 units. Whole-number steps truncated any step below 1.0, so those decoded to near silence.
 - **v4** dropped the per-band 8-bit count and sent one step per packet. Levels were Rice-coded, which spends at least one bit per coefficient, so the rate floor was about 48 kbps.
 - **v5** range-codes the levels under the loudness class. That removes the per-coefficient floor, so the rate is no longer bounded below by the code.
+- **v6** codes the escape excess with an Elias-gamma prefix. In v5 the excess took `bits_per_coef` bits, so a level was capped at about ±127 at 8 bits. At fine band steps the true levels are far larger, and they clipped, so the SNR collapsed (on the 30 s music corpus: 12.2 dB at a step of 1/16, against 36.3 dB with v6). Finer steps are now usable.
 
 The v5 measurements are in `docs/benchmarks.md`.
 

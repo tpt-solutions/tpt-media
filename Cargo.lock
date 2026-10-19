@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-audio-aura"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "thiserror",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-audio-cinder"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "thiserror",
@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-audio-reed"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "libm",
@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tpt-audio-aura",
  "tpt-audio-cinder",
@@ -649,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-container"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "thiserror",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-media-bitstream"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "libm",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-media-codec"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitflags",
  "thiserror",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-media-container"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror",
  "tpt-media-bitstream",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-media-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitflags",
  "libm",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-media-io"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libm",
  "tpt-dsp-io",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-media-pipeline"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "tpt-container",
@@ -736,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-media-probe"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tpt-container",
  "tpt-media-codec",
@@ -746,11 +746,11 @@ dependencies = [
 
 [[package]]
 name = "tpt-media-representation"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "tpt-media-research"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "tpt-dsp-core",
@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-media-sys"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cc",
  "tpt-audio-aura",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-video-mote"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "tpt-dsp-core",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-video-thrum"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "tpt-dsp-core",
@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-video-vault"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "tpt-dsp-core",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-web"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tpt-audio-aura",
  "tpt-audio-cinder",

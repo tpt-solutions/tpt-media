@@ -211,3 +211,84 @@ fn corruption_sweep_never_panics() {
         );
     }
 }
+
+/// Voiced input must come back at its own level. The excitation gain is the
+/// one thing that sets it, and it was wrong for voiced frames (a 200 Hz tone
+/// came back up to 8 dB loud) until the gain was matched to the input power
+/// through the quantized synthesis filter. Measured after warm-up, when the
+/// envelope has settled.
+#[test]
+fn voiced_tone_keeps_its_level_after_warm_up() {
+    let fw = CodecConfig::default();
+    let mut enc = ReedEncoder::new(fw.clone(), ReedConfig::default()).unwrap();
+    let mut dec = ReedDecoder::new(fw, ReedConfig::default()).unwrap();
+    let blocks = 40i64;
+    let mut in_sq = 0f64;
+    let mut out_sq = 0f64;
+    let mut n = 0usize;
+    for i in 0..blocks {
+        let samples: Vec<u8> = (0..BLOCK)
+            .flat_map(|s| {
+                let t = (i as usize * BLOCK + s) as f64;
+                let v = (t * 2.0 * core::f64::consts::PI * 200.0 / RATE as f64).sin() * 6000.0;
+                (v as i16).to_le_bytes()
+            })
+            .collect();
+        let frame = frame_from_s16(samples, i * BLOCK as i64);
+        for pkt in enc.encode(&frame).unwrap() {
+            for out in dec.decode(&pkt).unwrap() {
+                if i >= 10 {
+                    for s in 0..BLOCK {
+                        let want = frame.s16(0, s).unwrap() as f64;
+                        let got = out.s16(0, s).unwrap() as f64;
+                        in_sq += want * want;
+                        out_sq += got * got;
+                        n += 1;
+                    }
+                }
+            }
+        }
+    }
+    let level_db = 10.0 * (out_sq / in_sq).log10();
+    assert!(
+        level_db.abs() < 3.0,
+        "decoded voiced level {level_db:.1} dB off input over {n} samples"
+    );
+}
+
+/// A quiet voiced tone (about -52 dBFS) must not come back loud. Version 1
+/// floored the gain at -62 dB, and a high-Q resonance needs about -78 dB, so
+/// such a tone decoded about 16 dB too loud; version 2's 7-bit gain covers it.
+#[test]
+fn quiet_voiced_tone_keeps_its_level_after_warm_up() {
+    let fw = CodecConfig::default();
+    let mut enc = ReedEncoder::new(fw.clone(), ReedConfig::default()).unwrap();
+    let mut dec = ReedDecoder::new(fw, ReedConfig::default()).unwrap();
+    let mut in_sq = 0f64;
+    let mut out_sq = 0f64;
+    for i in 0..40i64 {
+        let samples: Vec<u8> = (0..BLOCK)
+            .flat_map(|s| {
+                let t = (i as usize * BLOCK + s) as f64;
+                let v = (t * 2.0 * core::f64::consts::PI * 200.0 / RATE as f64).sin() * 80.0;
+                (v as i16).to_le_bytes()
+            })
+            .collect();
+        let frame = frame_from_s16(samples, i * BLOCK as i64);
+        for pkt in enc.encode(&frame).unwrap() {
+            for out in dec.decode(&pkt).unwrap() {
+                if i >= 10 {
+                    for s in 0..BLOCK {
+                        let want = frame.s16(0, s).unwrap() as f64;
+                        let got = out.s16(0, s).unwrap() as f64;
+                        in_sq += want * want;
+                        out_sq += got * got;
+                    }
+                }
+            }
+        }
+    }
+    let level_db = 10.0 * (out_sq / in_sq).log10();
+    assert!(level_db.abs() < 3.0, "quiet voiced level {level_db:.1} dB off input");
+}
+

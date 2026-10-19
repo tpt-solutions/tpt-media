@@ -153,7 +153,7 @@ document (there are deliberately no per-crate `PROVENANCE.md` files).
 ### 9.1 Release and versioning strategy
 
 - **Lockstep workspace versions.** Every crate ships the version from
-  `[workspace.package]` in the root `Cargo.toml` (currently `0.1.0`).
+  `[workspace.package]` in the root `Cargo.toml` (currently `0.2.0`).
   There are no per-crate version trains: `tpt-media` is one release
   unit, and a change touching five crates ships as one version bump.
   When crates are first published externally they start from the

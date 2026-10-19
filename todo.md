@@ -1336,7 +1336,7 @@ Target:
 
 * [x] define frame sizes
 * [x] define bitstream
-* [ ] define modes — Cinder has no distinct "modes" concept
+* [ ] define modes — **Open, 2026-10-19 (recommendation: leave as not applicable):** Cinder has no distinct modes concept. Add one only if a consumer needs it.
 * [x] define quantisation
 * [x] implement encoder
 * [x] implement decoder
@@ -2523,7 +2523,11 @@ tpt benchmark
 * [x] codec selection
 * [x] container selection
 * [x] quality configuration
-* [x] bitrate configuration
+* [x] bitrate configuration — audited 2026-10-19: this was checked while 
+      `--bitrate` was parsed and ignored on the audio path (only Vault used it). 
+      `encode` now fits Cinder (quantiser step) and Reed (LSF depth) to the target; 
+      Aura refuses it. `transcode`/`benchmark` on audio still ignore it.
+* [x] compare two files — `tpt compare <ref> <test>` (2026-10-19): SNR/LSD for wav, PSNR/SSIM for y4m
 * [x] metadata manipulation
 * [x] streaming stdin/stdout
 * [x] machine-readable output
@@ -3217,17 +3221,19 @@ Before 0.4:
 
 Before 1.0:
 
-* [ ] stable public APIs
-* [ ] stable `.tpt` specification
-* [ ] stable codec specifications
-* [ ] compatibility policy
-* [ ] comprehensive fuzzing
-* [ ] reproducible benchmarks
-* [ ] documented security model
-* [ ] documented provenance
-* [ ] FFI stability
-* [ ] WASM stability
-* [ ] production-quality implementations
+Every item below is unchecked because 1.0 has not been declared, and CONTRIBUTING §9-§11 gives no stability guarantee before it. Each one is a commitment to make at 1.0, not a defect today. The reason for each is given on its line.
+
+* [ ] stable public APIs — no compatibility commitment yet; see the 1.0 note above
+* [ ] stable `.tpt` specification — the spec exists and matches the code (§49), but the format may still break; see the 1.0 note above
+* [ ] stable codec specifications — Aura, Cinder, Reed, Thrum, Vault and Mote carry versioned wire formats, but none is frozen; see the 1.0 note above
+* [ ] compatibility policy — not written; the pre-1.0 rule is only CONTRIBUTING §9-§11
+* [ ] comprehensive fuzzing — deterministic sweeps run in CI; coverage-guided long-running fuzzing is not set up (§38/§47, §54)
+* [ ] reproducible benchmarks — benchmarks exist (§41) but are kept off CI because shared runners are too noisy (CONTRIBUTING §11); the release-time refresh is the manual step
+* [ ] documented security model — `docs/security.md` covers the current model; not yet reviewed as a 1.0 commitment
+* [ ] documented provenance — provenance records exist per codec (§48); the 1.0 gate asks for a single documented policy, not yet written as one
+* [ ] FFI stability — the ABI exists (§46 v0.1) with a stated stability rule; it is not frozen until 1.0
+* [ ] WASM stability — the wasm build is tested in CI (§45); no stability commitment is made
+* [ ] production-quality implementations — prototypes and tested implementations exist; no codec has been declared production-quality
 
 ---
 
@@ -3287,7 +3293,7 @@ The architecture must satisfy:
       crate/`VERSION`/layout/integrity table for all six, and the
       change discipline (version bump + table + provenance in the same
       change) is stated there
-* [ ] `.tpt` is independently implementable
+* [ ] `.tpt` is independently implementable — **Open, 2026-10-19:** the spec is verified only against this repo's own implementation. No second, independent implementation exists yet, and one is the usual way to find gaps in a spec. Checking it needs an outside implementer.
 * [x] public APIs have documented contracts — 2026-10-05, measured rather
       than assumed: a `-W missing_docs` sweep found 187 undocumented
       public items across the workspace (the newest codecs were at
@@ -3316,7 +3322,7 @@ The architecture must satisfy:
 * [ ] security testing is continuous — CI runs the deterministic
       sweeps today; "continuous" in the §38/§47 sense (long-running
       coverage-guided fuzzing) is still pre-1.0 work
-* [ ] the resulting crates are reusable outside `tpt-media`
+* [ ] the resulting crates are reusable outside `tpt-media` — **Open, 2026-10-19:** the crates are built to be consumable standalone (the checked "reusable crates" item under §1), but no consumer outside `tpt-media` has used them yet. Checking this needs one.
 
 ---
 
@@ -3428,3 +3434,68 @@ directories/packages, `CodecId` 4CCs, types, CLI strings, docs):
 sections in this file (§29, §31-34 and cross-references elsewhere) were
 updated in place to use the new names; this entry is the historical record
 of why and when the rename happened.
+
+# 58. Usability and Adoption (2026-10-19)
+
+Raised by the 2026-10-19 project review. The review found no production stubs;
+the one real gap (`--bitrate` ignored on audio) is fixed and recorded under §43.
+Status is as of the 2026-10-19 pass. Items marked **planned** are real problems
+that need a wire-format or codec change, so they are recorded here rather than
+patched in the CLI.
+
+## Done
+
+* [x] `--bitrate` for audio `encode`, `transcode` and `benchmark` (Cinder, Reed; Aura refuses). The Cinder search runs down to the finest step (1/1024), so any target the codec can meet is reached.
+* [x] `tpt compare <ref> <test>` — SNR/LSD for wav, PSNR/SSIM for y4m
+* [x] `vault` clippy failure fixed with a `PassParams` struct; `cargo clippy -p tpt-video-vault -D warnings` passes
+* [x] `--resample <hz>` (windowed-sinc, reports the change). The kernel is computed once per phase and cached; a test checks it against the direct form to within 1 LSB.
+* [x] stereo downmix for mono-only codecs (reported)
+* [x] 8/16/24/32-bit integer and float WAV input, converted to 16-bit (reported)
+* [x] **Streamed WAV accepted.** A `data` chunk declared as `0xFFFF_FFFF`, or running past EOF, is read to the end of input. The ffmpeg pipe recipe now works (verified).
+* [x] ffmpeg recipe in the CLI README, both file and pipe forms
+* [x] `--target-snr <dB>` for audio (Cinder, Reed): coarsest setting meeting the target, verified on the whole input (30 s music at 20 dB target gives 20.50 dB)
+* [x] `--target-psnr <dB>` for video (Thrum, Vault; `encode` and `transcode`). Search runs on the first 16 frames, then the whole clip is checked and stepped finer if needed. Thrum CIF 100 frames at 35 dB: 27.8 s → 14.7 s. Mote is refused: it has no quantiser (see the Mote item below).
+* [x] `--quality` moves Cinder's rate: log scale from band step 64 (quality 0) to 0.0625 (quality 100). Explicit `--band-step` still overrides it. Reed and Aura are unchanged. This was the recommended option; it changes the output of existing `--quality` runs for Cinder.
+* [x] `benchmark --json` reports `input_changes` and `fit`
+* [x] SHA256 checksums in the release workflow. The job merges the per-platform artifacts into one folder, which `files:` needs. Not yet run on CI.
+* [x] `cargo install` in the CLI README (`--path` verified; the `--git` form is untested offline)
+* [x] `tpt completions <bash|zsh|fish|powershell>`
+* [x] `tpt doctor`: round-trips the synthetic signals through all six codecs (passes)
+* [x] Package-manager templates in `packaging/` (Homebrew, Scoop, winget). **Nothing submitted**: they need a tagged release, and submitting publishes externally. `packaging/README.md` lists the steps.
+* [x] Static A/B page in `docs/demo/ab/` (three clips and an index). Built locally, **not hosted**. Speech clips are credited as "Open Speech Repository", which the source site's conditions of use require (free for testing, research and development, with attribution).
+* [x] Second `.tpt` reader, container level: `tools/tpt-py` (stdlib only, 26 tests, agrees with `tpt probe --json` on four samples). It does not decode codec bitstreams, so §54's "independently implementable" stays open.
+
+## Planned: needs a format or codec change
+
+* [x] **Container format 0.2: packet runs** (done 2026-10-19). Packets go into `PKTS` runs of up to 32 packets of one track (and at most 64 KiB), with timestamps as deltas from the run base. `IDX ` version 2 has one entry per chunk. On a 30 s Cinder file the `.tpt` goes from 339,273 to 162,871 bytes (payload 97,181 in both), about 11.7 bytes of framing per packet against 43. Version 0.2 readers read 0.1 files. **Breaking for 0.1 readers**, which skip `PKTS` and see no packets in a 0.2 file. Updated: `tpt-container` (writer, scan index, seeks, checksums, IDX), `tpt-web` (run parser with a pending queue, byte cap), `tools/tpt-py` (PKTS parser, index v2), `tpt-media-probe` tests, and `docs/container-design.md`. Cross-checked: the Rust and Python readers agree on Cinder, Aura, Reed, Thrum, Vault (B-frames), Mote and the 0.1 `demo.tpt`.
+* [x] **Cinder escape too narrow for fine steps** (done 2026-10-19, Cinder wire version 6). The level clamp was about ±127 at 8 bits, so fine steps clipped. The escape excess is now an Elias-gamma prefix with `bits_per_coef` raw low bits, and levels reach ±2^20. On the 30 s music SNR at step 1/16 goes from 12.2 to 36.3 dB. The bitrate and SNR searches now reach 1/1024. The `--quality` dial stops at 1/16, because finer steps make very large files. Version 5 streams are rejected and must be re-encoded. Regenerated: `demo.tpt` (and checked with the wasm build and `check.mjs`) and the A/B page clips and figures.
+* [x] **Mote had no quality dial** (done 2026-10-19, no wire change). Its output was 29.69 dB at every quality. The recommended change was a codec quantiser, but Mote's dictionary size is already encoder-only and carried in the stream, and it moves quality: 28.5 dB at 64 entries, 31.1 dB at 1024. `--quality` now maps onto it (64 to 4096, log scale), and `--target-psnr` searches it. A quantiser inside the codec would still be a stronger tool, and it stays open as a codec question.
+
+## Open, needs investigation
+
+* [x] **Reed voiced output level** (fixed 2026-10-19, decoder and wire format unchanged). The gain was the residual RMS of the unquantised predictor, but the decoder synthesises through the quantised one. The gain is now the value that gives the input's power through the quantised synthesis filter. Speech at quality 80 went from +7.8 dB to +1.5 dB, and noise is within 0.1 dB. A regression test covers a voiced tone.
+* [x] **Reed high-Q tone at low level was loud** (fixed 2026-10-19, Reed wire version 2). The cause was the gain floor: a high-Q resonance makes the impulse-response energy large, so the gain a quiet voiced frame needs is far below the −62 dB floor, and the clamp made it about 16 dB loud. The gain index is now 7 bits over −126 to 0 dB, so the quiet tone sweep (−52 to −18 dBFS) is within 2 dB. Speech is within 1.3 dB, and packets still round to 12 bytes. A regression test covers the quiet tone.
+* [ ] `--target-psnr` search cost: a full qp-5 encode of CIF 100 frames takes about 3.9 s and its decode 1.2 s, and the whole-clip check is one such pass. Further gains would mean fewer whole-clip passes, which trades away the guarantee. **Recommended:** leave it as is.
+
+## Open, decision needed
+
+* [ ] **Hosting the A/B page** under a public URL. The speech terms are now confirmed (attribution only), so this needs only your go-ahead.
+* [ ] **winget, Homebrew, Scoop submission.** **Recommended:** submit after the first tagged release that has checksums.
+
+## Spec gaps found by the container reader
+
+To resolve in `docs/container-design.md` as part of the version 0.2 change:
+
+* versioning: "accept an earlier minor" is vacuous (minor 0 is 0x0000, rejected); only 0x0001 is readable
+* the 16-byte 0.1 header is described only as "still parses", and the backward-compatibility paragraph contradicts itself
+* `header_size` between 17 and 19, and sizes above 20, are undefined
+* a zero global or track timebase is unaddressed
+* trailing bytes inside a known chunk, and name/language encoding, are unstated
+* `pixel_format` refers to an enumeration the doc never gives; `media_type` codes above 3 are undefined
+* duplicate TRAK IDs, and CLUS or TMTA naming an undeclared track, are unspecified
+* an unknown metadata `value_type` cannot be skipped (length unknown); bool bytes other than 0/1 are unspecified
+* reserved-ID rule "first byte 0x00..=0x1F" conflicts with "4 ASCII bytes" for IDs with bytes at or above 0x80
+* the DataCluster CRC: whether "body" includes the chunk header, and the CRC variant, are unnamed (the reader assumed the body and CRC-32/ISO-HDLC; no repo sample has cluster checksums, so this is unverified against Rust output)
+* index offsets: "absolute byte offset of the CLUS header" is ambiguous (the reader assumed chunk-header start, which the Rust output matches)
+* CRC1: body size, whether it must be last, and duplicates are unstated
+* the Rust writer adds `tpt.io.sample_count` to audio metadata, and the spec has no metadata key namespace

@@ -74,8 +74,12 @@ code path produces it.
 - `--quality` maps `0..=100` onto the codec coefficient bit depth
   (Cinder/Aura `bits_per_coef`, 4–12 bits; Reed LSF bit depth).
   `--bitrate` drives Vault's frame-level rate control on the video
-  path (`target_bits_per_frame` = bitrate / fps); on the audio path it
-  remains validated but not applied (no audio codec has rate control).
+  path (`target_bits_per_frame` = bitrate / fps); on the audio path (`encode`) it searches Cinder's quantiser step
+  (log bisection) and Reed's LSF bit depth for the finest setting whose
+  container averages at or under the target (overrides `--quality` and
+  `--band-step`;
+  Aura refuses it as lossless; a target below the codec's floor encodes
+  at the floor and says so).
 - `transcode` is live (2026-09-14): decodes the input `.tpt` (first
   audio track, padding trimmed via `tpt.io.sample_count`), re-encodes
   with the `--codec` target through the same encode path as `encode`,

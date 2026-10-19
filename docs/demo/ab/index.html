@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TPT codec A/B</title>
+<style>
+  :root {
+    --bg: #fafaf8; --fg: #1d1d1b; --muted: #5b5b56; --card: #ffffff; --line: #d9d8d2; --accent: #2b5d8a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --fg: #ecebe6; --muted: #a3a29b; --card: #1f1f1c; --line: #3a3a35; --accent: #8cb8e0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161614; --fg: #ecebe6; --muted: #a3a29b; --card: #1f1f1c; --line: #3a3a35; --accent: #8cb8e0;
+  }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; margin: 0; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.15rem; margin: 32px 0 8px; color: var(--accent); }
+  p, li { color: var(--fg); }
+  .muted { color: var(--muted); font-size: 0.92rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 10px 0; }
+  .card h3 { font-size: 1rem; margin: 0 0 6px; }
+  audio { width: 100%; margin: 6px 0 2px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
+  pre { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 0.85rem; }
+  @media (max-width: 480px) { main { padding: 16px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>TPT codec A/B</h1>
+  <p class="muted">Listen to the original, then to each codec's output. Every
+  output here was made by the <code>tpt</code> command-line tool from the
+  same source, and is a fixed file: nothing is encoded in your browser.</p>
+
+  <h2>Music: 8 seconds, Elephants Dream, 48 kHz mono</h2>
+  <div class="card">
+    <h3>Original</h3>
+    <audio controls preload="none" src="music-original.wav"></audio>
+  </div>
+  <div class="card">
+    <h3>Cinder at a 160 kbit/s target</h3>
+    <audio controls preload="none" src="music-cinder-160k.wav"></audio>
+    <p class="muted">Container 159,497 bytes (about 159 kbit/s over 8 s). Decoded SNR 36.7 dB.</p>
+  </div>
+  <div class="card">
+    <h3>Cinder at a 96 kbit/s target</h3>
+    <audio controls preload="none" src="music-cinder-96k.wav"></audio>
+    <p class="muted">Container 95,632 bytes (about 96 kbit/s over 8 s). Decoded SNR 26.4 dB.</p>
+  </div>
+
+  <h2>Speech: 8 seconds, Open Speech Repository, 8 kHz</h2>
+  <div class="card">
+    <h3>Original</h3>
+    <audio controls preload="none" src="speech-original.wav"></audio>
+  </div>
+  <div class="card">
+    <h3>Reed, quality 80</h3>
+    <audio controls preload="none" src="speech-reed.wav"></audio>
+    <p class="muted">Container 11,517 bytes (about 11.5 kbit/s over 8 s). Reed is a
+    speech vocoder: it keeps the spectral envelope, not the waveform, so the SNR
+    measured on the other clips means nothing here. Judge it by ear.</p>
+  </div>
+
+  <h2>What the numbers are</h2>
+  <table>
+    <tr><th>Clip</th><th>Codec setting</th><th>Container</th><th>SNR</th></tr>
+    <tr><td>Music</td><td>Cinder, <code>--bitrate 160k</code></td><td>159,497 B</td><td>36.7 dB</td></tr>
+    <tr><td>Music</td><td>Cinder, <code>--bitrate 96k</code></td><td>95,632 B</td><td>26.4 dB</td></tr>
+    <tr><td>Speech</td><td>Reed, <code>--quality 80</code></td><td>11,517 B</td><td>n/a (vocoder)</td></tr>
+  </table>
+  <p class="muted">The container includes its own framing. For these 8-second
+  clips that is a large share of the file; see todo.md §58.</p>
+
+  <h2>Reproduce</h2>
+  <pre>tpt encode --codec cinder --bitrate 160k music-original.wav music-cinder-160k.tpt
+tpt decode --container wav music-cinder-160k.tpt music-cinder-160k.wav
+tpt compare music-original.wav music-cinder-160k.wav
+
+tpt encode --codec reed --quality 80 speech-original.wav speech-reed.tpt
+tpt decode --container wav speech-reed.tpt speech-reed.wav</pre>
+
+  <h2>Sources</h2>
+  <p class="muted">Music: <i>Elephants Dream</i>, &copy; Blender Foundation,
+  licensed CC BY 3.0. Speech: source identified as "Open Speech Repository"
+  (voiptroubleshooter.com/open_speech), which permits copying and modification
+  for testing, research and development, provided the source is identified.</p>
+</main>
+</body>
+</html>

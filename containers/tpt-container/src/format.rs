@@ -8,7 +8,7 @@
 //! ```text
 //! FileHeader (20 bytes)
 //!   magic        u8[4]    "TPTM"
-//!   version      u16      = 0x0001 (major = >> 8, minor = & 0xFF)
+//!   version      u16      = 0x0002 (major = >> 8, minor = & 0xFF)
 //!   header_size  u16      = 20      (16 is still readable; chunk parsing
 //!                                    starts at header_size)
 //!   timebase_num u32                (global timebase numerator)
@@ -39,7 +39,7 @@ use crate::crc32::crc32;
 pub const MAGIC: [u8; 4] = *b"TPTM";
 
 /// Current container version. `major = version >> 8`, `minor = version & 0xFF`.
-pub const VERSION: u16 = 0x0001;
+pub const VERSION: u16 = 0x0002;
 
 /// Minimum supported header size (version 0.1 shipped a 16-byte header).
 pub const MIN_HEADER_SIZE: usize = 16;
@@ -56,6 +56,8 @@ pub const CHUNK_TRAK: [u8; 4] = *b"TRAK";
 pub const CHUNK_TMTA: [u8; 4] = *b"TMTA";
 /// Data cluster (`CLUS`) chunk: one compressed frame.
 pub const CHUNK_CLUS: [u8; 4] = *b"CLUS";
+/// Packet run: up to `RUN_MAX_PACKETS` packets of one track (see `runs`).
+pub const CHUNK_PKTS: [u8; 4] = *b"PKTS";
 /// Per-track index (`IDX `) chunk, written by `finalize()`.
 pub const CHUNK_IDX: [u8; 4] = *b"IDX ";
 /// Container-level CRC-32 footer chunk, written by `finalize()`.
@@ -78,7 +80,11 @@ pub const TRAK_HAS_NAME: u8 = 0x01;
 pub const TRAK_HAS_LANGUAGE: u8 = 0x02;
 
 /// Current on-disk index version.
-pub const INDEX_VERSION: u8 = 1;
+pub const INDEX_VERSION: u8 = 2;
+
+/// The on-disk index versions a reader understands. Version 1 has one entry
+/// per `CLUS` chunk; version 2 has one entry per chunk, `PKTS` runs included.
+pub const INDEX_VERSIONS: core::ops::RangeInclusive<u8> = 1..=2;
 
 /// Byte tag for a missing pixel format.
 pub const PIXEL_FORMAT_NONE: u8 = 0xFF;

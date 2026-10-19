@@ -64,8 +64,19 @@ pub enum Command {
         /// Frames generated per scene.
         frames: usize,
     },
+    /// `tpt compare [--json] <reference> <test>` — score a decoded file
+    /// against its original (SNR/LSD for wav, PSNR/SSIM for y4m).
+    Compare {
+        reference: String,
+        test: String,
+        json: bool,
+    },
     /// `tpt list-codecs` — list the native codec family.
     ListCodecs,
+    /// `tpt completions <shell>` — print a shell completion script.
+    Completions { shell: String },
+    /// `tpt doctor` — round-trip the synthetic signals through every codec.
+    Doctor,
     /// `tpt --help`.
     Help,
 }
@@ -86,6 +97,12 @@ pub struct OpSpec {
     /// every band. Overrides what `--quality` would otherwise imply for
     /// the step; `--quality` still sets the coefficient bit depth.
     pub band_step: Option<f32>,
+    /// Resample audio input to this rate before encoding (`--resample`).
+    pub resample: Option<u32>,
+    /// Target decoded SNR in dB for audio (`--target-snr`).
+    pub target_snr: Option<f64>,
+    /// Target mean PSNR in dB for video (`--target-psnr`).
+    pub target_psnr: Option<f64>,
     /// Metadata pairs to set (`--set-meta key=value`, repeatable).
     pub meta: Vec<(String, String)>,
     /// Emit machine-readable output (`--json`).
@@ -106,6 +123,9 @@ impl Default for OpSpec {
             quality: None,
             bitrate_bits_per_second: None,
             band_step: None,
+            resample: None,
+            target_snr: None,
+            target_psnr: None,
             meta: Vec::new(),
             json: false,
             runs: None,
@@ -159,6 +179,13 @@ pub fn parse(argv: &[String]) -> Result<Command, String> {
     match argv.first().map(String::as_str) {
         None | Some("--help") | Some("-h") | Some("help") => Ok(Command::Help),
         Some("list-codecs") => Ok(Command::ListCodecs),
+        Some("doctor") => Ok(Command::Doctor),
+        Some("completions") => match argv.get(1) {
+            Some(shell) => Ok(Command::Completions {
+                shell: shell.clone(),
+            }),
+            None => Err("completions requires a shell: bash, zsh, fish or powershell".to_string()),
+        },
         Some("video-corpus") => {
             let mut json = false;
             let mut fps = 30u32;
@@ -204,6 +231,30 @@ pub fn parse(argv: &[String]) -> Result<Command, String> {
                 fps,
                 frames,
             })
+        }
+        Some("compare") => {
+            let mut json = false;
+            let mut paths: Vec<String> = Vec::new();
+            for arg in &argv[1..] {
+                match arg.as_str() {
+                    "--json" => json = true,
+                    "--help" | "-h" => return Ok(Command::Help),
+                    flag if flag.starts_with('-') && flag != "-" => {
+                        return Err(format!("unknown option `{flag}` for compare"))
+                    }
+                    path => paths.push(path.to_string()),
+                }
+            }
+            match <[String; 2]>::try_from(paths) {
+                Ok([reference, test]) => Ok(Command::Compare {
+                    reference,
+                    test,
+                    json,
+                }),
+                Err(_) => {
+                    Err("compare requires exactly two inputs: <reference> <test>".to_string())
+                }
+            }
         }
         Some(cmd @ ("probe" | "inspect")) => {
             let mut json = false;
@@ -270,11 +321,32 @@ pub fn parse(argv: &[String]) -> Result<Command, String> {
                         let v = take_value(argv, &mut i, "--bitrate")?;
                         spec.bitrate_bits_per_second = Some(parse_bitrate(&v)?);
                     }
+                    "--target-snr" | "--target-psnr" => {
+                        let flag = argv[i].clone();
+                        let v = take_value(argv, &mut i, &flag)?;
+                        let db: f64 = v
+                            .parse()
+                            .ok()
+                            .filter(|d: &f64| d.is_finite())
+                            .ok_or_else(|| format!("invalid {flag} `{v}` (a number of dB)"))?;
+                        if flag == "--target-snr" {
+                            spec.target_snr = Some(db);
+                        } else {
+                            spec.target_psnr = Some(db);
+                        }
+                    }
+                    "--resample" => {
+                        let v = take_value(argv, &mut i, "--resample")?;
+                        let r: u32 = v.parse().ok().filter(|r| *r > 0).ok_or_else(|| {
+                            format!("invalid resample rate `{v}` (a positive number of Hz)")
+                        })?;
+                        spec.resample = Some(r);
+                    }
                     "--band-step" => {
                         let v = take_value(argv, &mut i, "--band-step")?;
-                        let s: f32 = v
-                            .parse()
-                            .map_err(|_| format!("invalid band step `{v}` (a number, 1/1024..=64)"))?;
+                        let s: f32 = v.parse().map_err(|_| {
+                            format!("invalid band step `{v}` (a number, 1/1024..=64)")
+                        })?;
                         if !s.is_finite() {
                             return Err(format!("band step must be finite, got `{v}`"));
                         }
@@ -342,7 +414,10 @@ USAGE:
   tpt transcode --codec <name> [..] <in> [<out>]
   tpt benchmark --codec <name> [..] <in>
   tpt video-corpus [--json] [--fps <n>] [--frames <n>]
+  tpt compare [--json] <reference> <test>   score a decoded file vs its original
   tpt list-codecs
+  tpt completions <bash|zsh|fish|powershell>
+  tpt doctor
   tpt --help
 
 OPTIONS:
@@ -351,8 +426,15 @@ OPTIONS:
                         (the audio codecs ride the WAV bridge; the video
                         codecs ride the y4m bridge)
   --container <kind>   tpt (default) | wav
-  --quality <0..=100>  quality setting
-  --bitrate <n>[k|m]   target bitrate (bits/s)
+  --quality <0..=100>  quality: cinder band step 64 -> 0.0625 (log scale);
+                       aura bit depth; reed LSF depth; thrum/vault qp;
+                       mote dictionary size (64 to 4096 entries)
+  --bitrate <n>[k|m]   target bitrate (bits/s): rate control for vault, and for
+                       encode with cinder or reed (aura: refused, lossless)
+  --resample <hz>      resample audio input to this rate first (encode, benchmark)
+  --target-snr <db>    audio: finest-to-coarsest setting whose decoded SNR meets <db>
+                       (cinder, reed; overrides --quality)
+  --target-psnr <db>   video: coarsest quantiser whose mean PSNR meets <db> (encode)
   --band-step <f>      cinder: quantisation step for every band
                        (1/1024..=64; finer = higher quality, more bits)
   --set-meta <k=v>     set a metadata pair (repeatable)

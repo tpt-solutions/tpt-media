@@ -23,11 +23,11 @@ crate-type = ["rlib", "staticlib"]
 # `version` is required on every path dependency for `cargo package` /
 # `cargo publish` (a packaged crate cannot carry a bare `path`), and is
 # the workspace version like every other member (CONTRIBUTING §9.1).
-tpt-media-core = { path = "../../crates/tpt-media-core", version = "0.1.0" }
-tpt-media-codec = { path = "../../crates/tpt-media-codec", version = "0.1.0" }
-tpt-audio-cinder = { path = "../../codecs/cinder", version = "0.1.0" }
-tpt-audio-aura = { path = "../../codecs/aura", version = "0.1.0" }
-tpt-audio-reed = { path = "../../codecs/reed", version = "0.1.0" }
+tpt-media-core = { path = "../../crates/tpt-media-core", version = "0.2.0" }
+tpt-media-codec = { path = "../../crates/tpt-media-codec", version = "0.2.0" }
+tpt-audio-cinder = { path = "../../codecs/cinder", version = "0.2.0" }
+tpt-audio-aura = { path = "../../codecs/aura", version = "0.2.0" }
+tpt-audio-reed = { path = "../../codecs/reed", version = "0.2.0" }
 
 [build-dependencies]
 cc = "1"
