@@ -72,13 +72,14 @@ use alloc::vec;
 use alloc::vec::Vec;
 use tpt_dsp_core::{
     autocorrelation, autocorrelation_pitch, levinson_durbin, lpc_to_lsp, lsp_is_stable,
-    lsp_quantize_uniform, lsp_to_lpc, residual as lpc_residual, synthesize as lpc_synthesize,
-    windowed, WindowType, DEFAULT_GRID_POINTS, DEFAULT_VOICED_THRESHOLD,
+    lsp_quantize_uniform, lsp_to_lpc, lsp_to_lpc_with_scratch, residual as lpc_residual,
+    synthesize as lpc_synthesize, windowed, WindowType, DEFAULT_GRID_POINTS,
+    DEFAULT_VOICED_THRESHOLD,
 };
 use tpt_media_bitstream::{BitReader, BitWriter};
 use tpt_media_codec::{
     Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, Decoder, DynDecoder,
-    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder, SupportedFormat,
+    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder, RealtimeDecoder, SupportedFormat,
 };
 use tpt_media_core::{
     AudioFrame, ChannelLayout, Frame, Packet, PacketFlags, SampleFormat, Timebase, Timestamp,
@@ -135,6 +136,8 @@ const ANALYSIS_WINDOW: WindowType = WindowType::Hamming;
 /// bounds the packet-parsing work regardless of what a hostile packet
 /// claims.
 const MAX_LSF_BITS: u32 = 12;
+/// Largest LPC order the wire format can carry (`ReedConfig::validate`).
+const MAX_LPC_ORDER: usize = 16;
 
 /// CRC-32 (IEEE 802.3, polynomial `0xEDB88320`, reflected) — the same
 /// per-packet integrity check the other native codecs use, kept local so
@@ -618,6 +621,16 @@ pub struct ReedDecoder {
     state: Option<DecodeState>,
     /// Consecutively concealed frames — drives [`PLC_DECAY_DB`]/frame.
     concealed: u32,
+    /// Scratch for the real-time decode path (`decode_block`), sized once in
+    /// `new` from the fixed frame size and LPC order, so decoding reuses
+    /// them with no heap allocation.
+    lsf_indices: Vec<u16>,
+    lsp: Vec<f64>,
+    a: Vec<f64>,
+    exc: Vec<f64>,
+    synth: Vec<f64>,
+    /// Scratch for `lsp_to_lpc_with_scratch`, which needs `2·(order+2)` values.
+    lpc_scratch: Vec<f64>,
 }
 
 impl ReedDecoder {
@@ -626,6 +639,7 @@ impl ReedDecoder {
     /// (frame size, LPC order, LSF bit depth).
     pub fn new(codec_cfg: CodecConfig, enc: ReedConfig) -> CodecResult<Self> {
         enc.validate()?;
+        let fs = enc.frame_size();
         Ok(ReedDecoder {
             info: static_info(Capabilities {
                 real_time_decoder: true,
@@ -636,6 +650,12 @@ impl ReedDecoder {
             enc,
             state: None,
             concealed: 0,
+            lsf_indices: Vec::with_capacity(MAX_LPC_ORDER),
+            lsp: Vec::with_capacity(MAX_LPC_ORDER),
+            a: Vec::with_capacity(MAX_LPC_ORDER),
+            exc: Vec::with_capacity(fs),
+            synth: Vec::with_capacity(fs),
+            lpc_scratch: Vec::with_capacity(2 * (MAX_LPC_ORDER + 2)),
         })
     }
 
@@ -696,32 +716,55 @@ impl ReedDecoder {
         cb_idx: usize,
         fs: usize,
     ) -> Vec<u8> {
-        let g = libm::pow(10.0, gain_db / 20.0);
         let mut exc = vec![0f64; fs];
-        if voiced {
-            // Impulse train at the transmitted period; a single impulse
-            // per period has RMS g/√period, so amplitude g·√period makes
-            // the excitation RMS equal the transmitted g.
-            let amp = g * libm::sqrt(period as f64);
-            let mut pos = 0usize;
-            while pos < fs {
-                exc[pos] = amp;
-                pos += period;
-            }
-        } else {
-            codebook_entry(cb_idx, fs, &mut exc);
-            for slot in exc.iter_mut() {
-                *slot *= g;
-            }
-        }
         let mut out = vec![0f64; fs];
-        lpc_synthesize(&exc, lpc, &mut out);
         let mut bytes = vec![0u8; fs * 2];
-        for (i, v) in out.iter().enumerate() {
-            let s = (v.clamp(-1.0, 1.0) * i16::MAX as f64) as i16;
-            bytes[2 * i..2 * i + 2].copy_from_slice(&s.to_le_bytes());
-        }
+        synthesize_into(
+            &mut exc, &mut out, lpc, voiced, period, gain_db, cb_idx, &mut bytes,
+        );
         bytes
+    }
+}
+
+/// Excitation through the LPC synthesis filter, scaled back to S16 bytes,
+/// written into caller storage: `exc` and `out` are scratch of the frame
+/// length, `bytes` is `2 * exc.len()`. Shared by the owned and real-time
+/// decode paths and by concealment, so all three produce the same samples.
+#[allow(clippy::too_many_arguments)]
+fn synthesize_into(
+    exc: &mut [f64],
+    out: &mut [f64],
+    lpc: &[f64],
+    voiced: bool,
+    period: usize,
+    gain_db: f64,
+    cb_idx: usize,
+    bytes: &mut [u8],
+) {
+    let fs = exc.len();
+    exc.fill(0.0);
+    let g = libm::pow(10.0, gain_db / 20.0);
+    if voiced {
+        // Impulse train at the transmitted period; a single impulse
+        // per period has RMS g/√period, so amplitude g·√period makes
+        // the excitation RMS equal the transmitted g.
+        let amp = g * libm::sqrt(period as f64);
+        let mut pos = 0usize;
+        while pos < fs {
+            exc[pos] = amp;
+            pos += period;
+        }
+    } else {
+        codebook_entry(cb_idx, fs, exc);
+        for slot in exc.iter_mut() {
+            *slot *= g;
+        }
+    }
+    out.fill(0.0);
+    lpc_synthesize(exc, lpc, out);
+    for (i, v) in out.iter().enumerate() {
+        let s = (v.clamp(-1.0, 1.0) * i16::MAX as f64) as i16;
+        bytes[2 * i..2 * i + 2].copy_from_slice(&s.to_le_bytes());
     }
 }
 
@@ -738,7 +781,35 @@ impl Decoder for ReedDecoder {
 }
 
 impl ReedDecoder {
+    /// Owned decode: the shared core, with its output in a fresh frame.
     fn decode_inner(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
+        let fs = self.enc.frame_size();
+        let mut bytes = vec![0u8; fs * 2];
+        self.decode_block(packet, &mut bytes)?;
+        Ok(vec![AudioFrame {
+            frame: Frame {
+                pts: packet.pts,
+                duration: None,
+                side_data: Vec::new(),
+            },
+            samples: bytes,
+            sample_count: fs as u32,
+            format: SampleFormat::S16,
+            channel_layout: ChannelLayout::Mono,
+            sample_rate: self.enc.sample_rate,
+        }])
+    }
+
+    /// Decode one packet into `out` (`2 * frame_size` S16 bytes). Works in
+    /// the decoder's preallocated scratch, so it performs no heap allocation
+    /// once the decoder is built.
+    fn decode_block(&mut self, packet: &Packet, out: &mut [u8]) -> CodecResult<()> {
+        let fs = self.enc.frame_size();
+        if out.len() < fs * 2 {
+            return Err(CodecError::InvalidConfig(
+                "output buffer smaller than one Reed frame",
+            ));
+        }
         if packet.data.len() < CRC_TRAILER_BYTES {
             return Err(CodecError::MalformedPacket);
         }
@@ -765,7 +836,6 @@ impl ReedDecoder {
         let field_idx = r
             .read(PITCH_BITS)
             .map_err(|_| CodecError::MalformedPacket)? as usize;
-        let fs = self.enc.frame_size();
         let period = field_idx + PITCH_MIN_PERIOD;
         if voiced && period > self.enc.max_pitch_period() {
             return Err(CodecError::MalformedPacket);
@@ -780,18 +850,22 @@ impl ReedDecoder {
         // Envelope: indices → LSPs (ordering re-enforced) → LPC. A
         // transmitted index set that still fails the stability check
         // after the nudge is rejected outright.
-        let mut lsf_indices = vec![0u16; order];
-        for slot in lsf_indices.iter_mut() {
+        self.lsf_indices.clear();
+        for _ in 0..order {
             let v = r.read(lsf_bits).map_err(|_| CodecError::MalformedPacket)?;
-            *slot = v as u16;
+            self.lsf_indices.push(v as u16);
         }
-        let mut lsp = vec![0f64; order];
-        dequantize_lsf_indices(&lsf_indices, lsf_bits as u8, &mut lsp);
-        if !lsp_is_stable(&lsp) {
+        self.lsp.clear();
+        self.lsp.resize(order, 0.0);
+        dequantize_lsf_indices(&self.lsf_indices, lsf_bits as u8, &mut self.lsp);
+        if !lsp_is_stable(&self.lsp) {
             return Err(CodecError::MalformedPacket);
         }
-        let mut a = vec![0f64; order];
-        lsp_to_lpc(&lsp, &mut a);
+        self.a.clear();
+        self.a.resize(order, 0.0);
+        self.lpc_scratch.clear();
+        self.lpc_scratch.resize(2 * (order + 2), 0.0);
+        lsp_to_lpc_with_scratch(&self.lsp, &mut self.a, &mut self.lpc_scratch);
 
         let gain_db = if gain_idx == 0 {
             PLC_MUTE_DB // exact mute below
@@ -799,33 +873,65 @@ impl ReedDecoder {
             GAIN_FLOOR_DB + (gain_idx as f64 - 1.0)
         };
 
-        let samples = if gain_idx == 0 {
-            vec![0u8; fs * 2]
+        if gain_idx == 0 {
+            out[..fs * 2].fill(0);
         } else {
-            self.synthesize(&a, voiced, period, gain_db, cb_idx, fs)
-        };
+            self.exc.clear();
+            self.exc.resize(fs, 0.0);
+            self.synth.clear();
+            self.synth.resize(fs, 0.0);
+            synthesize_into(
+                &mut self.exc,
+                &mut self.synth,
+                &self.a,
+                voiced,
+                period,
+                gain_db,
+                cb_idx,
+                &mut out[..fs * 2],
+            );
+        }
 
-        self.state = Some(DecodeState {
-            lpc: a,
-            voiced,
-            period,
-            gain_db,
-            cb_idx,
-        });
+        // Keep the stored synthesis filter in the existing allocation after the
+        // first packet, instead of replacing it each time.
+        if let Some(s) = self.state.as_mut() {
+            s.lpc.clear();
+            s.lpc.extend_from_slice(&self.a);
+            s.voiced = voiced;
+            s.period = period;
+            s.gain_db = gain_db;
+            s.cb_idx = cb_idx;
+        } else {
+            self.state = Some(DecodeState {
+                lpc: self.a.clone(),
+                voiced,
+                period,
+                gain_db,
+                cb_idx,
+            });
+        }
         self.concealed = 0;
+        Ok(())
+    }
+}
 
-        Ok(vec![AudioFrame {
-            frame: Frame {
-                pts: packet.pts,
-                duration: None,
-                side_data: Vec::new(),
-            },
-            samples,
-            sample_count: fs as u32,
-            format: SampleFormat::S16,
-            channel_layout: ChannelLayout::Mono,
-            sample_rate: self.enc.sample_rate,
-        }])
+impl RealtimeDecoder for ReedDecoder {
+    fn max_output_bytes(&self) -> usize {
+        self.enc.frame_size() * 2
+    }
+
+    fn decode_into(&mut self, packet: &Packet, out: &mut [u8]) -> CodecResult<usize> {
+        // Output size and packet limit are checked before any decoder state
+        // changes, so a refusal leaves the stream as it was.
+        if out.len() < self.max_output_bytes() {
+            return Err(CodecError::InvalidConfig(
+                "output buffer smaller than one Reed frame",
+            ));
+        }
+        self.cfg.limits.check_packet(packet.data.len())?;
+        let n = self.max_output_bytes();
+        self.decode_block(packet, &mut out[..n])?;
+        Ok(n)
     }
 }
 
