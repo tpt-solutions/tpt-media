@@ -1464,10 +1464,24 @@ impl ThrumConfig {
     /// The encoder allocates exactly this and `write_block` therefore
     /// never reports a full buffer for a well-formed frame.
     pub fn max_packet_bits(&self) -> usize {
+        // Callers reach this only after `validate`, which has already checked
+        // that the bound is representable; the saturating fallback is never
+        // used on a validated configuration.
+        self.checked_max_packet_bits().unwrap_or(usize::MAX)
+    }
+
+    /// [`max_packet_bits`](Self::max_packet_bits) with every step checked, so
+    /// a geometry too large for `usize` is reported as `None` instead of
+    /// wrapping (which panics in debug builds).
+    fn checked_max_packet_bits(&self) -> Option<usize> {
+        let (mw, mh) = self.mb_dims();
+        let mbs = mw.checked_mul(mh)?;
         let header = 16 + 1 + QP_BITS as usize;
         let per_mb = 1 + 1 + 2 * MV_BITS as usize;
         let per_block = 1 + RICE_K_BITS as usize + 6 + 2 * BLOCK_COEFFS * MAX_RICE_BITS as usize;
-        header + self.mb_count() * (per_mb + self.blocks_per_macroblock() * per_block)
+        let per_mb_total =
+            per_mb.checked_add(self.blocks_per_macroblock().checked_mul(per_block)?)?;
+        header.checked_add(mbs.checked_mul(per_mb_total)?)
     }
 
     fn validate(&self) -> CodecResult<()> {
@@ -1483,6 +1497,17 @@ impl ThrumConfig {
         {
             return Err(CodecError::InvalidConfig(
                 "thrum width/height must be non-zero multiples of 16",
+            ));
+        }
+        // Every size the codec derives from the geometry must be representable
+        // in `usize`, or the arithmetic in `max_packet_bits` and `frame_bytes`
+        // overflows (a panic in debug builds).
+        let frame_samples = (self.width as usize).checked_mul(self.height as usize);
+        if frame_samples.and_then(|n| n.checked_mul(2)).is_none()
+            || self.checked_max_packet_bits().is_none()
+        {
+            return Err(CodecError::InvalidConfig(
+                "thrum frame geometry exceeds the addressable size",
             ));
         }
         if !(MIN_QP..=MAX_QP).contains(&self.qp) {

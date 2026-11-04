@@ -41,6 +41,10 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Fixed
 
+- **Refuse geometries whose sizes overflow `usize` (2026-11-05).** Packet-size bounds
+  are checked, so a 2^30 x 2^30 config returns `InvalidConfig` rather than panicking in
+  debug builds.
+
 - **Macroblock traversal order mismatch**: the decoder walked macroblocks
   column-major while the encoder wrote them row-major, desynchronising every
   macroblock after the first against both the bitstream and the intra
