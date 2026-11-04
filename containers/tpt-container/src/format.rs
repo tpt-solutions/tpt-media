@@ -180,7 +180,8 @@ impl FileHeader {
     ///
     /// Version checking is performed here:
     /// - version must be non-zero and no greater than [`VERSION`];
-    /// - `header_size` must be at least the private `MIN_HEADER_SIZE` constant;
+    /// - `header_size` must be 16 (version 0.1) or at least 20; 17 to 19 are
+    ///   refused, since they would begin chunk parsing inside the reserved field;
     /// - the timebase numerator and denominator must both be non-zero;
     /// - reserved bytes are read if present (16-byte v0.1 headers parse as
     ///   `reserved == 0`) and otherwise ignored (forward compatibility).
@@ -206,7 +207,11 @@ impl FileHeader {
         if version == 0 || version > VERSION {
             return Err(TptError::UnsupportedVersion);
         }
-        if (header_size as usize) < MIN_HEADER_SIZE {
+        // 16 is the version 0.1 header, which has no reserved field. A size of
+        // 17 to 19 would start chunk parsing inside the reserved field, so it
+        // is refused rather than guessed at.
+        let hs = header_size as usize;
+        if hs < MIN_HEADER_SIZE || (hs != MIN_HEADER_SIZE && hs < 20) {
             return Err(TptError::BadHeader);
         }
         let timebase_num = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);

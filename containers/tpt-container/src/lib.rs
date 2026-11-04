@@ -200,6 +200,28 @@ mod tests {
     }
 
     #[test]
+    fn header_size_between_17_and_19_is_refused() {
+        // Chunk parsing starts at header_size, so a size inside the reserved
+        // field would read chunk headers from the middle of it. Sizes 16 and
+        // 20 and above are the defined layouts.
+        let mut b = FileHeader::new(Timebase::MILLISECONDS).to_bytes();
+        for size in [0u16, 15, 17, 18, 19] {
+            b[6..8].copy_from_slice(&size.to_le_bytes());
+            assert!(
+                matches!(FileHeader::from_bytes(&b), Err(TptError::BadHeader)),
+                "header_size {size} must be refused"
+            );
+        }
+        for size in [16u16, 20, 24] {
+            b[6..8].copy_from_slice(&size.to_le_bytes());
+            assert!(
+                FileHeader::from_bytes(&b).is_ok(),
+                "header_size {size} must be accepted"
+            );
+        }
+    }
+
+    #[test]
     fn header_compat_accepts_16_byte_v01_and_reserved_bytes() {
         // A version 0.1 file shipped a 16-byte header: no reserved field.
         let mut legacy = [0u8; 16];
