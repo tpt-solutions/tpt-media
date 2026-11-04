@@ -3274,9 +3274,17 @@ The architecture must satisfy:
       construction; the declared graph (core/bitstream/codec →
       container → pipeline → apps, probe → container, everything on
       tpt-dsp) builds clean
-* [ ] real-time paths are allocation-free — Cinder's hot path is
-      *bounded*-allocation (§42 test), not strictly zero; the strict
-      reading stays open until caller-buffer APIs exist
+* [ ] real-time paths are allocation-free — Cinder's *decode* path is
+      now allocation-free in both directions: `RealtimeDecoder::decode_into`
+      and `RealtimeEncoder::{push_frame, pop_packet_into, drain_packet_into}`
+      make 0 allocation calls per packet at steady state, at both frame sizes
+      (`codecs/cinder/tests/{decode,encode}_alloc_count.rs`, 2026-11-04;
+      design in `docs/caller-buffer-design.md`). Still open: Cinder
+      concealment (`conceal`) and the offline codecs. Reed's
+      `decode_into` is at 0 calls per packet (its `lsp_to_lpc` cost is
+      removed via the new `tpt-dsp-core::lsp_to_lpc_with_scratch`, on the
+      sibling repo's master), so the claim stays unchecked only for concealment
+      and the other codecs
 * [x] malformed media cannot cause unbounded resource consumption —
       §19 limits + §47 audits + §38 sweeps + §42 hostile-input memory
       tests, with the three real overflow/OOB/bomb bugs they found

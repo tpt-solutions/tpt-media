@@ -9,6 +9,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 Added
 
+- **Caller-buffer real-time decode for Cinder (2026-11-04).** New opt-in trait
+  `RealtimeDecoder` in `tpt-media-codec` (`max_output_bytes`, `decode_into`), with
+  `CinderDecoder` as its first implementor. `decode_into` writes S16 mono into a
+  caller buffer and does no heap allocation per packet: measured 0 allocation calls
+  over 191 steady-state packets at both 256 and 128 samples (`codecs/cinder/tests/decode_alloc_count.rs`),
+  down from 8 per packet on the owned path. Its output is byte-identical to `decode`,
+  which now shares the same core and is also allocation-light (2 calls per packet).
+  No wire change. The owned `Decoder` API is unchanged. Design:
+  `docs/caller-buffer-design.md`. Reed and concealment still allocate.
+- **Caller-buffer real-time encode for Cinder (2026-11-04).** New opt-in trait
+  `RealtimeEncoder` in `tpt-media-codec`: `push_frame`, `pop_packet_into` and
+  `drain_packet_into`, with `CinderEncoder` as its first implementor. Measured
+  zero allocation calls at steady state at both 256 and 128 samples per block
+  (`codecs/cinder/tests/encode_alloc_count.rs`). Packets, including the drain tail,
+  are byte-identical to the owned `Encoder`. No wire change. The owned `Encoder` API is
+  unchanged. A push of more than two blocks grows the input buffer once.
+- **Caller-buffer real-time decode for Reed (2026-11-04).** `ReedDecoder` implements
+  `RealtimeDecoder`. `decode_into` makes 0 allocation calls per packet at steady state
+  (`codecs/reed/tests/alloc_count.rs`), and the owned `decode` fell from 11 to 2. The last
+  four allocations were in `tpt-dsp-core`'s `lsp_to_lpc`. The sibling `tpt-dsp` repo gained
+  `lsp_to_lpc_with_scratch` (in `tpt-dsp` master, unreleased; see its CHANGELOG), which Reed uses.
+  Output is byte-identical to `decode`. No wire change. Reed's encoder is not in scope,
+  because its capabilities do not claim real-time operation.
 - **Mote quality dial and `--target-psnr` (2026-10-19).** Mote's dictionary size, an
   encoder-only setting the stream already carries, is now the quality dial: `--quality`
   maps 0 to 100 onto 64 to 4096 entries, and `--target-psnr` searches it. No wire change.
