@@ -247,6 +247,12 @@ class Errors(unittest.TestCase):
                 with self.assertRaises(tpt_py.UnsupportedVersion):
                     parse_bytes(build([trak(0)], version=version))
 
+    def test_header_size_17_to_19_rejected(self):
+        for size in (17, 18, 19):
+            with self.subTest(header_size=size):
+                with self.assertRaises(tpt_py.BadHeader):
+                    parse_bytes(file_header(header_size=size) + trak(0) + clus_chunk(5))
+
     def test_header_size_below_16_rejected(self):
         with self.assertRaises(tpt_py.BadHeader):
             parse_bytes(b"TPTM" + struct.pack("<HHII", 1, 12, 1, 1) + b"\x00" * 4)
@@ -262,9 +268,56 @@ class Errors(unittest.TestCase):
         with self.assertRaises(tpt_py.BadChunk):
             parse_bytes(build([chunk(b"TRAK", body)]))
 
-    def test_clus_refers_to_undeclared_track(self):
+    def test_unknown_media_type_fails_the_open(self):
+        # Reference reader rule: an unknown media_type is a BadChunk.
         with self.assertRaises(tpt_py.BadChunk):
-            parse_bytes(build([trak(0), clus_chunk(0, track_id=9)]))
+            parse_bytes(build([trak(0, media=7)]))
+
+    def test_clus_for_undeclared_track_is_listed_with_a_warning(self):
+        # Reference reader rule: packets for a track with no TRAK are still
+        # yielded; the track carries no descriptive metadata.
+        result = parse_bytes(build([trak(0), clus_chunk(0, track_id=9)]))
+        ids = {t["id"]: t for t in result["tracks"]}
+        self.assertEqual(ids[9]["packet_count"], 1)
+        self.assertIsNone(ids[9]["codec_id"])
+        self.assertTrue(any("undeclared track 9" in w for w in result["warnings"]))
+
+    def test_duplicate_trak_first_one_wins(self):
+        result = parse_bytes(build([trak(0, codec=b"AAAA"), trak(0, codec=b"BBBB")]))
+        self.assertEqual(len(result["tracks"]), 1)
+        self.assertEqual(result["tracks"][0]["codec_id"], "AAAA")
+        self.assertTrue(any("duplicate TRAK" in w for w in result["warnings"]))
+
+    def test_tmta_before_its_trak_is_ignored(self):
+        result = parse_bytes(build([tmta(0, [("k", 1, 5)]), trak(0)]))
+        self.assertEqual(result["tracks"][0]["metadata"], [])
+        self.assertTrue(any("undeclared track 0" in w for w in result["warnings"]))
+
+    def test_tmta_after_its_trak_is_applied(self):
+        result = parse_bytes(build([trak(0), tmta(0, [("k", 1, 5)])]))
+        self.assertEqual(result["tracks"][0]["metadata"], [{"key": "k", "type": "int", "value": 5}])
+
+    def test_one_zero_timebase_term_falls_back_to_global(self):
+        result = parse_bytes(build([trak(0, tb=(0, 90))]))
+        self.assertTrue(result["tracks"][0]["timebase_is_global"])
+        self.assertTrue(any("one zero term" in w for w in result["warnings"]))
+
+    def test_invalid_utf8_name_reads_as_empty(self):
+        result = parse_bytes(build([trak(0, name=b"\xff\xfe", flags=1)]))
+        self.assertEqual(result["tracks"][0]["name"], "")
+
+    def test_crc1_with_wrong_body_size_is_ignored(self):
+        data = build([trak(0), clus_chunk(0)]) + chunk(b"CRC1", b"\x00" * 8)
+        result = parse_bytes(data)
+        self.assertFalse(result["checksums"]["crc1"]["present"])
+        self.assertTrue(any("expected 4" in w for w in result["warnings"]))
+
+    def test_second_crc1_replaces_the_first(self):
+        base = build([trak(0), clus_chunk(0)], crc=True)
+        data = base + chunk(b"CRC1", struct.pack("<I", 0x12345678))
+        result = parse_bytes(data)
+        self.assertEqual(result["checksums"]["crc1"]["stored"], "0x12345678")
+        self.assertTrue(any("second CRC1" in w for w in result["warnings"]))
 
     def test_huge_index_count_is_corrupt_not_allocated(self):
         idx = struct.pack("<BB", 1, 1) + struct.pack("<BI", 0, 0xFFFFFFFF)

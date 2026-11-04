@@ -143,11 +143,13 @@ class _Body:
         return len(self.data) - self.pos
 
 
-def _utf8(raw, what, strict=True):
+def _utf8(raw, what=None):
+    """Decode UTF-8. Invalid text reads as "" rather than failing the open,
+    as the reference reader does (containers/tpt-container, "Reader Rules")."""
     try:
-        return raw.decode("utf-8") if strict else raw.decode("utf-8", "replace")
-    except UnicodeDecodeError as exc:
-        raise BadChunk("%s: %s is not valid UTF-8 (%s)" % ("chunk", what, exc))
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
 
 
 def _tb(num, den):
@@ -173,6 +175,11 @@ def _parse_header(fp, size):
     if header_size < FILE_HEADER_MIN:
         raise BadHeader("header_size %d is below the minimum of %d"
                         % (header_size, FILE_HEADER_MIN))
+    # 16 is the version 0.1 header. 17 to 19 would start chunk parsing inside
+    # the reserved field, so the spec refuses them.
+    if header_size != FILE_HEADER_MIN and header_size < 20:
+        raise BadHeader("header_size %d is inside the reserved field; use 16 or >= 20"
+                        % header_size)
     if header_size > size:
         raise Truncated("header_size %d exceeds file size %d" % (header_size, size))
     if tb_num == 0 or tb_den == 0:
@@ -188,6 +195,8 @@ def _parse_trak(data, warnings):
     b = _Body(data, "TRAK")
     track_id = b.u8("track_id")
     media = b.u8("media_type")
+    if media not in MEDIA_TYPES:
+        raise BadChunk("TRAK track %d: unknown media_type %d" % (track_id, media))
     codec = b.take(4, "codec_id")
     cver = b.u16("codec_version")
     cpl = b.u16("codec_priv_len")
@@ -204,19 +213,20 @@ def _parse_trak(data, warnings):
     name = lang = None
     if flags & 1:
         n = b.u8("name_len")
-        name = _utf8(b.take(n, "name"), "track name", strict=False)
+        name = _utf8(b.take(n, "name"))
     if flags & 2:
         n = b.u8("lang_len")
-        lang = _utf8(b.take(n, "language"), "language tag", strict=False)
+        lang = _utf8(b.take(n, "language"))
     if b.remaining():
         warnings.append("TRAK for track %d has %d trailing bytes (ignored)"
                         % (track_id, b.remaining()))
     if (tb_num == 0) != (tb_den == 0):
-        raise BadChunk("TRAK track %d timebase %d/%d: only one term is zero"
-                       % (track_id, tb_num, tb_den))
+        warnings.append("TRAK track %d timebase %d/%d has one zero term; "
+                        "the global timebase is used" % (track_id, tb_num, tb_den))
+        tb_num = tb_den = 0
     return {
         "id": track_id,
-        "media_type": MEDIA_TYPES.get(media),
+        "media_type": MEDIA_TYPES[media],
         "media_type_code": media,
         "codec_id": _ascii_id(codec),
         "codec_version": {"major": cver >> 8, "minor": cver & 0xFF},
@@ -236,17 +246,30 @@ def _parse_trak(data, warnings):
     }
 
 
+def _placeholder_track(track_id):
+    """A track with no TRAK. Its packets are still listed, as the reference
+    reader yields them; every descriptive field is unknown."""
+    return {
+        "id": track_id, "media_type": None, "media_type_code": None,
+        "codec_id": None, "codec_version": None, "codec_private_size": None,
+        "track_timebase": None, "sample_rate_hz": None, "channel_layout": None,
+        "channel_layout_code": None, "channel_mask": None, "width": None,
+        "height": None, "pixel_format": None, "name": None, "language": None,
+        "metadata": [], "packets": [],
+    }
+
+
 def _parse_tmta(data, warnings):
     b = _Body(data, "TMTA")
     track_id = b.u8("track_id")
     count = b.u16("count")
     entries = []
     for _ in range(count):
-        key = _utf8(b.take(b.u8("key_len"), "key"), "metadata key")
+        key = _utf8(b.take(b.u8("key_len"), "key"))
         vtype = b.u8("value_type")
         if vtype == 0:
             n = b.u16("text_len")
-            value = _utf8(b.take(n, "text value"), "metadata text value")
+            value = _utf8(b.take(n, "text value"))
         elif vtype == 1:
             value = b.i64("int value")
         elif vtype == 2:
@@ -447,7 +470,6 @@ def parse_stream(fp):
     warnings = []
 
     tracks = {}           # track_id -> track dict (in TRAK order)
-    pending_tmta = []     # (track_id, entries) resolved after the scan
     pending_clus = []     # (track_id, packet)
     skipped = []
     crc1 = None           # {"offset", "stored"}
@@ -474,21 +496,28 @@ def parse_stream(fp):
 
         if cid == CH_CRC1:
             if csize != CRC_LEN:
-                raise BadChunk("CRC1 at offset %d has body size %d, expected 4" % (pos, csize))
-            if crc1 is not None:
-                raise BadChunk("second CRC1 at offset %d" % pos)
-            fp.seek(body)
-            crc1 = {"offset": pos, "stored": struct.unpack("<I", fp.read(4))[0]}
+                warnings.append("CRC1 at offset %d has body size %d, expected 4; ignored"
+                                % (pos, csize))
+            else:
+                if crc1 is not None:
+                    warnings.append("second CRC1 at offset %d; the last one is used" % pos)
+                fp.seek(body)
+                crc1 = {"offset": pos, "stored": struct.unpack("<I", fp.read(4))[0]}
         elif cid in (CH_TRAK, CH_TMTA, CH_IDX):
             fp.seek(body)
             data = fp.read(csize)
             if cid == CH_TRAK:
                 t = _parse_trak(data, warnings)
                 if t["id"] in tracks:
-                    raise BadChunk("duplicate TRAK for track %d" % t["id"])
-                tracks[t["id"]] = t
+                    warnings.append("duplicate TRAK for track %d ignored" % t["id"])
+                else:
+                    tracks[t["id"]] = t
             elif cid == CH_TMTA:
-                pending_tmta.append(_parse_tmta(data, warnings))
+                tmta_id, entries = _parse_tmta(data, warnings)
+                if tmta_id in tracks:
+                    tracks[tmta_id]["metadata"].extend(entries)
+                else:
+                    warnings.append("TMTA for undeclared track %d ignored" % tmta_id)
             else:
                 seen_index = True
                 index_count += 1
@@ -517,17 +546,13 @@ def parse_stream(fp):
     if index_count > 1:
         warnings.append("%d IDX chunks found; the last one was used" % index_count)
 
-    for tid, entries in pending_tmta:
-        if tid not in tracks:
-            raise BadChunk("TMTA refers to undeclared track %d" % tid)
-        tracks[tid]["metadata"].extend(entries)
-
     cluster_failures = []
     clusters_with_ck = 0
     for tid, pkt in pending_clus:
         if tid not in tracks:
-            raise BadChunk("CLUS at offset %d refers to undeclared track %d"
-                           % (pkt["offset"], tid))
+            warnings.append("packets for undeclared track %d (no TRAK); listed without "
+                            "track metadata" % tid)
+            tracks[tid] = _placeholder_track(tid)
         tracks[tid]["packets"].append(pkt)
         if pkt["checksum_ok"] is not None:
             clusters_with_ck += 1
