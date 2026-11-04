@@ -24,7 +24,12 @@ fn config() -> CinderEncoderConfig {
 }
 
 fn audio(samples: &[i16], start: usize) -> AudioFrame {
-    let mut f = AudioFrame::alloc(samples.len() as u32, SampleFormat::S16, ChannelLayout::Mono, RATE);
+    let mut f = AudioFrame::alloc(
+        samples.len() as u32,
+        SampleFormat::S16,
+        ChannelLayout::Mono,
+        RATE,
+    );
     for (dst, s) in f.samples.chunks_mut(2).zip(samples) {
         dst.copy_from_slice(&s.to_le_bytes());
     }
@@ -51,7 +56,11 @@ fn encode(signal: &[i16]) -> Vec<Packet> {
 fn pcm(frames: &[AudioFrame]) -> Vec<f64> {
     frames
         .iter()
-        .flat_map(|f| f.samples.chunks_exact(2).map(|c| f64::from(i16::from_le_bytes([c[0], c[1]]))))
+        .flat_map(|f| {
+            f.samples
+                .chunks_exact(2)
+                .map(|c| f64::from(i16::from_le_bytes([c[0], c[1]])))
+        })
         .collect()
 }
 
@@ -71,7 +80,11 @@ fn decode(packets: &[Packet], lost: &[bool]) -> Vec<f64> {
 fn snr(reference: &[f64], test: &[f64]) -> f64 {
     let n = reference.len().min(test.len());
     let signal: f64 = reference[..n].iter().map(|x| x * x).sum();
-    let noise: f64 = reference[..n].iter().zip(&test[..n]).map(|(a, b)| (a - b).powi(2)).sum();
+    let noise: f64 = reference[..n]
+        .iter()
+        .zip(&test[..n])
+        .map(|(a, b)| (a - b).powi(2))
+        .sum();
     10.0 * (signal / noise.max(1e-9)).log10()
 }
 
@@ -79,7 +92,9 @@ fn loss_pattern(count: usize, percent: u64, seed: u64) -> Vec<bool> {
     let mut state = seed;
     (0..count)
         .map(|i| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             // Never lose the first few packets: the decoder needs history.
             i >= 8 && (state >> 33) % 100 < percent
         })
@@ -93,7 +108,9 @@ fn voiced(seconds: usize) -> Vec<i16> {
             let t = i as f64 / f64::from(RATE);
             let f0 = 140.0 * (1.0 + 0.02 * (2.0 * std::f64::consts::PI * 5.0 * t).sin());
             let phase = 2.0 * std::f64::consts::PI * f0 * t;
-            let v: f64 = (1..=12).map(|k| (phase * f64::from(k)).sin() / f64::from(k)).sum();
+            let v: f64 = (1..=12)
+                .map(|k| (phase * f64::from(k)).sin() / f64::from(k))
+                .sum();
             (v * 6000.0) as i16
         })
         .collect()
@@ -119,7 +136,10 @@ fn speech_clip() -> Vec<i16> {
 #[test]
 #[ignore]
 fn concealment_snr_under_random_loss() {
-    for (name, signal) in [("voiced", voiced(3)), ("speech", speech_clip()[..RATE as usize * 5].to_vec())] {
+    for (name, signal) in [
+        ("voiced", voiced(3)),
+        ("speech", speech_clip()[..RATE as usize * 5].to_vec()),
+    ] {
         let packets = encode(&signal);
         let reference = decode(&packets, &vec![false; packets.len()]);
         for percent in [5u64, 10, 20] {

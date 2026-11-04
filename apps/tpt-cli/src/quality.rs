@@ -739,9 +739,15 @@ mod tests {
         // numerator alone).
         let bps = video_bitrate_bits_per_second_rational(86_122, 100, 30_000, 1001).unwrap();
         assert!((206_000..207_000).contains(&bps), "{bps}");
-        assert_eq!(video_bitrate_bits_per_second_rational(1000, 10, 25, 1), Some(20_000));
+        assert_eq!(
+            video_bitrate_bits_per_second_rational(1000, 10, 25, 1),
+            Some(20_000)
+        );
         assert_eq!(video_bitrate_bits_per_second_rational(1000, 0, 25, 1), None);
-        assert_eq!(video_bitrate_bits_per_second_rational(1000, 10, 25, 0), None);
+        assert_eq!(
+            video_bitrate_bits_per_second_rational(1000, 10, 25, 0),
+            None
+        );
         // 1000 bytes over 10 frames of 320x240 = 8000 / (10*76800) bpp.
         let bpp = bits_per_pixel(1000, 10, 320 * 240).expect("defined");
         assert!((bpp - 0.010_416_666_666_666_666).abs() < 1e-12, "{bpp}");

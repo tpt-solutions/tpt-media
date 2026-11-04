@@ -26,7 +26,10 @@ fn load_frames(path: &str, count: usize) -> Vec<Vec<u8>> {
 #[ignore]
 fn where_the_bits_go() {
     for clip in ["akiyo_cif", "foreman_cif", "mobile_cif"] {
-        let frames = load_frames(&format!("../../benchmarks/corpus/video_c/{clip}_100f.y4m"), 20);
+        let frames = load_frames(
+            &format!("../../benchmarks/corpus/video_c/{clip}_100f.y4m"),
+            20,
+        );
         for qp in [26u8, 14] {
             let cfg = ThrumConfig {
                 width: W as u32,
@@ -47,7 +50,8 @@ fn where_the_bits_go() {
                 bytes += enc.encode(&frame).unwrap().remove(0).data.len();
             }
             let s = enc.stats();
-            let total = (s.intra_bits + s.skip_bits + s.mv_bits + s.luma_bits + s.chroma_bits) as f64;
+            let total =
+                (s.intra_bits + s.skip_bits + s.mv_bits + s.luma_bits + s.chroma_bits) as f64;
             let pct = |b: u64| 100.0 * b as f64 / total;
             let mbs = (s.intra_mbs + s.skip_mbs + s.inter_mbs) as f64;
             println!(

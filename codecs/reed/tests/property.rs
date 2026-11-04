@@ -289,6 +289,8 @@ fn quiet_voiced_tone_keeps_its_level_after_warm_up() {
         }
     }
     let level_db = 10.0 * (out_sq / in_sq).log10();
-    assert!(level_db.abs() < 3.0, "quiet voiced level {level_db:.1} dB off input");
+    assert!(
+        level_db.abs() < 3.0,
+        "quiet voiced level {level_db:.1} dB off input"
+    );
 }
-

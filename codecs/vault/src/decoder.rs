@@ -236,7 +236,10 @@ impl FrameDec<'_> {
         if leaf.coded() {
             st.coded += 1;
         }
-        if leaf.kind == LeafKind::Inter && self.ctx.has_ltr && leaf.ref_idx as usize == self.num_refs {
+        if leaf.kind == LeafKind::Inter
+            && self.ctx.has_ltr
+            && leaf.ref_idx as usize == self.num_refs
+        {
             self.stats.ltr += 1;
         }
         let pred = build_pred(
@@ -410,7 +413,11 @@ impl Decoder for VaultDecoder {
         }
 
         self.stats = stats;
-        let ltr_pin = if ltr_update { Some(recon.clone()) } else { None };
+        let ltr_pin = if ltr_update {
+            Some(recon.clone())
+        } else {
+            None
+        };
         let frame = picture_to_frame(&recon, packet.pts);
         // The LTR is one reference frame beyond the short-term pool:
         // pinning one is refused by the same knob before any state

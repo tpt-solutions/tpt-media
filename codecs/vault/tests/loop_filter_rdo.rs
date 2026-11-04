@@ -137,7 +137,10 @@ fn run_rdo(
             let recon = enc.reconstruction().unwrap();
             let mut out = dec.decode(&p).unwrap();
             assert_eq!(out.len(), 1);
-            assert_eq!(out[0].pixels, recon.pixels, "decoder must match the encoder's kept reconstruction");
+            assert_eq!(
+                out[0].pixels, recon.pixels,
+                "decoder must match the encoder's kept reconstruction"
+            );
             flags.push(dec.last_stats().loop_filter);
             decoded.push(out.remove(0));
             packets.push(p);

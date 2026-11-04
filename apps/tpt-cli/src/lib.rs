@@ -814,7 +814,8 @@ mod tests {
         // dial, so --target-psnr has something to search over.
         let clip = b"YUV4MPEG2 W16 H16 F25:1 Ip C420jpeg
 FRAME
-".to_vec();
+"
+        .to_vec();
         let mut clip = clip;
         clip.extend(std::iter::repeat_n(128u8, 16 * 16 * 3 / 2));
         let o = run(

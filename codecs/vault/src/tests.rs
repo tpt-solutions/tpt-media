@@ -479,7 +479,10 @@ fn set_loop_filter_bit_targets_the_bit_the_decoder_reads() {
     assert_eq!(t, u64::from(crate::ftype::P));
     assert_eq!(q, 30);
     assert_eq!(n, 4);
-    assert_eq!(lf, 0, "the patched-off bit must be the one the decoder reads");
+    assert_eq!(
+        lf, 0,
+        "the patched-off bit must be the one the decoder reads"
+    );
     assert_eq!(p, 0x1234);
 
     set_loop_filter_bit(&mut data, true);
@@ -491,8 +494,8 @@ fn set_loop_filter_bit_targets_the_bit_the_decoder_reads() {
 /// single-sided modes parse exactly the vectors the writer sent.
 #[test]
 fn b_leaf_combine_modes_parse_and_reject_reserved() {
-    use crate::syntax::{read_leaf, LeafCtx, LeafKind};
     use crate::syntax::MVD_K;
+    use crate::syntax::{read_leaf, LeafCtx, LeafKind};
     use crate::MV_LIMIT;
     use tpt_media_bitstream::rice::{encode_riced, WriteLike};
 

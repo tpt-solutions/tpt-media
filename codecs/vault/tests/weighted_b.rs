@@ -35,7 +35,11 @@ fn ramp_frame(i: usize) -> VideoFrame {
     for c in 0..2 {
         for y in 0..ch {
             for x in 0..cw {
-                let (a, g) = if c == 0 { (90u16, 150u16) } else { (160u16, 100u16) };
+                let (a, g) = if c == 0 {
+                    (90u16, 150u16)
+                } else {
+                    (160u16, 100u16)
+                };
                 let v = match i {
                     0 => a,
                     1 => (3 * a + g + 2) >> 2,

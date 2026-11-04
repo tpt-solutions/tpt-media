@@ -326,19 +326,31 @@ impl Encoder for AuraEncoder {
                                 .collect()
                         })
                         .collect();
-                    w.write(1, stereo as u64).map_err(|_| CodecError::Internal)?;
+                    w.write(1, stereo as u64)
+                        .map_err(|_| CodecError::Internal)?;
                     if stereo {
                         let (l, r) = (&chans[0], &chans[1]);
                         let mid: Vec<i32> = l.iter().zip(r).map(|(a, b)| (a + b) >> 1).collect();
                         let side: Vec<i32> = l.iter().zip(r).map(|(a, b)| a - b).collect();
-                        let (cl, cr) = (analyse_lossless_channel(l, order), analyse_lossless_channel(r, order));
-                        let (cm, cs) = (analyse_lossless_channel(&mid, order), analyse_lossless_channel(&side, order));
+                        let (cl, cr) = (
+                            analyse_lossless_channel(l, order),
+                            analyse_lossless_channel(r, order),
+                        );
+                        let (cm, cs) = (
+                            analyse_lossless_channel(&mid, order),
+                            analyse_lossless_channel(&side, order),
+                        );
                         let (lb, rb, mb, sb) = (cl.bits(), cr.bits(), cm.bits(), cs.bits());
-                        let mode = [(STEREO_LR, lb + rb), (STEREO_LS, lb + sb), (STEREO_RS, rb + sb), (STEREO_MS, mb + sb)]
-                            .into_iter()
-                            .min_by_key(|&(_, bits)| bits)
-                            .map(|(m, _)| m)
-                            .unwrap_or(STEREO_LR);
+                        let mode = [
+                            (STEREO_LR, lb + rb),
+                            (STEREO_LS, lb + sb),
+                            (STEREO_RS, rb + sb),
+                            (STEREO_MS, mb + sb),
+                        ]
+                        .into_iter()
+                        .min_by_key(|&(_, bits)| bits)
+                        .map(|(m, _)| m)
+                        .unwrap_or(STEREO_LR);
                         w.write(2, mode).map_err(|_| CodecError::Internal)?;
                         let (first, second) = match mode {
                             STEREO_LR => (&cl, &cr),
@@ -451,7 +463,11 @@ const COEFF_MAX: i64 = (1 << (COEFF_BITS - 1)) - 1;
 /// Quantize float LPC coefficients to Q14 fixed point, clamped to the field.
 fn quantize_coeffs(a: &[f64]) -> Vec<i32> {
     a.iter()
-        .map(|ai| (*ai * COEFF_SCALE).round().clamp(COEFF_MIN as f64, COEFF_MAX as f64) as i32)
+        .map(|ai| {
+            (*ai * COEFF_SCALE)
+                .round()
+                .clamp(COEFF_MIN as f64, COEFF_MAX as f64) as i32
+        })
         .collect()
 }
 
@@ -529,12 +545,7 @@ fn exp_golomb_len(v: u64) -> u64 {
 /// cost over every `k` in `0..=RICE_K_MAX`. Ties go to the smaller `k`.
 fn best_rice_k(residuals: &[u64]) -> u32 {
     (0..=RICE_K_MAX)
-        .min_by_key(|&k| {
-            residuals
-                .iter()
-                .map(|&u| rice_len(u, k))
-                .sum::<u64>()
-        })
+        .min_by_key(|&k| residuals.iter().map(|&u| rice_len(u, k)).sum::<u64>())
         .unwrap_or(0)
 }
 
@@ -669,15 +680,23 @@ fn write_lossless_channel(
 fn read_lossless_channel(r: &mut BitReader, order: usize, fs: usize) -> CodecResult<Vec<i32>> {
     let mut coeffs = vec![0i32; order];
     for c in coeffs.iter_mut() {
-        let bits = r.read(COEFF_BITS).map_err(|_| CodecError::MalformedPacket)? as i64;
+        let bits = r
+            .read(COEFF_BITS)
+            .map_err(|_| CodecError::MalformedPacket)? as i64;
         // Sign-extend the field.
-        *c = if bits > COEFF_MAX { bits - (1 << COEFF_BITS) } else { bits } as i32;
+        *c = if bits > COEFF_MAX {
+            bits - (1 << COEFF_BITS)
+        } else {
+            bits
+        } as i32;
     }
     let mut samples: Vec<i32> = Vec::with_capacity(fs);
     let mut k = 0u32;
     for i in 0..fs {
         if i % RICE_PARTITION == 0 {
-            k = r.read(RICE_K_BITS).map_err(|_| CodecError::MalformedPacket)? as u32;
+            k = r
+                .read(RICE_K_BITS)
+                .map_err(|_| CodecError::MalformedPacket)? as u32;
             if k > RICE_K_MAX {
                 return Err(CodecError::MalformedPacket);
             }
@@ -789,11 +808,8 @@ impl AuraDecoder {
                             // Mid/side: mid = (L + R) >> 1, side = L - R. The
                             // low bit of L + R is the side's low bit, which
                             // restores it exactly.
-                            let mid: Vec<i32> = a
-                                .iter()
-                                .zip(&b)
-                                .map(|(m, s)| (m << 1) | (s & 1))
-                                .collect();
+                            let mid: Vec<i32> =
+                                a.iter().zip(&b).map(|(m, s)| (m << 1) | (s & 1)).collect();
                             let l = mid.iter().zip(&b).map(|(m, s)| (m + s) >> 1).collect();
                             let rr = mid.iter().zip(&b).map(|(m, s)| (m - s) >> 1).collect();
                             (l, rr)

@@ -40,7 +40,10 @@ fn psnr_y(a: &[u8], b: &[u8]) -> f64 {
 #[ignore]
 fn rate_distortion_curves() {
     for clip in ["akiyo_cif", "foreman_cif", "mobile_cif"] {
-        let frames = load_frames(&format!("../../benchmarks/corpus/video_c/{clip}_100f.y4m"), FRAMES);
+        let frames = load_frames(
+            &format!("../../benchmarks/corpus/video_c/{clip}_100f.y4m"),
+            FRAMES,
+        );
         for qp in [10u8, 16, 22, 28, 34] {
             let cfg = ThrumConfig {
                 width: W as u32,

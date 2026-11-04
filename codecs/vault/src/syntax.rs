@@ -398,23 +398,22 @@ pub(crate) fn build_pred(
             // from the future (`refs[0]`).
             LeafKind::Fwd | LeafKind::Bwd => {
                 let (mx, my) = if pl == 0 {
-                    if kind == LeafKind::Fwd { mv } else { mv_b }
+                    if kind == LeafKind::Fwd {
+                        mv
+                    } else {
+                        mv_b
+                    }
                 } else if kind == LeafKind::Fwd {
                     (chroma_mv(mv.0), chroma_mv(mv.1))
                 } else {
                     (chroma_mv(mv_b.0), chroma_mv(mv_b.1))
                 };
-                let r = if kind == LeafKind::Fwd { 1usize } else { 0usize };
-                mc_block(
-                    &refs[r].planes[pl],
-                    px,
-                    py,
-                    m,
-                    m,
-                    mx,
-                    my,
-                    &mut out.p[pl],
-                );
+                let r = if kind == LeafKind::Fwd {
+                    1usize
+                } else {
+                    0usize
+                };
+                mc_block(&refs[r].planes[pl], px, py, m, m, mx, my, &mut out.p[pl]);
             }
             LeafKind::Skip | LeafKind::Inter => {
                 // The caller has validated `ref_idx < refs.len()`, or —
@@ -431,16 +430,7 @@ pub(crate) fn build_pred(
                 } else {
                     (chroma_mv(mv.0), chroma_mv(mv.1))
                 };
-                mc_block(
-                    &reference.planes[pl],
-                    px,
-                    py,
-                    m,
-                    m,
-                    mx,
-                    my,
-                    &mut out.p[pl],
-                );
+                mc_block(&reference.planes[pl], px, py, m, m, mx, my, &mut out.p[pl]);
             }
             LeafKind::Bi => {
                 // B-frame leaves reference exactly two pictures, stored

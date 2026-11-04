@@ -199,9 +199,7 @@ fn single_sided_leaves_carry_straddling_b_frames() {
         };
         f
     };
-    let input: Vec<_> = (0..16)
-        .map(|i| scene(i >= 8, i))
-        .collect();
+    let input: Vec<_> = (0..16).map(|i| scene(i >= 8, i)).collect();
     let cfg = VaultConfig {
         width: W as u32,
         height: H as u32,
@@ -236,7 +234,13 @@ fn single_sided_leaves_carry_straddling_b_frames() {
     // the mirror case — backward-only.
     let (_, fwd5, bwd5) = census[5];
     let (_, fwd6, bwd6) = census[6];
-    assert!(fwd5 > 0, "display 5 (A content, B-scene future) must use forward-only leaves");
-    assert!(bwd6 > 0, "display 6 (B content, A-scene past) must use backward-only leaves");
+    assert!(
+        fwd5 > 0,
+        "display 5 (A content, B-scene future) must use forward-only leaves"
+    );
+    assert!(
+        bwd6 > 0,
+        "display 6 (B content, A-scene past) must use backward-only leaves"
+    );
     let _ = (bwd5, fwd6);
 }

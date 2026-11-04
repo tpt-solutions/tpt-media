@@ -74,6 +74,9 @@ fn motion_range_and_refresh_costs_on_mobile() {
             intra_refresh_percent: refresh,
         };
         let (bytes, p) = run(&frames, cfg);
-        println!("{label:>22}: {:>7} bytes over 10 frames, mean Y PSNR {p:.2} dB", bytes);
+        println!(
+            "{label:>22}: {:>7} bytes over 10 frames, mean Y PSNR {p:.2} dB",
+            bytes
+        );
     }
 }

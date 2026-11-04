@@ -252,7 +252,10 @@ fn scene_cut_fires_on_a_group_anchor_with_b_frames() {
     shown.extend(dec.flush().unwrap());
     assert_eq!(shown.len(), clip.len());
     for (i, f) in shown.iter().enumerate() {
-        assert_eq!(f.frame.pts.ticks, i as i64, "frame {i} out of display order");
+        assert_eq!(
+            f.frame.pts.ticks, i as i64,
+            "frame {i} out of display order"
+        );
     }
 }
 

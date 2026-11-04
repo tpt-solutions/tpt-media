@@ -1353,7 +1353,16 @@ fn copy_mb_from_reference(
         let (cdx, cdy) = (chroma_mv(dx), chroma_mv(dy));
         for c in 0..2 {
             let mut chroma = [0u8; BLOCK * BLOCK];
-            load_mc_block(&reference.chroma[c], cx, cy, BLOCK, BLOCK, cdx, cdy, &mut chroma);
+            load_mc_block(
+                &reference.chroma[c],
+                cx,
+                cy,
+                BLOCK,
+                BLOCK,
+                cdx,
+                cdy,
+                &mut chroma,
+            );
             recon.chroma[c].store_block(cx, cy, BLOCK, BLOCK, &chroma);
         }
     }

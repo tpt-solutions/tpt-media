@@ -254,7 +254,8 @@ fn get_bits(dec: &mut RangeDecoder<'_>, n: u32) -> CodecResult<u32> {
 pub const STEP_UNIT: f32 = 1024.0;
 
 /// Smallest and largest per-band step the wire can carry.
-const STEP_RANGE: core::ops::RangeInclusive<f32> = (1.0 / STEP_UNIT)..=(u16::MAX as f32 / STEP_UNIT);
+const STEP_RANGE: core::ops::RangeInclusive<f32> =
+    (1.0 / STEP_UNIT)..=(u16::MAX as f32 / STEP_UNIT);
 
 /// Inclusive range of supported `bits_per_coef` values.
 const BITS_PER_COEF: core::ops::RangeInclusive<u8> = 4..=12;
@@ -563,7 +564,10 @@ impl CinderEncoder {
         let costs: Vec<f64> = (0..CLASSES)
             .map(|c| {
                 let t = level_table(c);
-                levels.iter().map(|&q| level_cost(&t, zigzag(q), bits)).sum()
+                levels
+                    .iter()
+                    .map(|&q| level_cost(&t, zigzag(q), bits))
+                    .sum()
             })
             .collect();
         let class = costs
@@ -850,7 +854,11 @@ impl CinderDecoder {
         let mut ext = vec![0f32; 2 * n];
         for i in 0..2 * n {
             let src = hist_len + i - period;
-            let v = if src < hist_len { self.history[src] } else { ext[src - hist_len] };
+            let v = if src < hist_len {
+                self.history[src]
+            } else {
+                ext[src - hist_len]
+            };
             let t = i as f32 / (2 * n) as f32;
             ext[i] = v * (gain_start + (gain_end - gain_start) * t);
         }
@@ -916,10 +924,7 @@ impl CinderDecoder {
     fn decode_inner(&mut self, packet: &Packet) -> CodecResult<Vec<AudioFrame>> {
         // §35: reject an unrecognized wire version before interpreting any
         // further bytes as this decoder's own layout.
-        let version = packet
-            .data
-            .get(..2)
-            .ok_or(CodecError::MalformedPacket)?;
+        let version = packet.data.get(..2).ok_or(CodecError::MalformedPacket)?;
         if u16::from_be_bytes([version[0], version[1]]) != VERSION {
             return Err(CodecError::Unsupported("unsupported Cinder packet version"));
         }
@@ -977,7 +982,11 @@ impl CinderDecoder {
             if u > max_u {
                 return Err(CodecError::MalformedPacket);
             }
-            let s = if uniform { step_bits[0] } else { step_bits[i / band_size] };
+            let s = if uniform {
+                step_bits[0]
+            } else {
+                step_bits[i / band_size]
+            };
             spec[i] = dequantize(unzigzag(u), s as f32 / STEP_UNIT);
         }
         let _keyframe = get_bits(&mut r, 1)?;
@@ -1241,7 +1250,10 @@ mod tests {
         let mut all = enc.encode(&frame).unwrap();
         all.extend(enc.flush().unwrap());
         let snr = snr_against(&reference, &decode_all(&mut dec, &all));
-        assert!(snr > 15.0, "fractional-step SNR {snr:.2} dB must clear 15 dB");
+        assert!(
+            snr > 15.0,
+            "fractional-step SNR {snr:.2} dB must clear 15 dB"
+        );
     }
 
     #[test]
@@ -1310,7 +1322,10 @@ mod tests {
             track_id: 0,
             duration: None,
         };
-        assert_eq!(dec.decode(&packet).unwrap_err(), CodecError::MalformedPacket);
+        assert_eq!(
+            dec.decode(&packet).unwrap_err(),
+            CodecError::MalformedPacket
+        );
     }
 
     #[test]
@@ -1365,7 +1380,10 @@ mod tests {
         // the overlap-add tail is the only state a packet depends on.
         let mut after_loss = CinderDecoder::new(cfg, enc_cfg).unwrap();
         after_loss.decode(&packets[2]).unwrap();
-        assert_eq!(after_loss.last_spectrum, spectra[2], "a later packet must decode without its predecessors");
+        assert_eq!(
+            after_loss.last_spectrum, spectra[2],
+            "a later packet must decode without its predecessors"
+        );
     }
 
     #[test]
@@ -1412,7 +1430,12 @@ mod tests {
         let mut encoder = CinderEncoder::new(cfg.clone(), enc_cfg.clone()).unwrap();
         let mut packets = alloc::vec![];
         for k in 0..30usize {
-            let mut f = AudioFrame::alloc(2 * fs as u32, SampleFormat::S16, ChannelLayout::Mono, 48_000);
+            let mut f = AudioFrame::alloc(
+                2 * fs as u32,
+                SampleFormat::S16,
+                ChannelLayout::Mono,
+                48_000,
+            );
             for (i, s) in f.samples.chunks_mut(2).enumerate() {
                 // A voiced-speech stand-in: the first eight harmonics of 140 Hz.
                 let t = (k * 2 * fs + i) as f32 / 48_000.0;
@@ -1451,7 +1474,10 @@ mod tests {
         let signal: f64 = want.iter().map(|x| x * x).sum();
         let noise: f64 = want.iter().zip(&have).map(|(a, b)| (a - b).powi(2)).sum();
         let snr = 10.0 * (signal / noise.max(1e-9)).log10();
-        assert!(snr > 20.0, "concealed block is only {snr:.1} dB from the lost one");
+        assert!(
+            snr > 20.0,
+            "concealed block is only {snr:.1} dB from the lost one"
+        );
     }
 
     #[test]
@@ -1699,8 +1725,9 @@ mod tests {
         let n_bands = get_bits(&mut r, 8).unwrap() as usize;
         let uniform = get_bits(&mut r, 1).unwrap() == 0;
         let count = if uniform { 1 } else { n_bands };
-        let steps: alloc::vec::Vec<u16> =
-            (0..count).map(|_| get_bits(&mut r, 16).unwrap() as u16).collect();
+        let steps: alloc::vec::Vec<u16> = (0..count)
+            .map(|_| get_bits(&mut r, 16).unwrap() as u16)
+            .collect();
         if uniform {
             alloc::vec![steps[0]; n_bands]
         } else {

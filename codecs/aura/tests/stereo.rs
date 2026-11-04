@@ -49,7 +49,11 @@ fn round_trip(interleaved: &[i16]) -> Vec<i16> {
     let mut dec = AuraDecoder::new(CodecConfig::default(), cfg).unwrap();
     let bytes: Vec<u8> = interleaved.iter().flat_map(|s| s.to_le_bytes()).collect();
     let block_bytes = BLOCK * 2 * 2;
-    assert_eq!(bytes.len() % block_bytes, 0, "test input must be whole blocks");
+    assert_eq!(
+        bytes.len() % block_bytes,
+        0,
+        "test input must be whole blocks"
+    );
     let mut out = Vec::new();
     for (i, chunk) in bytes.chunks(block_bytes).enumerate() {
         for p in enc
@@ -59,7 +63,11 @@ fn round_trip(interleaved: &[i16]) -> Vec<i16> {
             let mut pkt = Packet::empty(0, Timestamp::zero(Timebase::new(1, RATE)));
             pkt.data = p.data;
             for f in dec.decode(&pkt).expect("decode") {
-                assert_eq!(f.channel_layout, ChannelLayout::Stereo, "output stays stereo");
+                assert_eq!(
+                    f.channel_layout,
+                    ChannelLayout::Stereo,
+                    "output stays stereo"
+                );
                 out.extend_from_slice(&f.samples);
             }
         }

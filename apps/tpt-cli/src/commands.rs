@@ -625,8 +625,10 @@ impl VideoCodec {
                     width,
                     height,
                     format,
-                    dictionary_entries: qp
-                        .map_or(MoteConfig::default().dictionary_entries, mote_dictionary_entries),
+                    dictionary_entries: qp.map_or(
+                        MoteConfig::default().dictionary_entries,
+                        mote_dictionary_entries,
+                    ),
                     ..MoteConfig::default()
                 };
                 let enc =
