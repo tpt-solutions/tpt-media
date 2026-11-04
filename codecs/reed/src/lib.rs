@@ -435,9 +435,17 @@ impl Encoder for ReedEncoder {
         let fs = self.enc.frame_size();
         let order = self.enc.lpc_order as usize;
         self.cfg.limits.check_packet(64 * 1024)?;
-        if frame.samples.len() / 2 < fs {
+        // Reed codes exactly one frame per call and keeps no input between
+        // calls. A longer frame used to be truncated to its first frame with
+        // no error, so the rest of the input was silently lost. Refuse it
+        // instead, so the caller has to split the input into frames.
+        let n = frame.samples.len() / 2;
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        if n != fs {
             return Err(CodecError::InvalidConfig(
-                "not enough samples for one block",
+                "reed codes exactly one frame_size of samples per frame",
             ));
         }
         let x: Vec<f64> = (0..fs)

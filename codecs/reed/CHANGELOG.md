@@ -30,6 +30,11 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Fixed
 
+- **`encode` refuses frames that are not exactly one frame (2026-11-05).** A
+  longer frame was truncated to its first frame with no error, silently dropping
+  the rest of the input. A zero-length frame now returns no packets. Any other
+  length returns `InvalidConfig`. The CLI always sends whole frames.
+
 - **Voiced output level (2026-10-19).** A 200 Hz tone came back up to 8 dB loud,
   and speech came back about 8 dB loud at default quality. The encoder took the
   excitation gain from the residual of the unquantised predictor, but the decoder
