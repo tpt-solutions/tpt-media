@@ -29,9 +29,19 @@ fn sub(n: usize) {
     if TRACKING.load(Ordering::Relaxed) {
         // Saturating: blocks allocated before tracking began may be freed
         // inside the tracked region.
-        let _ = CURRENT.try_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
-            Some(c.saturating_sub(n))
-        });
+        // CAS loop: `try_update` needs Rust 1.95 (MSRV is 1.86).
+        let mut c = CURRENT.load(Ordering::Relaxed);
+        loop {
+            match CURRENT.compare_exchange_weak(
+                c,
+                c.saturating_sub(n),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => c = actual,
+            }
+        }
     }
 }
 

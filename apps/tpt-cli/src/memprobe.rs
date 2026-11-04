@@ -95,9 +95,21 @@ fn on_alloc(size: usize) {
 #[inline]
 fn on_dealloc(size: usize) {
     let size = size as u64;
-    let _ = CURRENT.try_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
-        Some(live.saturating_sub(size))
-    });
+    // Hand-rolled CAS loop rather than `try_update`/`fetch_update`: the
+    // former needs Rust 1.95 and the latter is deprecated, and this crate
+    // targets MSRV 1.86.
+    let mut live = CURRENT.load(Ordering::Relaxed);
+    loop {
+        match CURRENT.compare_exchange_weak(
+            live,
+            live.saturating_sub(size),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => live = actual,
+        }
+    }
 }
 
 /// A [`GlobalAlloc`] that mirrors live heap bytes into the counters above.
