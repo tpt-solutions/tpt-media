@@ -32,27 +32,31 @@ FileHeader (20 bytes)
                                          — read (reserved for future flags)
 
 ChunkHeader (8 bytes)
-  chunk_id     u8[4]                    — 4 ASCII bytes ("TRAK", "CLUS", ...)
+  chunk_id     u8[4]                    — four bytes; defined IDs are ASCII ("TRAK",
+                                         —   "CLUS", ...). First byte 0x00..=0x1F is
+                                         —   reserved (see Forward Compatibility)
   chunk_size   u32                       — size of chunk body, LE
 
 TrackHeader ("TRAK")
   track_id     u8
-  media_type   u8                       — 0 audio, 1 video, 2 subtitle, 3 metadata
+  media_type   u8                       — 0 audio, 1 video, 2 subtitle, 3 metadata;
+                                         —   any other value fails the open (BadChunk)
   codec_id     u8[4]                    — codec identifier
   codec_version u16                     — codec bitstream version (major << 8 | minor)
   codec_priv_len u16
   codec_priv   u8[codec_priv_len]       — codec-specific configuration bytes
-  track_timebase_num u32                — track timebase (0/0 = use global)
+  track_timebase_num u32                — track timebase (zero num or den = use global)
   track_timebase_den u32
   sample_rate  u32                      — Hz, 0 = not applicable
   channel_layout u8                     — 0 none, 1 mono, 2 stereo, 3 5.1, 4 custom
   channel_mask u16                      — ChannelMask bits (meaningful when custom)
   width        u32                      — pixels, 0 = not applicable
   height       u32                      — pixels, 0 = not applicable
-  pixel_format u8                       — 0xFF = none, else PixelFormat value
+  pixel_format u8                       — 0 Gray8, 1 Rgb24, 2 Rgba32, 3 Yuv420, 4 Nv12,
+                                         —   0xFF none; other values read as no format
   flags        u8                       — bit 0 = name present, bit 1 = language present
-  name_len     u8 + name                — iff flags bit 0
-  lang_len     u8 + lang                — iff flags bit 1
+  name_len     u8 + name                — iff flags bit 0 (UTF-8)
+  lang_len     u8 + lang                — iff flags bit 1 (UTF-8)
 
 TrackMetadata ("TMTA")                   — typed key/value pairs for one track
   track_id     u8
@@ -63,7 +67,7 @@ TrackMetadata ("TMTA")                   — typed key/value pairs for one track
     value:
       text        u16 len + bytes
       int         i64 (LE)
-      bool        1 byte
+      bool        1 byte (any nonzero value reads as true)
       bytes       u32 len + bytes
 
 PacketRun ("PKTS")                      — since 0.2; written for every packet
@@ -82,7 +86,7 @@ PacketRun ("PKTS")                      — since 0.2; written for every packet
     len        u32
     payload    u8[len]
   crc32        u32                       — iff flags bit 0: CRC-32 of every byte of
-                                         —   the body before this field
+                                         —   the chunk body before this field
 
 DataCluster ("CLUS")                     — version 0.1 layout; still read
   pts          u64                       — presentation timestamp, track timebase
@@ -93,8 +97,9 @@ DataCluster ("CLUS")                     — version 0.1 layout; still read
   track_id     u8
   duration     u32                       — iff flags bit 3 (ticks, track timebase)
   payload      u8[...]                   — compressed frame
-  checksum     u32                       — iff flags bit 4 (CRC-32 of the body up
-                                         —   to but excluding this field)
+  checksum     u32                       — iff flags bit 4 (CRC-32 of the chunk body,
+                                         —   excluding the 8-byte chunk header, up to
+                                         —   but excluding this field)
 
 Index ("IDX ")
   index_version u8                       — currently 2 (1 is still read)
@@ -108,23 +113,27 @@ Index ("IDX ")
       offset   u64                       — absolute byte offset of the chunk header
       keyframe u8                        — 1 if any packet in the chunk is a keyframe
 
-Checksum footer ("CRC1")
+Checksum footer ("CRC1")                 — written last by finalize
   crc          u32                       — CRC-32 of every byte up to but excluding
-                                         —   the CRC1 chunk header
+                                         —   the CRC1 chunk header; body must be 4 bytes
 ```
 
 ## Versioning (file header)
 
 - `version` is `major << 8 | minor`. The current version is `0x0002`.
-- A reader must accept any version equal to its own or an earlier minor in
-  the same major. `version == 0`, a larger minor, or any higher major is
-  rejected with `UnsupportedVersion`.
+- The readable versions are 0x0001 (0.1) and 0x0002 (0.2), major 0. Version
+  0x0000, a larger minor, and any other major are rejected with
+  `UnsupportedVersion`. The set is listed rather than given as a range, because
+  there is no version 0.0.
 - Version 0.2 changed the packet framing (`PKTS` runs) and the index
   (one entry per chunk). A 0.2 reader reads 0.1 files; a 0.1 reader does not
   know `PKTS`, skips it, and so sees no packets in a 0.2 file. The version
   field is how it can tell.
-- `header_size` must be at least 16. Chunk parsing begins at `header_size`,
-  so larger headers can be added without breaking readers.
+- `header_size` is 16 (version 0.1, no reserved field) or at least 20. Sizes
+  17 to 19 and anything below 16 are refused as `BadHeader`, since chunk
+  parsing begins at `header_size` and would otherwise start inside the
+  reserved field. Bytes between 20 and `header_size` are skipped, so larger
+  headers can be added without breaking readers.
 - The `reserved` bytes are ignored on read (forward compatibility: future
   flag bits can be added without a version bump).
 
@@ -157,15 +166,13 @@ on-disk `IDX ` holds one entry per chunk.
 
 ## Backward Compatibility
 
-A reader of version `X` can read a file written by an encoder of version `X`
-or any earlier minor version. Version 0.2 readers read version 0.1 files,
-which contain only `CLUS` chunks. Major version bumps are reserved for
-binary-incompatible header changes. Files written by version 0.1 (16-byte
-header, `TRAK`/`CLUS` without the extended fields) are no longer recognized
-as *valid* 0.1 files only if their magic matches; older 0.1 tracks parse as
-untagged audio with epoch-timebase clusters only through a strict
-compatibility shim, which the reference implementation does not provide.
-The container is pre-release; no on-disk files exist outside this repository.
+A reader of version 0.2 reads files written at 0.2 and at 0.1. Version 0.1
+files have a 16-byte header and contain only `CLUS` chunks, so a 0.2 reader
+reads them with the 0.1 layout and no `PKTS` runs. Major version bumps are
+reserved for binary-incompatible header changes. Layouts older than 0.1
+(untagged audio, epoch-timebase clusters) are not read; the reference
+implementation has no compatibility shim for them. The container is
+pre-release; no on-disk files exist outside this repository.
 
 ## Corruption Tolerance
 
@@ -224,3 +231,51 @@ requested.
   finalized files. Verified with `verify_checksum()`.
 - Per-cluster: optional (`CLUS` flags bit 4), enabled on the muxer with
   `enable_cluster_checksums()`. Verified with `verify_cluster_checksums()`.
+
+## Reader Rules for Edge Cases
+
+These rules fix behavior that the layout above leaves open. The reference
+reader (`containers/tpt-container`) defines them, and they were settled when
+the gaps were resolved (2026-11-05). A change to any of them is a format
+change.
+
+The stdlib reader (`tools/tpt-py`) follows the same rules, and its tests pin
+them. It still reports the oddities it sees as warnings in its output.
+
+- **Timebases.** A zero numerator or denominator in the file header fails the
+  open (`BadHeader`). A track timebase with a zero term falls back to the
+  global one.
+- **Duplicate tracks.** The first `TRAK` for a track ID is used. Later `TRAK`s
+  with the same ID are ignored.
+- **Track references.** A `TMTA` applies only to a track whose `TRAK` has
+  already been read, so `TRAK` must come before its `TMTA` (the writer always
+  does this). A `TMTA` naming an undeclared track is ignored. `CLUS` and `PKTS`
+  naming an undeclared track are still indexed and yielded.
+- **Unknown values.** An unknown `media_type` fails the open (`BadChunk`). An
+  unknown metadata `value_type` also fails the open, because the length of
+  such a value is unknown and the entries after it cannot be found. This is
+  the one unknown value that is not skipped. An unknown `pixel_format` reads
+  as no format.
+- **Bool values.** Any nonzero byte reads as `true`.
+- **Strings.** `TRAK` names and languages, `TMTA` keys, and text values are
+  UTF-8. Invalid UTF-8 reads as an empty string and does not fail the open.
+- **Trailing bytes.** Bytes after the last field a reader decodes in a `TRAK`
+  or `TMTA` body are ignored.
+- **`CRC1`.** The body must be exactly 4 bytes; any other size is ignored as
+  if absent. If several are present, the last wins. The footer covers the
+  bytes before its own chunk header, so bytes after it are not covered. The
+  writer always puts it last.
+- **Checksum scope.** `CLUS` and `PKTS` checksums are CRC-32 of the chunk body,
+  excluding the 8-byte chunk header.
+- **Index offsets.** An `IDX ` offset is the byte offset of the first byte of
+  the chunk's ID, i.e. the chunk header.
+
+## Metadata Keys
+
+Metadata keys are UTF-8 text. Keys beginning with `tpt.` are reserved for
+names defined by this project. Other keys are free for writers to use.
+
+- `tpt.io.sample_count` (Int, audio tracks): the original per-track sample
+  count, before block-size padding. `tpt encode` writes it, and `tpt decode`
+  trims the output to it. A caller-supplied value for the same key takes
+  precedence over the one the encoder writes.

@@ -110,9 +110,34 @@ This change to `tpt-dsp` is uncommitted and unreleased. The change is in the
 sibling working tree on master, which already held other uncommitted work.
 Publishing it is a separate decision.
 
-Still open: Cinder concealment (`conceal`) allocates, Reed's encoder is not
-in scope, the offline codecs are untouched, and the §54 claim stays unchecked
-until concealment and the other codecs are covered.
+Still open: Reed's encoder is not in scope, the offline codecs are untouched,
+and the §54 claim stays unchecked until the other codecs are covered. (Cinder
+concealment was closed in step 4.)
+
+## Step 4 result (Cinder concealment)
+
+Concealment now runs in the decoder's preallocated scratch. The old path
+allocated in `synthesize`, `overlap_add`, the spectrum clone, and the pitch
+extension, which were replaced by one in-place helper (`inverse_windowed`)
+plus the existing `block`, `spec`, `synth` and `last_spectrum` buffers.
+
+- `CinderDecoder::conceal_into(&mut [u8]) -> CodecResult<usize>` is the
+  real-time form. It is an inherent method, not a `RealtimeDecoder` trait
+  change, so the trait surface is unchanged. It checks the output size before
+  any state changes.
+- `conceal` (owned) shares the same core, `conceal_block`, and differs only in
+  the final copy into a `Vec`.
+
+Measured with `codecs/cinder/tests/conceal_alloc_count.rs`: zero allocation
+calls per concealed block across 11 losses, covering the stream-start
+fallback, the pitch path on a tone, the spectrum fallback on noise, and a
+frame-size switch. The test also asserts `conceal_into` bytes equal the owned
+`conceal` bytes.
+
+Output was checked byte-identical to the pre-change code: a temporary golden
+capture recorded 106 concealed frames (both frame sizes, both paths, stream-
+start and multi-packet losses, a frame-size switch) before the rewrite and
+matched it exactly after. The golden test was removed before commit.
 
 Written for: maintainers deciding whether to accept a breaking
 change to the codec traits before 1.0.

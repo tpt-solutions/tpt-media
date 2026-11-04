@@ -5,7 +5,7 @@
 **Language:** Rust
 **Status:** Early Implementation
 **Document version:** 2.3
-**Last updated:** 2026-09-29
+**Last updated:** 2026-11-05
 
 ---
 
@@ -2233,6 +2233,38 @@ real defects — two profile-dependent answers in `tpt-media-representation` and
 documented-but-unimplemented `no_std` claim in `tpt-media-container` — which is
 the reason for doing them one crate at a time.
 
+**Codec sweep, in progress.** Three codecs have been swept against the same
+six categories on 2026-11-05, each with an `edge_cases.rs` integration file.
+- **Cinder:** empty input, zero-length and one-byte packets, output buffers too
+  small (state checked untouched), concealment at stream start, and full-scale
+  input at the bit-depth and step extremes.
+- **Aura:** the sweep found silent data loss. `encode` truncated a frame longer
+  than one block to its first block with no error. It now refuses any frame
+  that is not exactly one block. The sweep also found that `lpc_order` 32 was
+  accepted but masked to 0 on write, so packets were undecodable. The limit is
+  now 31, the 5-bit wire field's maximum. Widening the field is a wire change,
+  so it is left as a decision.
+- **Reed:** the same silent truncation in `encode`, fixed the same way.
+
+- **Thrum:** an overflow the sweep found. A 2^30 x 2^30 geometry made the
+  packet-size bound overflow `usize`, which panics in debug builds and wraps in
+  release. `validate` now uses checked arithmetic and refuses it.
+- **Vault and Mote:** the same sweep passed with no changes needed. Both refuse
+  the 2^30 x 2^30 geometry. A 32-bit audit by reading (2026-11-05) found no
+  overflow. Vault caps dimensions at 16384 and computes its packet bound in
+  `u64`, saturating on 32-bit. Mote caps frames at 848x480. Both crates compile
+  for `wasm32-unknown-unknown`. I could not run their tests on a 32-bit target.
+- **Thrum memory (measured 2026-11-05, not changed).** The encoder's packet
+  buffer is sized by the worst-case bound and allocated once, then reused. The
+  bound is about 65 to 100 times the frame size: 9.4 MB for 352x288 Yuv420,
+  29 MB for 640x480, and 199 MB for 1920x1088 Yuv420. That cost is one-time per
+  encoder. Tightening the bound, or growing the buffer on demand, is a design
+  decision, and it is left open.
+
+All five codecs now have an `edge_cases.rs`. Each of the umbrella items stays
+`[ ]`, because the sweep is a point-in-time audit and the crates are not
+re-checked as they change.
+
 ## Property tests
 
 All five, 2026-09-14, following the project's dependency-free seeded
@@ -3279,12 +3311,15 @@ The architecture must satisfy:
       and `RealtimeEncoder::{push_frame, pop_packet_into, drain_packet_into}`
       make 0 allocation calls per packet at steady state, at both frame sizes
       (`codecs/cinder/tests/{decode,encode}_alloc_count.rs`, 2026-11-04;
-      design in `docs/caller-buffer-design.md`). Still open: Cinder
-      concealment (`conceal`) and the offline codecs. Reed's
+      design in `docs/caller-buffer-design.md`). Cinder concealment is
+      closed too: `CinderDecoder::conceal_into` makes 0 allocation calls per
+      concealed block (`codecs/cinder/tests/conceal_alloc_count.rs`,
+      2026-11-05; output byte-identical to the old path). Still open: the
+      offline codecs. Reed's
       `decode_into` is at 0 calls per packet (its `lsp_to_lpc` cost is
       removed via the new `tpt-dsp-core::lsp_to_lpc_with_scratch`, on the
-      sibling repo's master), so the claim stays unchecked only for concealment
-      and the other codecs
+      sibling repo's master), so the claim stays unchecked only for the
+      offline codecs
 * [x] malformed media cannot cause unbounded resource consumption —
       §19 limits + §47 audits + §38 sweeps + §42 hostile-input memory
       tests, with the three real overflow/OOB/bomb bugs they found
@@ -3490,18 +3525,13 @@ patched in the CLI.
 
 ## Spec gaps found by the container reader
 
-To resolve in `docs/container-design.md` as part of the version 0.2 change:
+Resolved 2026-11-05 in `docs/container-design.md` ("Reader Rules for Edge
+Cases" and "Metadata Keys"). Each open case now has a stated rule, and the
+reference reader implements it. One code change came out of it: a
+`header_size` of 17 to 19 is refused (`BadHeader`), with a test in
+`containers/tpt-container` and the matching rule in `tools/tpt-py`.
 
-* versioning: "accept an earlier minor" is vacuous (minor 0 is 0x0000, rejected); only 0x0001 is readable
-* the 16-byte 0.1 header is described only as "still parses", and the backward-compatibility paragraph contradicts itself
-* `header_size` between 17 and 19, and sizes above 20, are undefined
-* a zero global or track timebase is unaddressed
-* trailing bytes inside a known chunk, and name/language encoding, are unstated
-* `pixel_format` refers to an enumeration the doc never gives; `media_type` codes above 3 are undefined
-* duplicate TRAK IDs, and CLUS or TMTA naming an undeclared track, are unspecified
-* an unknown metadata `value_type` cannot be skipped (length unknown); bool bytes other than 0/1 are unspecified
-* reserved-ID rule "first byte 0x00..=0x1F" conflicts with "4 ASCII bytes" for IDs with bytes at or above 0x80
-* the DataCluster CRC: whether "body" includes the chunk header, and the CRC variant, are unnamed (the reader assumed the body and CRC-32/ISO-HDLC; no repo sample has cluster checksums, so this is unverified against Rust output)
-* index offsets: "absolute byte offset of the CLUS header" is ambiguous (the reader assumed chunk-header start, which the Rust output matches)
-* CRC1: body size, whether it must be last, and duplicates are unstated
-* the Rust writer adds `tpt.io.sample_count` to audio metadata, and the spec has no metadata key namespace
+* [x] **`tools/tpt-py` follows the edge-case rules** (decided 2026-11-05: the
+  spec is the rule, so the validator was aligned rather than kept stricter).
+  Its tests pin each rule. Unknown media types still fail the open, as in the
+  reference reader.

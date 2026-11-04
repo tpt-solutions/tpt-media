@@ -17,7 +17,14 @@ Added
   down from 8 per packet on the owned path. Its output is byte-identical to `decode`,
   which now shares the same core and is also allocation-light (2 calls per packet).
   No wire change. The owned `Decoder` API is unchanged. Design:
-  `docs/caller-buffer-design.md`. Reed and concealment still allocate.
+  `docs/caller-buffer-design.md`. Reed still allocates on encode (not in scope).
+- **Allocation-free Cinder concealment (2026-11-05).** New inherent method
+  `CinderDecoder::conceal_into(&mut [u8])`, the caller-buffer form of `conceal`
+  (not a trait change). It makes 0 allocation calls per concealed block
+  (`codecs/cinder/tests/conceal_alloc_count.rs`). The owned `conceal` shares the
+  same core, so its helpers no longer allocate; the returned `AudioFrame` still does. Output is byte-identical to
+  the previous implementation, checked on 106 concealed frames at both frame sizes
+  across both fallback paths. No wire change.
 - **Caller-buffer real-time encode for Cinder (2026-11-04).** New opt-in trait
   `RealtimeEncoder` in `tpt-media-codec`: `push_frame`, `pop_packet_into` and
   `drain_packet_into`, with `CinderEncoder` as its first implementor. Measured
@@ -101,6 +108,28 @@ Added
 
 Changed
 
+- **Aura and Reed `encode` refuse frames that are not exactly one block (2026-11-05).**
+  Both codecs used to truncate a longer frame to its first block with no error,
+  which silently dropped input. A zero-length frame now yields no packets, and any
+  other length returns `InvalidConfig`. The CLI already sends whole blocks, so
+  `tpt encode` is unaffected. Callers of the library API must split input into
+  blocks. Per-codec notes are in `codecs/aura/CHANGELOG.md` and `codecs/reed/CHANGELOG.md`.
+- **Aura `lpc_order` is limited to 0..=31 (2026-11-05).** The 5-bit header field cannot
+  carry 32, and it was silently masked to 0, which produced undecodable packets.
+  Widening the field would be a wire-format change, so it is left as a decision.
+- **`tools/tpt-py` follows the container edge-case rules (2026-11-05).** Duplicate
+  `TRAK`s and `TMTA`s for undeclared tracks are now handled as the reference reader
+  does, instead of failing. Packets for a track with no `TRAK` are listed under a
+  placeholder track with a warning. Invalid UTF-8 reads as an empty string. A
+  malformed `CRC1` is ignored, and a second one replaces the first.
+- **Thrum refuses geometries whose sizes overflow `usize` (2026-11-05).** A 2^30 x 2^30
+  configuration panicked in debug builds during packet-size arithmetic. `validate` now
+  checks that arithmetic and returns `InvalidConfig`. Ordinary geometries are unchanged.
+- **Container header sizes 17 to 19 are refused (2026-11-05).** `FileHeader::from_bytes`
+  returns `BadHeader` for a `header_size` of 17 to 19, since chunk parsing would start
+  inside the reserved field. Sizes 16 and 20 and above are unchanged. No file written by
+  this repository used those sizes. The container spec (`docs/container-design.md`) now
+  states the edge-case rules for unspecified inputs. `tools/tpt-py` mirrors the header rule.
 - **Workspace version 0.2.0 (2026-10-19).** The wire changes below are breaking, so
   the lockstep version moves from 0.1.0 to 0.2.0 (CONTRIBUTING §9.1). Internal path
   dependencies follow it.
