@@ -857,38 +857,21 @@ impl CinderDecoder {
         })
     }
 
-    /// The pre-built plan matching spectral length `n` (128 or 256).
-    fn mdct_plan_for(&mut self, n: usize) -> &mut FastMdctPlan {
-        if n == FRAME_128 as usize {
-            &mut self.mdct_plan_128
+    /// Windowed inverse of the `m`-sample spectrum in `self.spec`, written to
+    /// `self.synth[..2m]`, ready to overlap-add. Works only in preallocated
+    /// scratch, so it performs no heap allocation.
+    fn inverse_windowed(&mut self, m: usize) {
+        self.synth.clear();
+        self.synth.resize(2 * m, 0.0);
+        let (plan, win) = if m == FRAME_128 as usize {
+            (&mut self.mdct_plan_128, &self.win_128)
         } else {
-            &mut self.mdct_plan_256
-        }
-    }
-
-    /// Windowed inverse of one spectrum: `2N` samples, ready to overlap-add.
-    fn synthesize(&mut self, spec: &[f32]) -> Vec<f32> {
-        let two_n = 2 * spec.len();
-        let mut x = vec![0f32; two_n];
-        self.mdct_plan_for(spec.len()).inverse(spec, &mut x);
-        let w = sine_window(two_n);
-        for (xi, wi) in x.iter_mut().zip(w.iter()) {
+            (&mut self.mdct_plan_256, &self.win_256)
+        };
+        plan.inverse(&self.spec, &mut self.synth);
+        for (xi, wi) in self.synth.iter_mut().zip(win.iter()) {
             *xi *= *wi;
         }
-        x
-    }
-
-    /// Overlap-add one windowed inverse block (`2N` samples). Returns the
-    /// completed block of `N` samples and keeps the second half as the next
-    /// tail. A change of frame size restarts the overlap from silence.
-    fn overlap_add(&mut self, y: &[f32]) -> Vec<f32> {
-        let n = y.len() / 2;
-        if self.tail.len() != n {
-            self.tail = vec![0.0; n];
-        }
-        let block: Vec<f32> = (0..n).map(|i| y[i] + self.tail[i]).collect();
-        self.tail.copy_from_slice(&y[n..]);
-        block
     }
 
     /// Record decoded output for pitch-period concealment, keeping the newest
@@ -946,71 +929,123 @@ impl CinderDecoder {
     /// pseudo-random sign flips. Either way the returned frame carries `pts`,
     /// as a received packet's frame would.
     pub fn conceal(&mut self, pts: Timestamp) -> CodecResult<AudioFrame> {
+        self.conceal_block();
+        Ok(audio_frame(&self.block, pts, self.enc.sample_rate))
+    }
+
+    /// Real-time concealment: the same block as [`conceal`](Self::conceal),
+    /// written as S16 mono into `out`, which must hold at least
+    /// [`RealtimeDecoder::max_output_bytes`] bytes. Returns the bytes written.
+    /// Performs no heap allocation.
+    pub fn conceal_into(&mut self, out: &mut [u8]) -> CodecResult<usize> {
+        if out.len() < self.max_output_bytes() {
+            return Err(CodecError::InvalidConfig(
+                "output buffer smaller than one Cinder packet",
+            ));
+        }
+        let m = self.conceal_block();
+        write_s16(&self.block, &mut out[..2 * m]);
+        Ok(2 * m)
+    }
+
+    /// Fill `self.block` with one concealed block, record it as decoded
+    /// output, and return its length. Works only in preallocated scratch.
+    fn conceal_block(&mut self) -> usize {
         let n = self.enc.frame_size as usize;
-        let block = match self.pitch_period() {
+        match self.pitch_period() {
             Some(period) => self.conceal_by_pitch(n, period),
             None => self.conceal_by_spectrum(n),
-        };
+        }
         self.lost_run = self.lost_run.saturating_add(1);
         self.primed = true;
+        // Take the block out so `push_history` can borrow `self`, then put it
+        // back, as `decode_block` does.
+        let block = core::mem::take(&mut self.block);
         self.push_history(&block);
-        let rate = self.enc.sample_rate;
-        Ok(audio_frame(&block, pts, rate))
+        let m = block.len();
+        self.block = block;
+        m
     }
 
     /// Repeat the last pitch period over the lost frame's `2N` samples, then
-    /// re-enter the MDCT chain through that signal's own spectrum.
-    fn conceal_by_pitch(&mut self, n: usize, period: usize) -> Vec<f32> {
+    /// re-enter the MDCT chain through that signal's own spectrum. Leaves the
+    /// block (the unwindowed extension, `N` samples) in `self.block`.
+    fn conceal_by_pitch(&mut self, n: usize, period: usize) {
         let hist_len = self.history.len();
         let mut gain_start = 1.0f32;
         for _ in 0..self.lost_run {
             gain_start *= PLC_FADE;
         }
         let gain_end = gain_start * PLC_FADE;
-        let mut ext = vec![0f32; 2 * n];
+        // The unwindowed extension is built in `synth[..2n]`.
+        self.synth.clear();
+        self.synth.resize(2 * n, 0.0);
         for i in 0..2 * n {
             let src = hist_len + i - period;
             let v = if src < hist_len {
                 self.history[src]
             } else {
-                ext[src - hist_len]
+                self.synth[src - hist_len]
             };
             let t = i as f32 / (2 * n) as f32;
-            ext[i] = v * (gain_start + (gain_end - gain_start) * t);
+            self.synth[i] = v * (gain_start + (gain_end - gain_start) * t);
         }
+        self.block.clear();
+        self.block.extend_from_slice(&self.synth[..n]);
         // Forward path exactly as the encoder's: sine window, then MDCT.
-        let w = sine_window(2 * n);
-        let windowed: Vec<f32> = ext.iter().zip(w.iter()).map(|(a, b)| a * b).collect();
-        let mut spec = vec![0f32; n];
-        self.mdct_plan_for(n).forward(&windowed, &mut spec);
-        self.last_spectrum = spec.clone();
-        // The block is the extension itself; the synthesised second half
-        // becomes the tail that alias-cancels against the next real packet.
-        let y = self.synthesize(&spec);
-        if self.tail.len() != n {
-            self.tail = vec![0.0; n];
+        let (plan, win) = if n == FRAME_128 as usize {
+            (&mut self.mdct_plan_128, &self.win_128)
+        } else {
+            (&mut self.mdct_plan_256, &self.win_256)
+        };
+        for (xi, wi) in self.synth.iter_mut().zip(win.iter()) {
+            *xi *= *wi;
         }
-        self.tail.copy_from_slice(&y[n..]);
-        ext.truncate(n);
-        ext
+        self.spec.clear();
+        self.spec.resize(n, 0.0);
+        plan.forward(&self.synth, &mut self.spec);
+        self.last_spectrum.clear();
+        self.last_spectrum.extend_from_slice(&self.spec);
+        // The synthesised second half becomes the tail that alias-cancels
+        // against the next real packet.
+        self.inverse_windowed(n);
+        if self.tail.len() != n {
+            self.tail.clear();
+            self.tail.resize(n, 0.0);
+        }
+        self.tail.copy_from_slice(&self.synth[n..2 * n]);
     }
 
     /// The pre-pitch method: the last decoded spectrum with pseudo-random sign
-    /// flips, overlap-added so the stream continues without a seam.
-    fn conceal_by_spectrum(&mut self, n: usize) -> Vec<f32> {
-        let mut spec = self.last_spectrum.clone();
-        if spec.is_empty() {
-            spec = alloc::vec![0.0; n];
+    /// flips, overlap-added so the stream continues without a seam. Leaves the
+    /// completed block in `self.block`.
+    fn conceal_by_spectrum(&mut self, n: usize) {
+        self.spec.clear();
+        if self.last_spectrum.is_empty() {
+            self.spec.resize(n, 0.0);
+        } else {
+            self.spec.extend_from_slice(&self.last_spectrum);
         }
-        for (i, s) in spec.iter_mut().enumerate() {
+        let m = self.spec.len();
+        for (i, s) in self.spec.iter_mut().enumerate() {
             let phase = self.plc_phase.wrapping_add(i as u32);
             if phase.wrapping_mul(2654435761) & 0x8000_0000 != 0 {
                 *s = -*s;
             }
         }
         self.plc_phase = self.plc_phase.wrapping_add(1);
-        let y = self.synthesize(&spec);
-        self.overlap_add(&y)
+        self.inverse_windowed(m);
+        // Overlap-add (same arithmetic as the decode path). A change of frame
+        // size restarts the overlap from silence.
+        if self.tail.len() != m {
+            self.tail.clear();
+            self.tail.resize(m, 0.0);
+        }
+        self.block.clear();
+        for i in 0..m {
+            self.block.push(self.synth[i] + self.tail[i]);
+        }
+        self.tail.copy_from_slice(&self.synth[m..2 * m]);
     }
 }
 
