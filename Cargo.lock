@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-dsp-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crossbeam-channel",
  "num-complex",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "tpt-dsp-io"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tpt-dsp-core",
 ]

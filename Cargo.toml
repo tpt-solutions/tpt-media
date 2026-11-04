@@ -63,6 +63,7 @@ exclude = [
     "/apps/tpt-web/dist",
     "/tests/corpus",
     "/.github",
+    "/fuzz",
 ]
 
 [workspace.dependencies]
@@ -99,10 +100,10 @@ tpt-video-mote = { path = "codecs/mote", version = "0.2.0" }
 # member level — see tpt-dsp's own Cargo.toml for why) lets std-based
 # codecs (Cinder, Aura) opt into "std" while the no_std Reed codec opts
 # into "alloc" only.
-tpt-dsp-core = { path = "../tpt-dsp/tpt-dsp-core", version = "0.1", default-features = false }
+tpt-dsp-core = { path = "../tpt-dsp/tpt-dsp-core", version = "0.2", default-features = false }
 # tpt-dsp-io: file/device I/O reused by tpt-media-io instead of being
 # reimplemented (todo.md §27). std-only by nature.
-tpt-dsp-io = { path = "../tpt-dsp/tpt-dsp-io", version = "0.1" }
+tpt-dsp-io = { path = "../tpt-dsp/tpt-dsp-io", version = "0.2" }
 
 # External dependencies — kept minimal per todo.md §1
 bitflags = { version = "2.4", default-features = false }

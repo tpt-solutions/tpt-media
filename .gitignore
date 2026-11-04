@@ -23,3 +23,8 @@ Thumbs.db
 # Benchmark corpus (downloaded by benchmarks/run.py fetch)
 /benchmarks/corpus/
 __pycache__/
+
+# cargo-fuzz output (fuzz/ is its own workspace)
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/

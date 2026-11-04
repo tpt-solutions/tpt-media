@@ -1,0 +1,51 @@
+[package]
+name = "tpt-media-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Coverage-guided fuzz targets (cargo-fuzz / libFuzzer). Not part of the workspace; see fuzz/README.md."
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tpt-audio-aura = { path = "../codecs/aura" }
+tpt-audio-cinder = { path = "../codecs/cinder" }
+tpt-container = { path = "../containers/tpt-container" }
+tpt-media-probe = { path = "../crates/tpt-media-probe" }
+tpt-media-codec = { path = "../crates/tpt-media-codec" }
+tpt-media-core = { path = "../crates/tpt-media-core" }
+
+# This crate is its own workspace root so the main workspace's dependency
+# graph does not gain libFuzzer.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "aura_decode"
+path = "fuzz_targets/aura_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cinder_decode"
+path = "fuzz_targets/cinder_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_parse"
+path = "fuzz_targets/container_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "probe"
+path = "fuzz_targets/probe.rs"
+test = false
+doc = false
+bench = false

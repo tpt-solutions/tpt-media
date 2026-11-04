@@ -5,6 +5,11 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # Long-running coverage-guided fuzzing (fuzz/, todo.md §38) runs on a
+  # schedule and on demand, not on every push, so it cannot slow PR checks.
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -123,6 +128,33 @@ jobs:
       # sound card, all 29 checks run (web/browser-check.mjs).
       - name: tpt-web real-browser check (headless Chrome)
         run: node apps/tpt-web/web/browser-check.mjs
+
+  fuzz:
+    name: coverage-guided fuzzing (scheduled)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      # Each target runs for a fixed time. A crash fails the job and uploads
+      # its reproducer. The corpus is per run and is not cached, so every
+      # scheduled run starts from the seed inputs.
+      - name: fuzz targets (60 s each)
+        working-directory: fuzz
+        run: |
+          for t in aura_decode cinder_decode container_parse probe; do
+            cargo +nightly fuzz run "$t" -- -max_total_time=60
+          done
+      - name: upload crash reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
 
   aarch64:
     name: AArch64 cross-check

@@ -134,11 +134,9 @@
   actually overflow `i64`, plus a new sanity check asserting 1 s → 90
   kHz = exactly 90 000 ticks. See `CHANGELOG.md` `[Unreleased] / Fixed`.
 * ~~**Aura's residual coding is Exp-Golomb, not Rice.**~~ **Fixed
-  2026-09-07 (later same day):** brought the doc comment into line
-  with the code (Exp-Golomb-coded residuals with `write_exp_golomb` /
-  `read_exp_golomb` in-crate, zigzag-mapped). Switching the wire
-  format to Rice would be a separate, breaking change and is still
-  tracked as the §974 unchecked item.
+  2026-09-07 (doc comment brought into line with the Exp-Golomb code);
+  Rice coding then shipped as Aura wire version 2 and the §30 item is
+  checked off (2026-11-04).**
 * ~~**`CHANGELOG.md`'s `[Unreleased]` entry overstates scope.**~~
   **Fixed 2026-09-07 (later same day):** removed the
   not-yet-on-disk claims about `apps/`, `ffi/`, `tpt-cli`, `tpt-web`,
@@ -1370,7 +1368,7 @@ lossy
 
 * [x] LPC
 * [x] residual
-* [ ] Rice coding — actually implements Exp-Golomb (`write_exp_golomb`/`read_exp_golomb`); doc comment corrected 2026-09-07 to match the wire format (see Known Issues + `CHANGELOG.md` `[Unreleased] / Fixed`). Switching the wire format to actual Rice coding is still pending and would be a breaking change to the v0.1 packet format
+* [x] Rice coding — adaptive Rice residuals, one `k` per 256-sample partition chosen by exact cost, with an Exp-Golomb escape for quotients ≥ 32 (`write_rice`/`read_rice`). Shipped as wire version 2 (`VERSION` in `codecs/aura/src/lib.rs`). This item was stale: it was still unchecked after the switch. Re-verified 2026-11-04 by the Aura suite (unit, property, stereo), all passing.
 * [x] block structure
 * [x] checksum/integrity — every packet ends with a CRC-32 trailer (`crc32`, `CRC_TRAILER_BYTES = 4`) over all preceding payload bytes; the decoder verifies before parsing and rejects mismatches as `MalformedPacket`. Tests: trailer-round-trip, body-bit-flip rejected, checksum-bit-flip rejected, undersized packet rejected (2026-09-09). Note: this is a v0.1 wire-format addition — packets encoded before this change lack the trailer and are rejected by the new decoder
 * [x] bit-exact round trip
@@ -3227,7 +3225,7 @@ Every item below is unchecked because 1.0 has not been declared, and CONTRIBUTIN
 * [ ] stable `.tpt` specification — the spec exists and matches the code (§49), but the format may still break; see the 1.0 note above
 * [ ] stable codec specifications — Aura, Cinder, Reed, Thrum, Vault and Mote carry versioned wire formats, but none is frozen; see the 1.0 note above
 * [ ] compatibility policy — not written; the pre-1.0 rule is only CONTRIBUTING §9-§11
-* [ ] comprehensive fuzzing — deterministic sweeps run in CI; coverage-guided long-running fuzzing is not set up (§38/§47, §54)
+* [ ] comprehensive fuzzing — deterministic sweeps run in CI. Coverage-guided targets now exist in `fuzz/` (`aura_decode`, `cinder_decode`, `container_parse`, `probe`; a separate crate, built and checked 2026-11-04) and run for 60 s per target in a scheduled CI job (Mondays, plus on demand). Still open: no long campaign has been run, no finding has been triaged, and the Windows host cannot run libFuzzer, so the first real run happens on Linux CI (§38/§47, §54)
 * [ ] reproducible benchmarks — benchmarks exist (§41) but are kept off CI because shared runners are too noisy (CONTRIBUTING §11); the release-time refresh is the manual step
 * [ ] documented security model — `docs/security.md` covers the current model; not yet reviewed as a 1.0 commitment
 * [ ] documented provenance — provenance records exist per codec (§48); the 1.0 gate asks for a single documented policy, not yet written as one
