@@ -30,7 +30,7 @@ fn sub(n: usize) {
     if TRACKING.load(Ordering::Relaxed) {
         // Saturating: memory allocated before tracking began may be freed
         // inside the tracked region.
-        let _ = CURRENT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
+        let _ = CURRENT.try_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
             Some(c.saturating_sub(n))
         });
     }

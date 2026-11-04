@@ -145,7 +145,11 @@ if (actx) {
   // finished (below, `closed` is then required outright).
   ok(actx.state === "closed" || actx.state === "running" || actx.state === "suspended",
      `real AudioContext final state is ${actx.state}`);
-  ok(actx.sampleRate === 48000, `real AudioContext sample rate ${actx.sampleRate} Hz`);
+  // The context runs at the output device's rate, which the player does not
+  // choose (it calls `new AudioContext()` with no sampleRate). 44.1 kHz devices
+  // are common, so this is reported, not asserted. The 48 kHz stream is still
+  // checked below against the buffers handed to the browser.
+  skip(`AudioContext runs at the device rate ${actx.sampleRate} Hz - device-dependent, not asserted`);
   ok(typeof actx.baseLatency === "number", `real AudioContext reports baseLatency ${actx.baseLatency} s`);
   const advanced = Math.max(...clocks, 0) - Math.min(...clocks, 0);
   // The clock only moves if the machine has an audio output device. Without

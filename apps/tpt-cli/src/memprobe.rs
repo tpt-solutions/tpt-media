@@ -95,7 +95,7 @@ fn on_alloc(size: usize) {
 #[inline]
 fn on_dealloc(size: usize) {
     let size = size as u64;
-    let _ = CURRENT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
+    let _ = CURRENT.try_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
         Some(live.saturating_sub(size))
     });
 }
