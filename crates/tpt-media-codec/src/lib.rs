@@ -15,7 +15,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
-use tpt_media_core::Packet;
+use tpt_media_core::{Packet, Timestamp};
 
 mod cancel;
 pub use cancel::{
@@ -370,6 +370,63 @@ pub trait Decoder {
     fn drain(&mut self) -> CodecResult<Vec<Self::Frame>> {
         self.flush()
     }
+}
+
+/// Real-time decoding into caller-owned storage.
+///
+/// Opt-in companion to [`Decoder`]; see `docs/caller-buffer-design.md`.
+/// The owned `Decoder::decode` returns a fresh `Vec` on every call. This
+/// method writes into a buffer the caller supplies, so a steady-state loop
+/// can run with no heap allocation.
+pub trait RealtimeDecoder {
+    /// The largest number of bytes one packet can produce. `decode_into`
+    /// refuses a shorter `out` before touching any decoder state, so a
+    /// refusal never leaves the stream half-advanced.
+    fn max_output_bytes(&self) -> usize;
+
+    /// Decode one packet into `out` as the codec's native sample bytes.
+    ///
+    /// Returns the number of bytes written. Zero means the packet produced
+    /// no output (a decoder still priming, or the packet was consumed
+    /// without emitting samples). Timestamps and sample rate are the
+    /// caller's to attach, as the packet's `pts` and the codec's rate.
+    fn decode_into(&mut self, packet: &Packet, out: &mut [u8]) -> CodecResult<usize>;
+}
+
+/// Real-time encoding into caller-owned storage.
+///
+/// Opt-in companion to [`Encoder`]; see `docs/caller-buffer-design.md`. The
+/// owned `Encoder::encode` returns a `Vec` of packets. This splits the work
+/// into three steps so that no step has to return owned storage:
+///
+/// 1. [`push_frame`](RealtimeEncoder::push_frame) takes in samples. It
+///    emits nothing, because a frame may not fill a packet.
+/// 2. [`pop_packet_into`](RealtimeEncoder::pop_packet_into) emits one
+///    complete packet into the caller's buffer, or reports that none is ready.
+///    Call it until it returns `None`.
+/// 3. [`drain_packet_into`](RealtimeEncoder::drain_packet_into) emits the
+///    end-of-stream tail, one packet per call, until it returns `None`.
+pub trait RealtimeEncoder {
+    /// The frame type this encoder consumes.
+    type Frame;
+
+    /// The largest number of bytes one packet can take. Both pop methods
+    /// refuse a shorter buffer before they change any encoder state.
+    fn max_packet_bytes(&self) -> usize;
+
+    /// Accept a frame's samples. Samples that do not yet fill a packet are
+    /// held until a later pop.
+    fn push_frame(&mut self, frame: &Self::Frame) -> CodecResult<()>;
+
+    /// Emit the next complete packet into `out`, returning its length and
+    /// timestamp (its bytes are `out[..len]`). Returns `None` when more
+    /// samples are needed first.
+    fn pop_packet_into(&mut self, out: &mut [u8]) -> CodecResult<Option<(usize, Timestamp)>>;
+
+    /// Emit the next packet of the end-of-stream tail, zero-padding the
+    /// partial last block, as [`pop_packet_into`](RealtimeEncoder::pop_packet_into)
+    /// does. Returns `None` once the stream is fully drained.
+    fn drain_packet_into(&mut self, out: &mut [u8]) -> CodecResult<Option<(usize, Timestamp)>>;
 }
 
 /// Encoder trait.
