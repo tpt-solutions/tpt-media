@@ -29,6 +29,15 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Fixed
 
+- **`encode` refuses frames that are not exactly one block (2026-11-05).** A
+  longer frame was truncated to its first block with no error, silently
+  dropping the rest of the input. A zero-length frame now returns no packets.
+  Any other length returns `InvalidConfig`. The CLI always sends whole blocks.
+- **`lpc_order` is limited to 0..=31 (2026-11-05).** The header carries the
+  order in 5 bits, so 32 was masked to 0 on write and produced packets that did
+  not decode. Orders above 31 are refused at construction. Widening the field to
+  allow 32 would be a wire-format change.
+
 - An out-of-bounds write in the lossy path, found by the §38 codec fuzz sweep
   (2026-09-11).
 

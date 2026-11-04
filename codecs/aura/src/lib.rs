@@ -203,7 +203,9 @@ pub struct AuraConfig {
     pub mode: AuraMode,
     /// Sample rate in Hz; 44.1/48 kHz per the supported-format table.
     pub sample_rate: u32,
-    /// LPC filter order, 1..=32 (lossless residual prediction).
+    /// LPC filter order, 0..=31 (lossless residual prediction; 0 means no
+    /// prediction). The header carries the order in 5 bits, so 32 cannot be
+    /// represented and is refused.
     pub lpc_order: u8,
     /// Samples per coded block (lossless) and the MDCT analysis
     /// hop input length basis; 1024 by default.
@@ -235,8 +237,13 @@ impl AuraEncoder {
     /// Build an encoder for `enc` under the framework configuration
     /// (`version` + resource limits); `enc` is validated first.
     pub fn new(codec_cfg: CodecConfig, enc: AuraConfig) -> CodecResult<Self> {
-        if (enc.lpc_order as usize) > 32 {
-            return Err(CodecError::InvalidConfig("aura lpc_order max 32"));
+        // The header writes the order in 5 bits. A value of 32 would be masked
+        // to 0 on write while its coefficients were still coded, producing
+        // packets that do not decode, so the limit is 31.
+        if enc.lpc_order > 31 {
+            return Err(CodecError::InvalidConfig(
+                "aura lpc_order max 31 (5-bit wire field)",
+            ));
         }
         Ok(AuraEncoder {
             info: static_info(Capabilities {
@@ -270,9 +277,16 @@ impl Encoder for AuraEncoder {
         }
         let channels = if stereo { 2 } else { 1 };
         let n_samples = frame.samples.len() / (2 * channels);
-        if n_samples < fs {
+        // Aura codes exactly one block per frame and keeps no input between
+        // calls. A longer frame used to be truncated to its first block with
+        // no error, so the rest of the input was silently lost. Refuse it
+        // instead, so the caller has to split the input into blocks.
+        if n_samples == 0 {
+            return Ok(Vec::new());
+        }
+        if n_samples != fs {
             return Err(CodecError::InvalidConfig(
-                "not enough samples for one block",
+                "aura codes exactly one block_size of samples per frame",
             ));
         }
         let x: Vec<f64> = if stereo {
