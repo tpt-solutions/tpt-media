@@ -128,26 +128,39 @@ impl Picture {
         Ok(pic)
     }
 
+    /// Write the picture into `out` in the layout [`VideoFrame::alloc`]
+    /// produces: the planes in order, each dense. `out` must hold at least
+    /// the format's frame size. Allocates nothing.
+    pub fn write_into(&self, out: &mut [u8]) {
+        let mut off = 0;
+        for p in &self.planes {
+            let n = p.data.len();
+            out[off..off + n].copy_from_slice(&p.data);
+            off += n;
+        }
+    }
+
+    /// Copy every plane from `src`, in place. Both pictures have the same
+    /// geometry, so this allocates nothing.
+    pub fn copy_from(&mut self, src: &Picture) {
+        for (d, s) in self.planes.iter_mut().zip(&src.planes) {
+            d.data.copy_from_slice(&s.data);
+        }
+    }
+
+    /// Set every sample of every plane to `fill`, in place.
+    pub fn fill(&mut self, fill: u8) {
+        for p in &mut self.planes {
+            p.data.fill(fill);
+        }
+    }
+
     /// Serialise into a [`VideoFrame`] using the exact layout
     /// [`VideoFrame::alloc`] produces.
     pub fn to_frame(&self, pts: Timestamp) -> VideoFrame {
         let mut f = VideoFrame::alloc(self.width as u32, self.height as u32, self.format);
         f.frame.pts = pts;
-        let stride = f.stride as usize;
-        for y in 0..self.height {
-            f.pixels[y * stride..y * stride + self.width]
-                .copy_from_slice(&self.planes[0].data[y * self.width..(y + 1) * self.width]);
-        }
-        if self.format == PixelFormat::Yuv420 {
-            let (cw, ch, cstride) = (self.width / 2, self.height / 2, stride / 2);
-            for c in 0..2 {
-                let base = stride * self.height + c * cstride * ch;
-                for y in 0..ch {
-                    f.pixels[base + y * cstride..base + y * cstride + cw]
-                        .copy_from_slice(&self.planes[1 + c].data[y * cw..(y + 1) * cw]);
-                }
-            }
-        }
+        self.write_into(&mut f.pixels);
         f
     }
 }

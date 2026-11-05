@@ -597,7 +597,7 @@ fn an_out_of_range_index_is_malformed_and_does_not_disturb_the_reference() {
         dec.decode(&key([0, 1, 2, 3])),
         Err(CodecError::MalformedPacket)
     );
-    assert!(dec.reference.is_none(), "a failed decode must not commit");
+    assert!(!dec.has_reference, "a failed decode must not commit");
     let good = dec.decode(&key([0, 1, 2, 0])).unwrap().remove(0);
     assert_eq!(good.pixels[0], 10);
     assert_eq!(good.pixels[8], 100);

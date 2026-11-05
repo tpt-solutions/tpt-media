@@ -19,6 +19,16 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Added
 
+- **Caller-buffer decode and allocation-free concealment (2026-11-05).**
+  `MoteDecoder` implements `RealtimeDecoder` (`max_output_bytes`,
+  `decode_into`) and gains `conceal_into`. Frame packets make zero heap
+  allocation calls at steady state (`tests/decode_alloc_count.rs`), and
+  output is byte-identical to `decode` and `conceal`. A dictionary packet
+  yields no output (`decode_into` returns `0`) and still allocates, since it
+  installs stream state. The decoder holds two preallocated picture slots in
+  place of per-frame clones. Refused or damaged packets leave the reference
+  unchanged. The bitstream and `VERSION` are unchanged.
+
 - **The crate itself** (2026-09-30, todo.md §34): Mote, the extreme edge/IoT
   video codec. 8×8 patch dictionary VQ with up to 4096 entries (12-bit index),
   `Gray8`/`Yuv420` up to 480p (multiples of 16), key and delta frames with

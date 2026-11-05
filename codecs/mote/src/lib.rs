@@ -95,7 +95,7 @@ use tpt_dsp_core::{nearest_vector_accelerated, DistanceMetric};
 use tpt_media_bitstream::{BitReader, BitWriter};
 use tpt_media_codec::{
     Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, Decoder, DynDecoder,
-    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder, SupportedFormat,
+    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder, RealtimeDecoder, SupportedFormat,
 };
 use tpt_media_core::{Frame, Packet, PacketFlags, PixelFormat, Timestamp, VideoFrame};
 
@@ -775,16 +775,23 @@ impl Encoder for MoteEncoder {
 /// Mote decoder.
 ///
 /// Holds the dictionary (from a dictionary packet or provisioned via
-/// [`MoteDecoder::with_dictionary`]), one reference picture, and a copy
-/// of the last emitted frame for [`MoteDecoder::conceal`]. One frame
-/// packet yields one frame; a dictionary packet yields none.
+/// [`MoteDecoder::with_dictionary`]) and two picture slots, allocated once
+/// in construction. One slot is the reference and the other is the work
+/// buffer the next frame decodes into; a successful decode swaps their roles,
+/// so steady-state frame decoding allocates nothing. One frame packet yields
+/// one frame; a dictionary packet yields none.
 pub struct MoteDecoder {
     info: CodecInfo,
     cfg: CodecConfig,
     enc: MoteConfig,
     grid: PatchGrid,
     dict: Option<Dictionary>,
-    reference: Option<Picture>,
+    /// The two picture slots. Which one is the reference is `ref_slot`.
+    pics: [Picture; 2],
+    /// Whether `pics[ref_slot]` holds a decoded reference.
+    has_reference: bool,
+    /// Index into `pics` of the reference picture.
+    ref_slot: usize,
 }
 
 impl MoteDecoder {
@@ -796,13 +803,19 @@ impl MoteDecoder {
         enc.validate()?;
         let info = static_info(enc.width, enc.height, enc.format, capabilities());
         let grid = PatchGrid::new(enc.width as usize, enc.height as usize, enc.format);
+        let (w, h, format) = (enc.width as usize, enc.height as usize, enc.format);
         Ok(MoteDecoder {
             info,
             cfg: codec_cfg,
             enc,
             grid,
             dict: None,
-            reference: None,
+            pics: [
+                Picture::new(w, h, format, 128),
+                Picture::new(w, h, format, 128),
+            ],
+            has_reference: false,
+            ref_slot: 0,
         })
     }
 
@@ -826,16 +839,29 @@ impl MoteDecoder {
     /// Packet-loss concealment: repeat the last decoded frame; mid-grey
     /// before the first frame.
     pub fn conceal(&mut self, pts: Timestamp) -> CodecResult<VideoFrame> {
-        let pic = match &self.reference {
-            Some(p) => p.clone(),
-            None => Picture::new(
-                self.enc.width as usize,
-                self.enc.height as usize,
-                self.enc.format,
-                128,
-            ),
-        };
-        Ok(pic.to_frame(pts))
+        let mut f = VideoFrame::alloc(self.enc.width, self.enc.height, self.enc.format);
+        f.frame.pts = pts;
+        self.conceal_into(&mut f.pixels)?;
+        Ok(f)
+    }
+
+    /// Caller-buffer form of [`MoteDecoder::conceal`]: write the concealed
+    /// frame's native bytes into `out` and return their count. Allocates
+    /// nothing. Output is byte-identical to `conceal`.
+    pub fn conceal_into(&mut self, out: &mut [u8]) -> CodecResult<usize> {
+        let n = self.enc.frame_bytes();
+        if out.len() < n {
+            return Err(CodecError::InvalidConfig(
+                "output buffer smaller than one Mote frame",
+            ));
+        }
+        if self.has_reference {
+            self.pics[self.ref_slot].write_into(&mut out[..n]);
+        } else {
+            // Nothing decoded yet: the mid-grey start, every sample 128.
+            out[..n].fill(128);
+        }
+        Ok(n)
     }
 
     fn decode_dictionary(&mut self, r: &mut BitReader, body_len: usize) -> CodecResult<()> {
@@ -857,38 +883,52 @@ impl MoteDecoder {
         Ok(())
     }
 
-    fn decode_frame(
-        &mut self,
-        r: &mut BitReader,
-        intra: bool,
-        pts: Timestamp,
-    ) -> CodecResult<VideoFrame> {
+    /// Decode one frame body into the work slot and make it the reference.
+    ///
+    /// On error the reference is left untouched, so a refused or damaged
+    /// packet never half-advances the stream.
+    fn decode_frame(&mut self, r: &mut BitReader, intra: bool) -> CodecResult<()> {
         let dict = self.dict.as_ref().ok_or(CodecError::NeedMoreInput)?;
         let id = r.read(ID_BITS).map_err(|_| CodecError::MalformedPacket)? as u16;
         if id != dict.id() {
             return Err(CodecError::Unsupported("mote dictionary id mismatch"));
         }
-        if !intra && self.reference.is_none() {
+        if !intra && !self.has_reference {
             return Err(CodecError::NeedMoreInput);
         }
         let total = self.grid.total();
         let (ib, n) = (dict.index_bits(), dict.len());
-        let mut recon = match (&self.reference, intra) {
-            (Some(p), false) => p.clone(),
-            _ => Picture::new(
-                self.enc.width as usize,
-                self.enc.height as usize,
-                self.enc.format,
-                128,
-            ),
+
+        // The work slot is the one that is not the reference. Before the
+        // first frame there is no reference and slot 0 is used.
+        let recon_slot = if self.has_reference {
+            1 - self.ref_slot
+        } else {
+            0
         };
+        {
+            let (first, rest) = self.pics.split_at_mut(1);
+            let (recon, reference) = match (recon_slot, self.has_reference) {
+                (0, false) => (&mut first[0], None),
+                (0, true) => (&mut first[0], Some(&rest[0])),
+                _ => (&mut rest[0], Some(&first[0])),
+            };
+            match (intra, reference) {
+                // P-frame: start from the reference, then overwrite patches.
+                (false, Some(rf)) => recon.copy_from(rf),
+                // Key frame, or no reference: the neutral start, as before.
+                _ => recon.fill(128),
+            }
+        }
+
+        let recon = &mut self.pics[recon_slot];
         if intra {
             for g in 0..total {
                 let idx = r.read(ib).map_err(|_| CodecError::MalformedPacket)? as usize;
                 if idx >= n {
                     return Err(CodecError::MalformedPacket);
                 }
-                self.grid.store(&mut recon, g, dict.entry(idx));
+                self.grid.store(recon, g, dict.entry(idx));
             }
         } else {
             let k = r
@@ -911,24 +951,18 @@ impl MoteDecoder {
                 if idx >= n {
                     return Err(CodecError::MalformedPacket);
                 }
-                self.grid.store(&mut recon, pos, dict.entry(idx));
+                self.grid.store(recon, pos, dict.entry(idx));
                 pos += 1;
             }
         }
-        let frame = recon.to_frame(pts);
-        self.reference = Some(recon);
-        Ok(frame)
-    }
-}
-
-impl Decoder for MoteDecoder {
-    type Frame = VideoFrame;
-
-    fn info(&self) -> &CodecInfo {
-        &self.info
+        self.ref_slot = recon_slot;
+        self.has_reference = true;
+        Ok(())
     }
 
-    fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<VideoFrame>> {
+    /// Parse one packet. Returns `true` when it was a frame and the
+    /// reference now holds it, `false` for a dictionary packet.
+    fn decode_packet(&mut self, packet: &Packet) -> CodecResult<bool> {
         self.cfg.limits.check_packet(packet.data.len())?;
         self.cfg
             .limits
@@ -956,21 +990,64 @@ impl Decoder for MoteDecoder {
         match ty {
             TYPE_DICTIONARY => {
                 self.decode_dictionary(&mut r, body.len())?;
-                Ok(Vec::new())
+                Ok(false)
             }
             TYPE_KEY | TYPE_DELTA => {
-                let f = self.decode_frame(&mut r, ty == TYPE_KEY, packet.pts)?;
-                Ok(vec![f])
+                self.decode_frame(&mut r, ty == TYPE_KEY)?;
+                Ok(true)
             }
             _ => Err(CodecError::MalformedPacket),
+        }
+    }
+}
+
+impl Decoder for MoteDecoder {
+    type Frame = VideoFrame;
+
+    fn info(&self) -> &CodecInfo {
+        &self.info
+    }
+
+    fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<VideoFrame>> {
+        if self.decode_packet(packet)? {
+            Ok(vec![self.pics[self.ref_slot].to_frame(packet.pts)])
+        } else {
+            Ok(Vec::new())
         }
     }
 
     fn flush(&mut self) -> CodecResult<Vec<VideoFrame>> {
         // Drop the reference; keep the dictionary, which is stream
         // configuration rather than decode state.
-        self.reference = None;
+        self.has_reference = false;
+        self.ref_slot = 0;
         Ok(Vec::new())
+    }
+}
+
+impl RealtimeDecoder for MoteDecoder {
+    fn max_output_bytes(&self) -> usize {
+        self.enc.frame_bytes()
+    }
+
+    /// Decode one packet into `out` as native frame bytes. A dictionary
+    /// packet produces no output and returns `0`. Refuses a short `out`
+    /// before touching any state. Steady-state frame packets allocate
+    /// nothing; a dictionary packet installs new stream state and may
+    /// allocate.
+    fn decode_into(&mut self, packet: &Packet, out: &mut [u8]) -> CodecResult<usize> {
+        let n = self.max_output_bytes();
+        if out.len() < n {
+            return Err(CodecError::InvalidConfig(
+                "output buffer smaller than one Mote frame",
+            ));
+        }
+        if self.decode_packet(packet)? {
+            self.pics[self.ref_slot].write_into(&mut out[..n]);
+            Ok(n)
+        } else {
+            Ok(0)
+        }
     }
 }
 
