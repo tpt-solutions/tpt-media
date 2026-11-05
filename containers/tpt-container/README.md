@@ -17,9 +17,9 @@ Part of the [`tpt-media`](../../README.md) workspace —
 | | |
 |---|---|
 | Role | Native container format (todo.md §20–§25) |
-| Magic | `TPTM` · header version `0x0001` |
+| Magic | `TPTM` · header version `0x0002` (0.1 files, `0x0001`, still read) |
 | Status | Implemented (streaming, index, integrity all live) |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | `no_std` | No — `std` scaffolding exists but the crate is std-only today |
@@ -30,8 +30,8 @@ Part of the [`tpt-media`](../../README.md) workspace —
 ```text
 FileHeader (20 bytes)
   magic        u8[4]    = "TPTM"
-  version      u16      = 0x0001 (major = >> 8, minor = & 0xFF)
-  header_size  u16      = 20
+  version      u16      = 0x0002 (major = >> 8, minor = & 0xFF)
+  header_size  u16      = 20     (16 is accepted for 0.1 files; 17 to 19 are refused)
   timebase_num u32
   timebase_den u32
   reserved     u32      = 0 (ignored on read)
@@ -43,8 +43,11 @@ Chunk (TLV)
 ```
 
 Chunk types: `TRAK` (full track descriptor), `TMTA` (typed per-track
-metadata), `CLUS` (data cluster: `pts`, `dts`, `flags`, `track_id`, optional
-`duration`, payload, optional CRC-32), `IDX ` (optional per-track index,
+metadata), `PKTS` (version 0.2: a run of up to 32 packets of one track, with
+timestamps as deltas from the run's base, one checksum for the run),
+`CLUS` (data cluster: `pts`, `dts`, `flags`, `track_id`, optional
+`duration`, payload, optional CRC-32; the only packet chunk in 0.1 files),
+`IDX ` (optional per-track index,
 written by `finalize`, versioned), `CRC1` (optional container-level CRC-32
 footer, written by `finalize`). Field-by-field:
 [`docs/container-design.md`](../../docs/container-design.md).
@@ -143,6 +146,10 @@ targets this workspace explicitly targets.
   neither until it is closed (the demuxer handles that).
 - The header version rule is major/minor with fail-fast on anything newer;
   there is no compatibility mode (todo.md §24, §35).
+- Version 0.1 readers skip `PKTS` and see no packets in a 0.2 file. Version
+  0.2 readers read 0.1 files, which contain only `CLUS`.
+- A zero timebase component is refused at parse time, and so are header sizes
+  17 to 19 (they would start chunk parsing inside the reserved field).
 
 ## License
 

@@ -36,6 +36,11 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Fixed
 
+- **Header sizes 17 to 19 are refused (2026-11-05).** `FileHeader::from_bytes`
+  accepted any `header_size` of at least 16. A value from 17 to 19 started chunk
+  parsing inside the reserved header field. Only 16 (version 0.1) and 20 or more
+  are accepted now, and `header_size_between_17_and_19_is_refused` in `src/lib.rs`
+  pins the boundary. No change to files written by this crate.
 - **The crate forced `std` onto everything that depends on it** (2026-10-01,
   found while auditing every crate's `no_std` claim). This crate is std-only
   by design and its README says so, but all four of its dependencies were
