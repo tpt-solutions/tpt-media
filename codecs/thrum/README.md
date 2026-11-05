@@ -21,15 +21,15 @@ for latency and bounded work. Part of the
 | Role | Native low-latency video codec (todo.md §32) |
 | Codec ID | `THRM` · bitstream `VERSION = 1` |
 | Status | Implemented |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | Coded formats | `Gray8` and planar `Yuv420`, dimensions multiples of 16 |
-| Real-time | **Decoder** real-time-safe; encoder is not (`real_time_encoder: false`) |
+| Real-time | **Decoder** real-time-safe, with zero allocation calls per packet on `decode_into` / `conceal_into`; encoder is not (`real_time_encoder: false`) |
 | `no_std` | Yes |
 | Measured peak memory | 152 503 B against a documented < 1 MiB budget |
 
-## Design (v0.1)
+## Design
 
 - **I/P coding, no B-frames.** One I-frame, then P-frames forever. Nothing is
   reordered or held back, so a frame encoded at wall-clock *t* is decodable
@@ -84,6 +84,16 @@ let frames = dec.decode(&packets[0])?;
 Packet loss: `ThrumDecoder::conceal` repeats the last decoded frame (a
 freeze) — the correct concealment for a codec with no temporal hierarchy —
 and emits mid-grey before the first frame.
+
+### Caller-buffer decode
+
+`ThrumDecoder` implements `RealtimeDecoder`. `decode_into(packet, &mut [u8])`
+writes the frame into the caller's buffer, and `conceal_into` is the
+caller-buffer form of `conceal`. Both make zero heap allocation calls per
+packet at steady state, and their output is byte-identical to `decode` and
+`conceal`. The decoder keeps two picture slots, allocated once in `new` and
+swapped as reference and work buffer, in place of per-frame clones. A refused
+or damaged packet leaves the reference unchanged.
 
 ## Wire format and versioning
 
@@ -143,7 +153,11 @@ reference, config validation, codec-private round trip) and 6 property tests
 (full-length round trips across four geometries and both formats, `qp`
 ordering quality, bit-exact flat frames, determinism, out-of-range header
 rejection, and the §38 corruption/truncation/bit-flip sweep).
-`tests/realtime_alloc.rs` pins bounded allocation over 24 steady-state passes.
+`tests/realtime_alloc.rs` pins bounded allocation over 24 steady-state passes,
+`tests/decode_alloc_count.rs` pins zero allocation calls per packet on the
+caller-buffer path, and `tests/edge_cases.rs` covers hostile and degenerate
+inputs, including geometries whose sizes would overflow `usize`, which are
+refused at construction.
 
 Two real defects were caught by these tests: the decoder walked macroblocks
 column-major while the encoder wrote them row-major (≈13 dB PSNR on a smooth
