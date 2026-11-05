@@ -65,7 +65,26 @@ links onward to the shared design documents. Each crate also carries its own
 [CONTRIBUTING §9.4](CONTRIBUTING.md#94-per-crate-documentation) for how those
 relate to the workspace-level [CHANGELOG.md](CHANGELOG.md).
 
+## Quick start
+
+Install the `tpt` command-line tool from a checkout and try it on a WAV file:
+
+```bash
+cargo install --path apps/tpt-cli
+
+tpt list-codecs                              # codecs and their IDs
+tpt probe input.wav                          # introspect a media file
+tpt encode --codec cinder in.wav out.tpt     # encode to the native .tpt container
+tpt decode --codec cinder out.tpt back.wav   # decode back to WAV
+tpt --help                                   # every command and option
+```
+
+Prebuilt binaries and install options are in
+[`apps/tpt-cli/README.md`](apps/tpt-cli/README.md).
+
 ## Building
+
+Minimum supported Rust version: **1.86**.
 
 ```bash
 # Format, lint, build, and test the entire workspace
@@ -81,6 +100,16 @@ for bare-metal targets:
 ```bash
 cargo build -p tpt-audio-reed --target thumbv7em-none-eabi --no-default-features
 ```
+
+The `.tpt` decoders also run in the browser. See
+[`apps/tpt-web/README.md`](apps/tpt-web/README.md) for the WASM build.
+
+## Testing and fuzzing
+
+Each crate's test suite includes deterministic corruption sweeps over its
+parsers, and those run on every CI build. Coverage-guided fuzz targets for the
+untrusted-input parsers live in [`fuzz/`](fuzz/) as a separate crate. Benchmark
+tooling is in [`benchmarks/`](benchmarks/).
 
 ## License
 
