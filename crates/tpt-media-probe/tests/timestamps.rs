@@ -6,8 +6,8 @@
 //! bitrate, frame-rate estimation), so it is where a hostile timestamp
 //! would bite first.
 
-use tpt_media_format::build_tpt;
 use tpt_media_core::{Packet, Timebase, Timestamp};
+use tpt_media_format::build_tpt;
 
 fn tb() -> Timebase {
     Timebase {

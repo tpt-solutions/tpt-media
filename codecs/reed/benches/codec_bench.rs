@@ -6,9 +6,9 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
+use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 
 const RATE: u32 = 16_000;
 const BLOCK: usize = 320;

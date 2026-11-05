@@ -4,11 +4,11 @@
 //! byte-identical files, and extreme PTS values must round-trip without
 //! panicking, wrapping, or corrupting neighboring packets.
 
-use tpt_media_format::TptDemuxer;
-use tpt_media_format::TptMuxer;
 use tpt_media_container::Container as _;
 use tpt_media_container::ContainerError;
 use tpt_media_core::{Packet, PacketFlags, Timebase, Timestamp};
+use tpt_media_format::TptDemuxer;
+use tpt_media_format::TptMuxer;
 
 fn lcg(state: &mut u64) -> u64 {
     *state = state

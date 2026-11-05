@@ -2,8 +2,8 @@
 //! timestamps intact — exercising the §26 "timestamps through the
 //! pipeline" guarantee against the actual container codec.
 
-use tpt_media_format::build_tpt;
 use tpt_media_core::{Packet, Timebase, Timestamp};
+use tpt_media_format::build_tpt;
 use tpt_media_pipeline::{NodeOps, Sink, Source};
 
 fn tb() -> Timebase {

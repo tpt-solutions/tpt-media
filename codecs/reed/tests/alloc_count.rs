@@ -43,9 +43,9 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
-use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder, RealtimeDecoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, Packet, SampleFormat, Timebase, Timestamp};
+use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 
 fn counted<T>(f: impl FnOnce() -> T) -> (T, usize) {
     CALLS.store(0, Ordering::Relaxed);

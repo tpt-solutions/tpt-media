@@ -5,9 +5,9 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use tpt_media_format::{TptDemuxer, TptMuxer};
 use tpt_media_container::Container as _;
 use tpt_media_core::{Packet, Timebase, Timestamp};
+use tpt_media_format::{TptDemuxer, TptMuxer};
 
 const PACKETS: usize = 200;
 

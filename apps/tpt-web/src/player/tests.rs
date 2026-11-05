@@ -4,9 +4,9 @@
 
 use super::*;
 use crate::synth::{self, AudioKind};
-use tpt_media_format::TptMuxer;
 use tpt_media_codec::{Capabilities, CodecInfo, CodecResult, ResourceLimits};
 use tpt_media_core::{ChannelLayout, CodecId, SampleFormat, Track, TrackMedia};
+use tpt_media_format::TptMuxer;
 
 #[derive(Debug, Default)]
 struct Collected {

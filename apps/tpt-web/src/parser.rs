@@ -34,12 +34,12 @@ use std::collections::VecDeque;
 
 use crate::error::{ContainerFault, WebError};
 use crate::limits::{run_body_cap, WebLimits, CLUS_OVERHEAD, MAX_TRAK_BYTES};
+use tpt_media_core::{Duration, Packet, PacketFlags, Timestamp, Track};
 use tpt_media_format::{
     decode_clus, decode_tmta, decode_trak, read_chunk_header, run_records, FileHeader,
     PacketRecord, CHUNK_CLUS, CHUNK_PKTS, CHUNK_TMTA, CHUNK_TRAK, CLUS_DISCONTINUITY,
     CLUS_END_OF_FRAME, CLUS_KEYFRAME, MAGIC,
 };
-use tpt_media_core::{Duration, Packet, PacketFlags, Timestamp, Track};
 
 /// Minimum bytes needed before the header can be validated (the container
 /// crate's `MIN_HEADER_SIZE`).
@@ -653,8 +653,8 @@ mod tests {
 
     #[test]
     fn corrupted_cluster_crc_is_dropped_not_decoded() {
-        use tpt_media_format::{encode_chunk, encode_clus, encode_trak};
         use tpt_media_core::{CodecId, MediaType, Timebase};
+        use tpt_media_format::{encode_chunk, encode_clus, encode_trak};
         let tb = Timebase::MILLISECONDS;
         let track = Track::new(0, MediaType::Audio, CodecId::new(*b"CIND"), tb);
         let mut f = header_bytes();

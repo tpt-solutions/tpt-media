@@ -20,13 +20,13 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
-use tpt_media_format::TptDemuxer;
 use tpt_media_codec::Registry;
 use tpt_media_container::Container;
 use tpt_media_core::{
     ChannelLayout, CodecId, MediaType, MetadataValue, PixelFormat, SampleFormat, Timebase,
     Timestamp, Track,
 };
+use tpt_media_format::TptDemuxer;
 
 /// Probed media container kind.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -714,7 +714,6 @@ fn wav_sample_count(bytes: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
     use alloc::boxed::Box;
-    use tpt_media_format::{encode_chunk, read_chunk_header, TptMuxer};
     use tpt_media_codec::{
         Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, DynDecoder,
         DynDecoderFactory, DynEncoder, DynEncoderFactory,
@@ -723,6 +722,7 @@ mod tests {
         ChannelLayout, CodecId, MediaType, MetadataValue, Packet, PacketFlags, PixelFormat,
         SampleFormat,
     };
+    use tpt_media_format::{encode_chunk, read_chunk_header, TptMuxer};
 
     fn timebase() -> Timebase {
         Timebase::new(1, 48_000)

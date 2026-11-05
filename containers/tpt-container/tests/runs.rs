@@ -1,8 +1,8 @@
 //! Version 0.2 packet runs (`PKTS`), checked through the public API only.
 
-use tpt_media_format::{for_each_chunk, parse_tpt, TptDemuxer, TptMuxer, CHUNK_PKTS};
 use tpt_media_container::Container;
 use tpt_media_core::{Duration, Packet, PacketFlags, Timebase, Timestamp};
+use tpt_media_format::{for_each_chunk, parse_tpt, TptDemuxer, TptMuxer, CHUNK_PKTS};
 
 fn packet(
     track_id: u8,

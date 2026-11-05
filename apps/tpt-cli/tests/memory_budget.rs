@@ -170,9 +170,9 @@ fn uninstrumented_report_says_none_not_zero() {
 mod audio {
     use super::*;
     use tpt_media_aura::{AuraConfig, AuraDecoder, AuraEncoder};
-    use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
     use tpt_media_codec::{Decoder, Encoder};
     use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
+    use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 
     const RATE: u32 = 48_000;
     const BLOCK: usize = 1024;
