@@ -2,12 +2,12 @@
 //! and the §43 `transcode`/`benchmark` commands together: the corpus is
 //! driven through the real codecs (via the same block-chunking the CLI
 //! uses), the round trips are scored with the metrics, and the CLI
-//! commands are exercised end-to-end through [`tpt_cli::run`].
+//! commands are exercised end-to-end through [`tpt_media_cli::run`].
 
-use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder};
-use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
-use tpt_cli::quality::{log_spectral_distance_db, snr_db};
-use tpt_cli::signals;
+use tpt_media_aura::{AuraConfig, AuraDecoder, AuraEncoder};
+use tpt_media_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
+use tpt_media_cli::quality::{log_spectral_distance_db, snr_db};
+use tpt_media_cli::signals;
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
 
@@ -195,9 +195,9 @@ fn corpus_spectral_distance_tracks_snr() {
 // --- CLI end-to-end tests ------------------------------------------------
 
 /// Outcome of a `tpt` invocation with stdin input.
-fn run_stdin(bytes: &[u8], args: &[&str]) -> tpt_cli::Outcome {
+fn run_stdin(bytes: &[u8], args: &[&str]) -> tpt_media_cli::Outcome {
     let read_stdin = move || -> Result<Vec<u8>, String> { Ok(bytes.to_vec()) };
-    let ctx = tpt_cli::Ctx {
+    let ctx = tpt_media_cli::Ctx {
         read_file: &|_: &str| -> Result<Vec<u8>, String> {
             Err("no file reads in this test".into())
         },
@@ -207,7 +207,7 @@ fn run_stdin(bytes: &[u8], args: &[&str]) -> tpt_cli::Outcome {
         },
     };
     let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    tpt_cli::run(&argv, &ctx)
+    tpt_media_cli::run(&argv, &ctx)
 }
 
 fn wav_bytes(samples: &[u8]) -> Vec<u8> {

@@ -3,11 +3,11 @@
 //! The round-trip tests prove the closed loop is consistent; these prove the
 //! *tools* are actually used when the content calls for them: recursive
 //! partitioning, half-pel motion, multiple references and skip. Each test
-//! decodes real packets and reads [`tpt_video_vault::FrameStats`].
+//! decodes real packets and reads [`tpt_media_vault::FrameStats`].
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder, ResourceLimits};
 use tpt_media_core::{PixelFormat, VideoFrame};
-use tpt_video_vault::{VaultConfig, VaultDecoder, VaultEncoder};
+use tpt_media_vault::{VaultConfig, VaultDecoder, VaultEncoder};
 
 fn lcg(state: &mut u64) -> u64 {
     *state = state

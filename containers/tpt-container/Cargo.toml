@@ -1,5 +1,5 @@
 [package]
-name = "tpt-container"
+name = "tpt-media-format"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

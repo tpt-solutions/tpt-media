@@ -1,10 +1,10 @@
 //! Diagnostic (ignored by default): where Thrum's bits go on real footage.
-//! Run with `cargo test -p tpt-video-thrum --test diag_bits -- --ignored --nocapture`
+//! Run with `cargo test -p tpt-media-thrum --test diag_bits -- --ignored --nocapture`
 //! after `python benchmarks/run.py fetch`.
 
 use tpt_media_codec::{CodecConfig, Encoder};
 use tpt_media_core::{PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_thrum::{ThrumConfig, ThrumEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumEncoder};
 
 const W: usize = 352;
 const H: usize = 288;

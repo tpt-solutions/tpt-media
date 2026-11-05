@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_vault::{VaultConfig, VaultDecoder, VaultEncoder};
+use tpt_media_vault::{VaultConfig, VaultDecoder, VaultEncoder};
 
 const W: u32 = 176;
 const H: u32 = 144;

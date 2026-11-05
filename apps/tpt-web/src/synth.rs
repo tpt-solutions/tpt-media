@@ -2,7 +2,7 @@
 //!
 //! This module exists for the crate's own tests, the demo-file generator
 //! (`examples/make_demo.rs`) and the benchmark: none of them can use
-//! `tpt-cli` (this crate does not depend on an app), and hand-written
+//! `tpt-media-cli` (this crate does not depend on an app), and hand-written
 //! packets are structurally valid but are not real bitstreams, so anything
 //! that needs decoding to succeed has to be built through the encoders. It
 //! is behind the `synth` feature so a consumer of the player does not link
@@ -13,16 +13,16 @@
 //! [`SAMPLE_COUNT_KEY`](crate::SAMPLE_COUNT_KEY) metadata entry.
 
 use crate::player::SAMPLE_COUNT_KEY;
-use tpt_audio_aura::{AuraConfig, AuraEncoder, AuraMode};
-use tpt_audio_cinder::{CinderEncoder, CinderEncoderConfig};
-use tpt_audio_reed::{ReedConfig, ReedEncoder};
-use tpt_container::TptMuxer;
+use tpt_media_aura::{AuraConfig, AuraEncoder, AuraMode};
+use tpt_media_cinder::{CinderEncoder, CinderEncoderConfig};
+use tpt_media_reed::{ReedConfig, ReedEncoder};
+use tpt_media_format::TptMuxer;
 use tpt_media_codec::{CodecConfig as FrameworkConfig, Encoder};
 use tpt_media_core::{
     AudioFrame, ChannelLayout, CodecId, Frame, MediaType, MetadataValue, Packet, PixelFormat,
     SampleFormat, Timebase, Timestamp, Track, TrackMedia, VideoFrame,
 };
-use tpt_video_thrum::{ThrumConfig, ThrumEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumEncoder};
 
 /// Which audio codec to encode with.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

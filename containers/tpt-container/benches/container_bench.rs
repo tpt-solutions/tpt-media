@@ -5,7 +5,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use tpt_container::{TptDemuxer, TptMuxer};
+use tpt_media_format::{TptDemuxer, TptMuxer};
 use tpt_media_container::Container as _;
 use tpt_media_core::{Packet, Timebase, Timestamp};
 
@@ -41,7 +41,7 @@ fn stream() -> Vec<Packet> {
 }
 
 fn bench_container(c: &mut Criterion) {
-    let mut group = c.benchmark_group("tpt_container");
+    let mut group = c.benchmark_group("tpt_media_format");
     group.sample_size(20);
     group.warm_up_time(Duration::from_millis(300));
     group.measurement_time(Duration::from_secs(2));

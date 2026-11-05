@@ -2,7 +2,7 @@
 //!
 //! Each node is intentionally tiny and deterministic so it can be composed
 //! into a full pipeline for tests and demos: a `tpt` file is read by a
-//! demux node (in the `tpt-container` integration test), packets flow
+//! demux node (in the `tpt-media-format` integration test), packets flow
 //! through a [`Map`] transform with timestamps intact, and a [`Sink`]
 //! collects the output.
 

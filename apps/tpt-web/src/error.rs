@@ -1,7 +1,7 @@
 //! The error type shared by the parser, the player and the C ABI.
 
 use core::fmt;
-use tpt_container::TptError;
+use tpt_media_format::TptError;
 
 /// Why the container bytes were rejected: a copyable, comparable mirror of
 /// [`TptError`] (which is neither `Clone` nor `PartialEq`, and a terminal

@@ -1,5 +1,5 @@
 [package]
-name = "tpt-video-vault"
+name = "tpt-media-vault"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

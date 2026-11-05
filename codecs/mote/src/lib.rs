@@ -1,4 +1,4 @@
-//! `tpt-video-mote` - Mote: TPT extreme edge / IoT video codec.
+//! `tpt-media-mote` - Mote: TPT extreme edge / IoT video codec.
 //!
 //! ## Design (v0.1)
 //!

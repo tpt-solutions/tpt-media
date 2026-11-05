@@ -53,7 +53,7 @@ static GLOBAL: Counting = Counting;
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder, RealtimeDecoder};
 use tpt_media_core::{Packet, PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_mote::{MoteConfig, MoteDecoder, MoteEncoder};
+use tpt_media_mote::{MoteConfig, MoteDecoder, MoteEncoder};
 
 const W: u32 = 160;
 const H: u32 = 112;

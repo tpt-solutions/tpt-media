@@ -1,11 +1,11 @@
 //! §38 property tests, §39 container-determinism pins, and the §47
-//! malformed-timestamp audit for `tpt-container`: a seeded-random packet
+//! malformed-timestamp audit for `tpt-media-format`: a seeded-random packet
 //! stream must survive mux→demux exactly, the same stream must mux to
 //! byte-identical files, and extreme PTS values must round-trip without
 //! panicking, wrapping, or corrupting neighboring packets.
 
-use tpt_container::TptDemuxer;
-use tpt_container::TptMuxer;
+use tpt_media_format::TptDemuxer;
+use tpt_media_format::TptMuxer;
 use tpt_media_container::Container as _;
 use tpt_media_container::ContainerError;
 use tpt_media_core::{Packet, PacketFlags, Timebase, Timestamp};

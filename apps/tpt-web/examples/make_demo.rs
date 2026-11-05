@@ -1,16 +1,16 @@
 //! Generate the demo asset `web/demo.tpt` (4 s of synthetic Cinder audio and
 //! 160x96 Thrum video at 15 fps, encoded by the real encoders; see
-//! `tpt_web::synth`), or the benchmark inputs. Deterministic: rerunning
+//! `tpt_media_web::synth`), or the benchmark inputs. Deterministic: rerunning
 //! produces identical bytes.
 //!
 //! ```text
-//! cargo run -p tpt-web --example make_demo                      # web/demo.tpt
-//! cargo run -p tpt-web --example make_demo -- out.tpt           # anywhere else
-//! cargo run -p tpt-web --example make_demo -- --bench-dir DIR   # all benchmark inputs
+//! cargo run -p tpt-media-web --example make_demo                      # web/demo.tpt
+//! cargo run -p tpt-media-web --example make_demo -- out.tpt           # anywhere else
+//! cargo run -p tpt-media-web --example make_demo -- --bench-dir DIR   # all benchmark inputs
 //! ```
 
 use std::path::PathBuf;
-use tpt_web::synth::{self, AudioKind};
+use tpt_media_web::synth::{self, AudioKind};
 
 fn write(path: &PathBuf, bytes: &[u8]) {
     if let Err(e) = std::fs::write(path, bytes) {

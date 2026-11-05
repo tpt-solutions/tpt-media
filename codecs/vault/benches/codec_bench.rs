@@ -22,7 +22,7 @@ use std::time::Duration;
 use criterion::{criterion_group, criterion_main, Criterion};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_vault::{VaultConfig, VaultDecoder, VaultEncoder};
+use tpt_media_vault::{VaultConfig, VaultDecoder, VaultEncoder};
 
 /// Frames per benchmark iteration.
 const FRAMES: usize = 4;

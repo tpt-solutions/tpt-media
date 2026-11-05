@@ -3,7 +3,7 @@
 //! including full-range random noise, which is the hardest case — must
 //! round-trip bit-exactly. Determinism is pinned at the packet-byte level.
 
-use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder};
+use tpt_media_aura::{AuraConfig, AuraDecoder, AuraEncoder};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, Packet, SampleFormat, Timebase, Timestamp};
 

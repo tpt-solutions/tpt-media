@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use criterion::{criterion_group, criterion_main, Criterion};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{Packet, PacketFlags, PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_mote::{
+use tpt_media_mote::{
     compare, Dictionary, MoteConfig, MoteDecoder, MoteEncoder, TrainConfig, CRC_TRAILER_BYTES,
 };
 

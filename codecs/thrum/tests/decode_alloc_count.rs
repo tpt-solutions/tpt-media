@@ -49,7 +49,7 @@ static GLOBAL: Counting = Counting;
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder, RealtimeDecoder};
 use tpt_media_core::{Packet, PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
 
 const W: u32 = 176;
 const H: u32 = 144;

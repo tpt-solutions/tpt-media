@@ -10,9 +10,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-tpt-audio-aura = { path = "../codecs/aura" }
-tpt-audio-cinder = { path = "../codecs/cinder" }
-tpt-container = { path = "../containers/tpt-container" }
+tpt-media-aura = { path = "../codecs/aura" }
+tpt-media-cinder = { path = "../codecs/cinder" }
+tpt-media-format = { path = "../containers/tpt-container" }
 tpt-media-probe = { path = "../crates/tpt-media-probe" }
 tpt-media-codec = { path = "../crates/tpt-media-codec" }
 tpt-media-core = { path = "../crates/tpt-media-core" }

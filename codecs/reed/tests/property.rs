@@ -5,7 +5,7 @@
 //! round-trips to exact silence; and encoding/decoding are pure functions
 //! of (bytes, config) — no RNG, wall-clock, or thread state.
 
-use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
+use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, Packet, SampleFormat, Timebase, Timestamp};
 

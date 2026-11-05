@@ -1,8 +1,8 @@
 //! Command execution for `tpt`.
 
-use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder, AuraMode};
-use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
-use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
+use tpt_media_aura::{AuraConfig, AuraDecoder, AuraEncoder, AuraMode};
+use tpt_media_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
+use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig as FrameworkCodecConfig, Decoder, Encoder, ResourceLimits};
 use tpt_media_container::Container;
 use tpt_media_core::{
@@ -13,9 +13,9 @@ use tpt_media_io::{decode_wav, write_wav};
 
 use crate::audio_input;
 use tpt_media_probe::{sniff, ContainerKind, ProbeReport};
-use tpt_video_mote::{MoteConfig, MoteDecoder, MoteEncoder};
-use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
-use tpt_video_vault::{VaultConfig, VaultDecoder, VaultEncoder};
+use tpt_media_mote::{MoteConfig, MoteDecoder, MoteEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+use tpt_media_vault::{VaultConfig, VaultDecoder, VaultEncoder};
 
 use crate::args::{Command, OpSpec, NATIVE_CODECS};
 use crate::json::J;
@@ -110,10 +110,10 @@ fn read_source(input: &str, ctx: &Ctx<'_>) -> Result<Vec<u8>, String> {
 /// real dimensions from the track's codec-private bytes — but it is why
 /// this function exists rather than a plain list of unit structs.
 fn probe_registry() -> tpt_media_codec::Registry {
-    use tpt_audio_aura::{AuraDecoderFactory, AuraEncoderFactory};
-    use tpt_audio_cinder::{CinderDecoderFactory, CinderEncoderFactory};
-    use tpt_audio_reed::{ReedDecoderFactory, ReedEncoderFactory};
-    use tpt_video_thrum::{ThrumDecoderFactory, ThrumEncoderFactory};
+    use tpt_media_aura::{AuraDecoderFactory, AuraEncoderFactory};
+    use tpt_media_cinder::{CinderDecoderFactory, CinderEncoderFactory};
+    use tpt_media_reed::{ReedDecoderFactory, ReedEncoderFactory};
+    use tpt_media_thrum::{ThrumDecoderFactory, ThrumEncoderFactory};
 
     let mut r = tpt_media_codec::Registry::new();
     r.register_decoder(CinderDecoderFactory);
@@ -139,8 +139,8 @@ fn probe_registry() -> tpt_media_codec::Registry {
     // consults, not what the encode path builds (that constructs a
     // geometry-carrying config directly).
     if let (Ok(dec), Ok(enc)) = (
-        tpt_video_vault::VaultDecoderFactory::new(tpt_video_vault::VaultConfig::default()),
-        tpt_video_vault::VaultEncoderFactory::new(tpt_video_vault::VaultConfig::default()),
+        tpt_media_vault::VaultDecoderFactory::new(tpt_media_vault::VaultConfig::default()),
+        tpt_media_vault::VaultEncoderFactory::new(tpt_media_vault::VaultConfig::default()),
     ) {
         r.register_decoder(dec);
         r.register_encoder(enc);
@@ -149,8 +149,8 @@ fn probe_registry() -> tpt_media_codec::Registry {
     // between the probe registry here and the y4m bridge in
     // `VideoCodec::new_encoder`/`new_decoder`.
     if let (Ok(dec), Ok(enc)) = (
-        tpt_video_mote::MoteDecoderFactory::new(tpt_video_mote::MoteConfig::default()),
-        tpt_video_mote::MoteEncoderFactory::new(tpt_video_mote::MoteConfig::default()),
+        tpt_media_mote::MoteDecoderFactory::new(tpt_media_mote::MoteConfig::default()),
+        tpt_media_mote::MoteEncoderFactory::new(tpt_media_mote::MoteConfig::default()),
     ) {
         r.register_decoder(dec);
         r.register_encoder(enc);
@@ -812,7 +812,7 @@ fn run_encode_job(job: &EncodeJob) -> Result<(Vec<u8>, usize), String> {
     let samples_per_block = samples_per_block(job.codec, job.rate);
     let mut encoder = build_encoder(job.codec, job.rate, job.bits_per_coef, job.band_step)?;
     let track_timebase = Timebase::new(1, job.rate);
-    let mut muxer = tpt_container::TptMuxer::new(track_timebase);
+    let mut muxer = tpt_media_format::TptMuxer::new(track_timebase);
     let mut track = Track::new(0, MediaType::Audio, job.codec.codec_id(), track_timebase);
     track.codec_config.version = encoder.info().version;
     track.codec_config.data = match job.codec {
@@ -955,7 +955,7 @@ fn run_video_encode_job(job: &VideoEncodeJob) -> Result<(Vec<u8>, usize), String
     )?;
     let version = encoder.info().version;
     let tb = Timebase::new(job.fps_den, job.fps_num);
-    let mut muxer = tpt_container::TptMuxer::new(tb);
+    let mut muxer = tpt_media_format::TptMuxer::new(tb);
     let mut track = Track::new(0, MediaType::Video, job.codec.codec_id(), tb);
     track.codec_config.version = version;
     track.codec_config.data = private;
@@ -1007,7 +1007,7 @@ fn demux_and_decode_any(
     input: &[u8],
     requested: Option<CodecId>,
 ) -> Result<DemuxedMedia, (i32, String)> {
-    let mut demux = tpt_container::TptDemuxer::new(input)
+    let mut demux = tpt_media_format::TptDemuxer::new(input)
         .map_err(|e| (1, format!("invalid tpt input: {e}")))?;
     let track = demux
         .tracks()

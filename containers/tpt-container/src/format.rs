@@ -1,4 +1,4 @@
-//! `tpt-container` wire format: encoders, decoders, constants.
+//! `tpt-media-format` wire format: encoders, decoders, constants.
 //!
 //! All integers are little-endian. The format is a set of top-level TLV
 //! chunks preceded by a fixed header. Every chunk length is bounds-checked

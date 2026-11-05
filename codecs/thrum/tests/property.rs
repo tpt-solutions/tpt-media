@@ -17,7 +17,7 @@
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{Packet, PacketFlags, PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
 
 fn lcg(state: &mut u64) -> u64 {
     *state = state
@@ -264,7 +264,7 @@ fn out_of_range_headers_are_rejected() {
         body[2] = 0b1000_0000; // intra flag, high bit of the qp field
         body[3] = qp;
         let mut data = body.clone();
-        let crc = tpt_video_thrum::packet_crc(&body);
+        let crc = tpt_media_thrum::packet_crc(&body);
         data.extend_from_slice(&crc.to_le_bytes());
         let pkt = Packet {
             data,

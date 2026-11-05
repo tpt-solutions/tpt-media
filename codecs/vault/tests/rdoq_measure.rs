@@ -2,7 +2,7 @@
 //! (todo.md §33). Not a pass/fail test: `#[ignore]`d, prints only.
 //!
 //! ```text
-//! cargo test --release -p tpt-video-vault --test rdoq_measure -- --ignored --nocapture
+//! cargo test --release -p tpt-media-vault --test rdoq_measure -- --ignored --nocapture
 //! ```
 //!
 //! Rates and PSNRs are deterministic; milliseconds are machine-dependent.
@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_vault::{VaultConfig, VaultEncoder};
+use tpt_media_vault::{VaultConfig, VaultEncoder};
 
 const W: u32 = 176;
 const H: u32 = 144;
@@ -77,7 +77,7 @@ fn run(qp: u8, rdoq: bool) -> (f64, usize, f64) {
     };
     let input = clip();
     let mut encoder = VaultEncoder::new(CodecConfig::default(), cfg).unwrap();
-    let mut decoder = tpt_video_vault::VaultDecoder::new(
+    let mut decoder = tpt_media_vault::VaultDecoder::new(
         CodecConfig::default(),
         VaultConfig {
             width: W,

@@ -3,7 +3,7 @@
 //! configuration. Complements the unit tests in `src/lib.rs` and the random
 //! sweeps in `property.rs` and `stereo.rs`.
 
-use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder, AuraMode};
+use tpt_media_aura::{AuraConfig, AuraDecoder, AuraEncoder, AuraMode};
 use tpt_media_codec::{CodecConfig, CodecError, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, Packet, SampleFormat, Timebase, Timestamp};
 

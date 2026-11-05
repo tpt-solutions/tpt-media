@@ -1,5 +1,5 @@
 [package]
-name = "tpt-cli"
+name = "tpt-media-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,11 +22,11 @@ tpt-media-codec = { workspace = true, features = ["std"] }
 tpt-media-container = { workspace = true, features = ["std"] }
 tpt-media-io = { workspace = true, features = ["std"] }
 tpt-media-probe = { workspace = true, features = ["std"] }
-tpt-container = { workspace = true, features = ["std"] }
-tpt-audio-cinder = { workspace = true, features = ["std"] }
-tpt-audio-aura = { workspace = true, features = ["std"] }
-tpt-audio-reed = { workspace = true, features = ["std"] }
-tpt-video-thrum = { workspace = true, features = ["std"] }
-tpt-video-vault = { workspace = true, features = ["std"] }
-tpt-video-mote = { workspace = true, features = ["std"] }
+tpt-media-format = { workspace = true, features = ["std"] }
+tpt-media-cinder = { workspace = true, features = ["std"] }
+tpt-media-aura = { workspace = true, features = ["std"] }
+tpt-media-reed = { workspace = true, features = ["std"] }
+tpt-media-thrum = { workspace = true, features = ["std"] }
+tpt-media-vault = { workspace = true, features = ["std"] }
+tpt-media-mote = { workspace = true, features = ["std"] }
 tpt-dsp-core = { workspace = true, features = ["std"] }

@@ -20,13 +20,13 @@
 //! All scenes are generated as [`VideoFrame`]s in
 //! [`PixelFormat::Yuv420`] at
 //! `w x h`, with dimensions required to be multiples of 16 so they are
-//! macroblock-aligned for `tpt-video-thrum` (todo.md section 32).
+//! macroblock-aligned for `tpt-media-thrum` (todo.md section 32).
 //! The `Gray8` variants exist too, since the corpus must exercise both
 //! of Thrum's coded formats.
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
 
 use crate::memprobe::MemoryProbe;
 use crate::quality::{psnr_db, ssim, MemoryReport, Timing, VideoReport};

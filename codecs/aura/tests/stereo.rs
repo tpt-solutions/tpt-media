@@ -3,7 +3,7 @@
 //! to make a particular mode the cheapest, and every case must come back
 //! bit-exact in the original channel order.
 
-use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder};
+use tpt_media_aura::{AuraConfig, AuraDecoder, AuraEncoder};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, Packet, SampleFormat, Timebase, Timestamp};
 

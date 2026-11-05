@@ -1,4 +1,4 @@
-//! `tpt-cli` — the TPT media command-line interface.
+//! `tpt-media-cli` — the TPT media command-line interface.
 //!
 //! Command surface (§43):
 //!
@@ -215,7 +215,7 @@ mod tests {
                 p
             })
             .collect::<Vec<_>>();
-        tpt_container::build_tpt(tb, &[(1, b"CIND", &[][..])], &packets)
+        tpt_media_format::build_tpt(tb, &[(1, b"CIND", &[][..])], &packets)
     }
 
     /// A real, *decodable* `.tpt`: `sine_samples` driven through `tpt
@@ -1206,7 +1206,7 @@ FRAME
             assert!(!tpt.is_empty(), "{name} encode wrote no out.tpt");
 
             // The track must name the codec that produced it.
-            let (_, tracks, _) = tpt_container::parse_tpt(&tpt).expect("parsable tpt");
+            let (_, tracks, _) = tpt_media_format::parse_tpt(&tpt).expect("parsable tpt");
             assert_eq!(
                 tracks[0].codec_config.codec_id,
                 tpt_media_core::CodecId::new(id),
@@ -1248,7 +1248,7 @@ FRAME
         for name in ["thrum", "vault", "mote"] {
             let (o, tpt) = encode_video(name, ramp_y4m(32, 32, 4));
             assert_eq!(o.code, 0, "{name}: {}", o.err);
-            let (_, _, packets) = tpt_container::parse_tpt(&tpt).expect("parsable tpt");
+            let (_, _, packets) = tpt_media_format::parse_tpt(&tpt).expect("parsable tpt");
             assert!(
                 packets.len() >= 4,
                 "{name}: at least one packet per frame, got {}",
@@ -1370,7 +1370,7 @@ FRAME
             .find(|(p, _)| p == "dst.tpt")
             .map(|(_, b)| b.clone())
             .unwrap_or_default();
-        let (_, tracks, packets) = tpt_container::parse_tpt(&dst).expect("parsable tpt");
+        let (_, tracks, packets) = tpt_media_format::parse_tpt(&dst).expect("parsable tpt");
         assert_eq!(
             tracks[0].codec_config.codec_id,
             tpt_media_core::CodecId::new(*b"MOTE")

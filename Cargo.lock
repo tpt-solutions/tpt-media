@@ -593,73 +593,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tpt-audio-aura"
-version = "0.2.0"
-dependencies = [
- "criterion",
- "thiserror",
- "tpt-dsp-core",
- "tpt-media-bitstream",
- "tpt-media-codec",
- "tpt-media-core",
-]
-
-[[package]]
-name = "tpt-audio-cinder"
-version = "0.2.0"
-dependencies = [
- "criterion",
- "thiserror",
- "tpt-dsp-core",
- "tpt-media-bitstream",
- "tpt-media-codec",
- "tpt-media-core",
-]
-
-[[package]]
-name = "tpt-audio-reed"
-version = "0.2.0"
-dependencies = [
- "criterion",
- "libm",
- "tpt-dsp-core",
- "tpt-media-bitstream",
- "tpt-media-codec",
- "tpt-media-core",
-]
-
-[[package]]
-name = "tpt-cli"
-version = "0.2.0"
-dependencies = [
- "tpt-audio-aura",
- "tpt-audio-cinder",
- "tpt-audio-reed",
- "tpt-container",
- "tpt-dsp-core",
- "tpt-media-codec",
- "tpt-media-container",
- "tpt-media-core",
- "tpt-media-io",
- "tpt-media-probe",
- "tpt-video-mote",
- "tpt-video-thrum",
- "tpt-video-vault",
-]
-
-[[package]]
-name = "tpt-container"
-version = "0.2.0"
-dependencies = [
- "criterion",
- "thiserror",
- "tpt-media-bitstream",
- "tpt-media-codec",
- "tpt-media-container",
- "tpt-media-core",
-]
-
-[[package]]
 name = "tpt-dsp-core"
 version = "0.2.0"
 dependencies = [
@@ -677,12 +610,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "tpt-media-aura"
+version = "0.2.0"
+dependencies = [
+ "criterion",
+ "thiserror",
+ "tpt-dsp-core",
+ "tpt-media-bitstream",
+ "tpt-media-codec",
+ "tpt-media-core",
+]
+
+[[package]]
 name = "tpt-media-bitstream"
 version = "0.2.0"
 dependencies = [
  "criterion",
  "libm",
  "thiserror",
+]
+
+[[package]]
+name = "tpt-media-cinder"
+version = "0.2.0"
+dependencies = [
+ "criterion",
+ "thiserror",
+ "tpt-dsp-core",
+ "tpt-media-bitstream",
+ "tpt-media-codec",
+ "tpt-media-core",
+]
+
+[[package]]
+name = "tpt-media-cli"
+version = "0.2.0"
+dependencies = [
+ "tpt-dsp-core",
+ "tpt-media-aura",
+ "tpt-media-cinder",
+ "tpt-media-codec",
+ "tpt-media-container",
+ "tpt-media-core",
+ "tpt-media-format",
+ "tpt-media-io",
+ "tpt-media-mote",
+ "tpt-media-probe",
+ "tpt-media-reed",
+ "tpt-media-thrum",
+ "tpt-media-vault",
 ]
 
 [[package]]
@@ -715,6 +691,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tpt-media-format"
+version = "0.2.0"
+dependencies = [
+ "criterion",
+ "thiserror",
+ "tpt-media-bitstream",
+ "tpt-media-codec",
+ "tpt-media-container",
+ "tpt-media-core",
+]
+
+[[package]]
 name = "tpt-media-io"
 version = "0.2.0"
 dependencies = [
@@ -724,23 +712,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "tpt-media-mote"
+version = "0.2.0"
+dependencies = [
+ "criterion",
+ "tpt-dsp-core",
+ "tpt-media-bitstream",
+ "tpt-media-codec",
+ "tpt-media-core",
+]
+
+[[package]]
 name = "tpt-media-pipeline"
 version = "0.2.0"
 dependencies = [
  "criterion",
- "tpt-container",
  "tpt-media-codec",
  "tpt-media-container",
  "tpt-media-core",
+ "tpt-media-format",
 ]
 
 [[package]]
 name = "tpt-media-probe"
 version = "0.2.0"
 dependencies = [
- "tpt-container",
  "tpt-media-codec",
  "tpt-media-container",
+ "tpt-media-core",
+ "tpt-media-format",
+]
+
+[[package]]
+name = "tpt-media-reed"
+version = "0.2.0"
+dependencies = [
+ "criterion",
+ "libm",
+ "tpt-dsp-core",
+ "tpt-media-bitstream",
+ "tpt-media-codec",
  "tpt-media-core",
 ]
 
@@ -762,15 +773,15 @@ name = "tpt-media-sys"
 version = "0.2.0"
 dependencies = [
  "cc",
- "tpt-audio-aura",
- "tpt-audio-cinder",
- "tpt-audio-reed",
+ "tpt-media-aura",
+ "tpt-media-cinder",
  "tpt-media-codec",
  "tpt-media-core",
+ "tpt-media-reed",
 ]
 
 [[package]]
-name = "tpt-video-mote"
+name = "tpt-media-thrum"
 version = "0.2.0"
 dependencies = [
  "criterion",
@@ -781,7 +792,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tpt-video-thrum"
+name = "tpt-media-vault"
 version = "0.2.0"
 dependencies = [
  "criterion",
@@ -792,30 +803,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "tpt-video-vault"
+name = "tpt-media-web"
 version = "0.2.0"
 dependencies = [
- "criterion",
- "tpt-dsp-core",
- "tpt-media-bitstream",
+ "tpt-media-aura",
+ "tpt-media-cinder",
  "tpt-media-codec",
  "tpt-media-core",
-]
-
-[[package]]
-name = "tpt-web"
-version = "0.2.0"
-dependencies = [
- "tpt-audio-aura",
- "tpt-audio-cinder",
- "tpt-audio-reed",
- "tpt-container",
- "tpt-media-codec",
- "tpt-media-core",
- "tpt-video-mote",
- "tpt-video-thrum",
- "tpt-video-vault",
- "tpt-web",
+ "tpt-media-format",
+ "tpt-media-mote",
+ "tpt-media-reed",
+ "tpt-media-thrum",
+ "tpt-media-vault",
+ "tpt-media-web",
 ]
 
 [[package]]

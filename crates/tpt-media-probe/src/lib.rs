@@ -20,7 +20,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
-use tpt_container::TptDemuxer;
+use tpt_media_format::TptDemuxer;
 use tpt_media_codec::Registry;
 use tpt_media_container::Container;
 use tpt_media_core::{
@@ -381,7 +381,7 @@ fn probe_tpt_into(bytes: &[u8], report: &mut ProbeReport, registry: &Registry) {
         Ok(d) => d,
         Err(err) => {
             report.corruption.push(format!("TPT parse error: {}", err));
-            if let Ok(header) = tpt_container::FileHeader::from_bytes(bytes) {
+            if let Ok(header) = tpt_media_format::FileHeader::from_bytes(bytes) {
                 report.version = Some(header.version);
                 report.global_timebase = Some(header.timebase);
             }
@@ -714,7 +714,7 @@ fn wav_sample_count(bytes: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
     use alloc::boxed::Box;
-    use tpt_container::{encode_chunk, read_chunk_header, TptMuxer};
+    use tpt_media_format::{encode_chunk, read_chunk_header, TptMuxer};
     use tpt_media_codec::{
         Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, DynDecoder,
         DynDecoderFactory, DynEncoder, DynEncoderFactory,
@@ -1158,7 +1158,7 @@ mod tests {
     #[test]
     fn probe_never_panics_on_corrupted_or_arbitrary_bytes() {
         // §38 "probe fuzzing": a deterministic corruption sweep, in the
-        // same spirit as `tpt-container`'s
+        // same spirit as `tpt-media-format`'s
         // `corruption_never_panics_and_truncation_never_panics` (§24) —
         // no external fuzz-harness dependency. `probe()` never returns a
         // `Result` (corruption is reported *in* `ProbeReport`, e.g.

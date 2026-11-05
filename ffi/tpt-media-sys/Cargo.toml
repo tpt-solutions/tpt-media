@@ -25,9 +25,9 @@ crate-type = ["rlib", "staticlib"]
 # the workspace version like every other member (CONTRIBUTING §9.1).
 tpt-media-core = { path = "../../crates/tpt-media-core", version = "0.2.0" }
 tpt-media-codec = { path = "../../crates/tpt-media-codec", version = "0.2.0" }
-tpt-audio-cinder = { path = "../../codecs/cinder", version = "0.2.0" }
-tpt-audio-aura = { path = "../../codecs/aura", version = "0.2.0" }
-tpt-audio-reed = { path = "../../codecs/reed", version = "0.2.0" }
+tpt-media-cinder = { path = "../../codecs/cinder", version = "0.2.0" }
+tpt-media-aura = { path = "../../codecs/aura", version = "0.2.0" }
+tpt-media-reed = { path = "../../codecs/reed", version = "0.2.0" }
 
 [build-dependencies]
 cc = "1"

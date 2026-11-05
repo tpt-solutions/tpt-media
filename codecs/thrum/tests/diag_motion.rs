@@ -1,11 +1,11 @@
 //! Diagnostic (ignored by default): how much each motion-search range and
 //! intra-refresh setting costs on real footage. Run with
-//! `cargo test -p tpt-video-thrum --test diag_motion -- --ignored --nocapture`
+//! `cargo test -p tpt-media-thrum --test diag_motion -- --ignored --nocapture`
 //! after `python benchmarks/run.py fetch`.
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
 
 const W: usize = 352;
 const H: usize = 288;

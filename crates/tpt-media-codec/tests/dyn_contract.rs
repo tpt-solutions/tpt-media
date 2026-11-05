@@ -2,7 +2,7 @@
 //!
 //! The inline unit tests can reach private items, so they cannot prove that
 //! the framework is usable from *outside* the crate — which is how both
-//! `tpt-media-sys` (the C ABI) and `tpt-cli` consume it. Every codec crate
+//! `tpt-media-sys` (the C ABI) and `tpt-media-cli` consume it. Every codec crate
 //! implements these traits, so a change that breaks the contract here
 //! compiles fine and fails at the boundary.
 

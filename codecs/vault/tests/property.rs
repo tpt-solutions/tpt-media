@@ -21,7 +21,7 @@ use tpt_media_codec::{
     ResourceLimitKind, ResourceLimits,
 };
 use tpt_media_core::{Packet, PacketFlags, PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_vault::{
+use tpt_media_vault::{
     packet_crc, VaultConfig, VaultDecoder, VaultDecoderFactory, VaultEncoder, VaultEncoderFactory,
     CRC_TRAILER_BYTES,
 };
@@ -273,8 +273,8 @@ fn partition_freedom_improves_the_rd_objective() {
                 e * e
             })
             .sum();
-        let step = f64::from(tpt_video_vault::quant_step(c.qp));
-        let lambda = tpt_video_vault::LAMBDA_SCALE * step * step;
+        let step = f64::from(tpt_media_vault::quant_step(c.qp));
+        let lambda = tpt_media_vault::LAMBDA_SCALE * step * step;
         d + lambda * (p.data.len() as f64 * 8.0)
     };
     for f in [

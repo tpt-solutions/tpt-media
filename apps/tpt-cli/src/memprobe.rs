@@ -16,7 +16,7 @@
 //! [`MemoryProbe`] around the region it cares about:
 //!
 //! ```ignore
-//! use tpt_cli::memprobe::{MemoryProbe, TrackingAlloc};
+//! use tpt_media_cli::memprobe::{MemoryProbe, TrackingAlloc};
 //!
 //! #[global_allocator]
 //! static GLOBAL: TrackingAlloc = TrackingAlloc;
@@ -117,10 +117,10 @@ fn on_dealloc(size: usize) {
 /// Zero-cost when no probe is open. Install it once per test binary:
 ///
 /// ```ignore
-/// tpt_cli::memprobe::TrackingAlloc
+/// tpt_media_cli::memprobe::TrackingAlloc
 /// ```
 ///
-/// This is the one type in `tpt-cli` that contains `unsafe` (a
+/// This is the one type in `tpt-media-cli` that contains `unsafe` (a
 /// `GlobalAlloc` impl is `unsafe` by definition). It is confined here on
 /// purpose — see the module docs.
 pub struct TrackingAlloc;

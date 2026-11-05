@@ -2,7 +2,7 @@
 //! timestamps intact — exercising the §26 "timestamps through the
 //! pipeline" guarantee against the actual container codec.
 
-use tpt_container::build_tpt;
+use tpt_media_format::build_tpt;
 use tpt_media_core::{Packet, Timebase, Timestamp};
 use tpt_media_pipeline::{NodeOps, Sink, Source};
 
@@ -36,7 +36,7 @@ fn container_packets_flow_through_with_pts_intact() {
 
     let bytes = build_tpt(tb(), &[(1, b"CIND", &[][..])], &packets);
     // Sanity: the container round-trips through its own demuxer losslessly.
-    let (_, tracks, reloaded) = tpt_container::parse_tpt(&bytes).expect("valid tpt");
+    let (_, tracks, reloaded) = tpt_media_format::parse_tpt(&bytes).expect("valid tpt");
     assert_eq!(tracks[0].id, 1);
     assert_eq!(reloaded.len(), 5);
 

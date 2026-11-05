@@ -1,8 +1,8 @@
 //! The crate used strictly through its public API, as a downstream page /
 //! app would: nothing here reaches into private modules.
 
-use tpt_web::synth::{self, AudioKind};
-use tpt_web::{DecoderTable, Player, Status, StreamParser, WebError, WebLimits};
+use tpt_media_web::synth::{self, AudioKind};
+use tpt_media_web::{DecoderTable, Player, Status, StreamParser, WebError, WebLimits};
 
 #[test]
 fn the_documented_usage_pattern_plays_a_file_end_to_end() {
@@ -73,7 +73,7 @@ fn the_parser_is_usable_on_its_own() {
     p.push(&file).unwrap();
     let mut packets = 0;
     while let Some(ev) = p.poll().unwrap() {
-        if matches!(ev, tpt_web::ParseEvent::Packet(_)) {
+        if matches!(ev, tpt_media_web::ParseEvent::Packet(_)) {
             packets += 1;
         }
     }

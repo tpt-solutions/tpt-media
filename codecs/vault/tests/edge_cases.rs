@@ -5,7 +5,7 @@
 
 use tpt_media_codec::{CodecConfig, CodecError, Decoder, Encoder};
 use tpt_media_core::{Packet, PacketFlags, PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_vault::{VaultConfig, VaultDecoder, VaultEncoder};
+use tpt_media_vault::{VaultConfig, VaultDecoder, VaultEncoder};
 
 const W: u32 = 64;
 const H: u32 = 64;

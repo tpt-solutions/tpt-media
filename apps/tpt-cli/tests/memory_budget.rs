@@ -2,7 +2,7 @@
 //! measurements" and "allocation profiling"; §37's video `memory`).
 //!
 //! This is the only test binary that installs a tracking global
-//! allocator, and that placement is deliberate. [`tpt_cli::memprobe`]
+//! allocator, and that placement is deliberate. [`tpt_media_cli::memprobe`]
 //! counts every allocation in the *process*, so a measurement taken in a
 //! binary that also runs seven other tests in parallel includes whatever
 //! those threads happen to be allocating — noise large enough to swamp
@@ -27,14 +27,14 @@
 
 use std::sync::{Mutex, MutexGuard};
 
-use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
-use tpt_cli::memprobe::{MemoryProbe, TrackingAlloc};
-use tpt_cli::video::{corpus, measure_instrumented, working_set_peak, Scene};
+use tpt_media_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
+use tpt_media_cli::memprobe::{MemoryProbe, TrackingAlloc};
+use tpt_media_cli::video::{corpus, measure_instrumented, working_set_peak, Scene};
 use tpt_media_codec::CodecConfig;
 use tpt_media_core::PixelFormat;
-use tpt_video_thrum::ThrumConfig;
+use tpt_media_thrum::ThrumConfig;
 
-/// The one global allocator for this binary. See `tpt_cli::memprobe`.
+/// The one global allocator for this binary. See `tpt_media_cli::memprobe`.
 #[global_allocator]
 static GLOBAL: TrackingAlloc = TrackingAlloc;
 
@@ -169,8 +169,8 @@ fn uninstrumented_report_says_none_not_zero() {
 /// that table cannot silently drift away from reality.
 mod audio {
     use super::*;
-    use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder};
-    use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
+    use tpt_media_aura::{AuraConfig, AuraDecoder, AuraEncoder};
+    use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
     use tpt_media_codec::{Decoder, Encoder};
     use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
 

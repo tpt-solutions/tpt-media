@@ -32,10 +32,10 @@ pub(crate) const CLUS_OVERHEAD: usize = 64;
 /// bytes. A writer keeps a run to `RUN_MAX_BYTES` unless it holds one
 /// packet; the sum covers both cases, with the CRC trailer.
 pub(crate) fn run_body_cap(max_packet: usize) -> usize {
-    tpt_container::RUN_MAX_BYTES
+    tpt_media_format::RUN_MAX_BYTES
         + max_packet
-        + tpt_container::RECORD_MAX_OVERHEAD
-        + tpt_container::PKTS_HEADER
+        + tpt_media_format::RECORD_MAX_OVERHEAD
+        + tpt_media_format::PKTS_HEADER
         + 4
 }
 /// Largest single slice the C ABI will stage for JavaScript to fill

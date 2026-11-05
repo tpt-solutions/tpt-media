@@ -1,4 +1,4 @@
-//! `tpt-audio-reed` — Reed: extremely low-bandwidth speech codec.
+//! `tpt-media-reed` — Reed: extremely low-bandwidth speech codec.
 //!
 //! ## Design (v0.1)
 //!
@@ -156,7 +156,7 @@ fn crc32(bytes: &[u8]) -> u32 {
 }
 
 /// One SplitMix64 step: the same deterministic primitive the corpus
-/// generators (`tpt-cli`'s `signals.rs`) use — pure integer math,
+/// generators (`tpt-media-cli`'s `signals.rs`) use — pure integer math,
 /// identical on every platform, so both encoder and decoder derive
 /// bit-identical codebook entries from an index with no shared state and
 /// no transmission.
@@ -258,7 +258,7 @@ impl ReedConfig {
     }
 
     /// Encode a validated config into the codec-private bytes the muxer
-    /// stores in the track (see `tpt-cli`'s `run_encode_job`); the
+    /// stores in the track (see `tpt-media-cli`'s `run_encode_job`); the
     /// decoder rebuilds its config from these + the track sample rate.
     pub fn to_codec_private(&self) -> Vec<u8> {
         vec![self.lpc_order, self.lsf_bits]

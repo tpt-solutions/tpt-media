@@ -3,7 +3,7 @@
 //! before any packet, and invalid configuration. Complements the unit tests in
 //! `src/lib.rs` and the random sweeps in `property.rs`.
 
-use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
+use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig, CodecError, Decoder, Encoder, RealtimeDecoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, Packet, SampleFormat, Timebase, Timestamp};
 

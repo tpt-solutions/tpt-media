@@ -64,7 +64,7 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
-use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
+use tpt_media_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, SampleFormat, Timebase, Timestamp};
 

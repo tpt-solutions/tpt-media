@@ -1,5 +1,5 @@
 [package]
-name = "tpt-video-thrum"
+name = "tpt-media-thrum"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

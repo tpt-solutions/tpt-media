@@ -120,7 +120,7 @@ pub extern "C" fn tpt_web_abi_version() -> u32 {
 /// across the wasm boundary would break the module's "no pointer flows from JS
 /// into Rust" rule (see `docs/web-design.md` §4). The practical consequence is
 /// that a codec only becomes playable in a browser by becoming a dependency of
-/// `tpt-web` and being added to `DecoderTable::native()`; `Player::with_table`
+/// `tpt-media-web` and being added to `DecoderTable::native()`; `Player::with_table`
 /// is the route for Rust callers embedding the `rlib` natively. See
 /// `docs/web-design.md` §8.
 #[no_mangle]

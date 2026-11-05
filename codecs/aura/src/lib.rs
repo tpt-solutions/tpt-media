@@ -1,4 +1,4 @@
-//! `tpt-audio-aura` — Aura: high-fidelity / archival audio codec.
+//! `tpt-media-aura` — Aura: high-fidelity / archival audio codec.
 //!
 //! ## Modes
 //!
@@ -90,7 +90,7 @@ const RICE_ESCAPE: u32 = 32;
 pub const CRC_TRAILER_BYTES: usize = 4;
 
 /// CRC-32 (IEEE 802.3, polynomial `0xEDB88320`, reflected) — the same
-/// check used by `tpt-container`'s per-cluster integrity (`crc32.rs` in
+/// check used by `tpt-media-format`'s per-cluster integrity (`crc32.rs` in
 /// that crate), kept here so the codec layer can verify granular,
 /// packet-sized integrity without depending on the container crate.
 ///
@@ -1353,7 +1353,7 @@ mod tests {
     #[test]
     fn decode_never_panics_on_corrupted_or_arbitrary_packets() {
         // §38 "codec fuzzing" / "malformed input": a deterministic
-        // corruption sweep, in the same spirit as `tpt-container`'s
+        // corruption sweep, in the same spirit as `tpt-media-format`'s
         // `corruption_never_panics_and_truncation_never_panics` (§24) —
         // no external fuzz-harness dependency. Every call must return a
         // `Result`, never panic.

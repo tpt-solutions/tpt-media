@@ -16,7 +16,7 @@
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{PacketFlags, PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_mote::{compare, Dictionary, MoteConfig, MoteDecoder, MoteEncoder, TrainConfig};
+use tpt_media_mote::{compare, Dictionary, MoteConfig, MoteDecoder, MoteEncoder, TrainConfig};
 
 fn lcg(state: &mut u64) -> u64 {
     *state = state

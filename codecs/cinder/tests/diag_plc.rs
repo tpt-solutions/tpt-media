@@ -4,10 +4,10 @@
 //! with a fixed pseudo-random subset dropped and concealed. The score is the SNR
 //! of the second against the first, so codec noise cancels and only the
 //! concealment is measured. Run with
-//! `cargo test -p tpt-audio-cinder --test diag_plc -- --ignored --nocapture`
+//! `cargo test -p tpt-media-cinder --test diag_plc -- --ignored --nocapture`
 //! after `python benchmarks/run.py fetch`.
 
-use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
+use tpt_media_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{AudioFrame, ChannelLayout, Frame, Packet, SampleFormat, Timebase, Timestamp};
 

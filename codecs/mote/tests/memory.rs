@@ -5,7 +5,7 @@
 //! One `#[test]` on purpose: the counters are process-global, so a second
 //! concurrently running test would pollute them.
 //!
-//! Run `cargo test --release -p tpt-video-mote --test memory -- --nocapture`
+//! Run `cargo test --release -p tpt-media-mote --test memory -- --nocapture`
 //! to see the figures `docs/performance.md` records. The assertions are
 //! order-of-magnitude bounds that hold in both profiles.
 
@@ -82,7 +82,7 @@ static GLOBAL: Counting = Counting;
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{PixelFormat, VideoFrame};
-use tpt_video_mote::{Dictionary, MoteConfig, MoteDecoder, MoteEncoder};
+use tpt_media_mote::{Dictionary, MoteConfig, MoteDecoder, MoteEncoder};
 
 const W: u32 = 160;
 const H: u32 = 112;

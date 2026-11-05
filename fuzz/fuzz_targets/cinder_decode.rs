@@ -4,7 +4,7 @@
 //! packet checksum, so the fuzzer input is passed through unchanged.
 
 use libfuzzer_sys::fuzz_target;
-use tpt_audio_cinder::{CinderDecoder, CinderEncoderConfig};
+use tpt_media_cinder::{CinderDecoder, CinderEncoderConfig};
 use tpt_media_codec::{CodecConfig, Decoder};
 use tpt_media_core::{Packet, PacketFlags, Timebase, Timestamp};
 

@@ -3,7 +3,7 @@
 //! here is `#[ignore]`d and only prints.
 //!
 //! ```text
-//! cargo test --release -p tpt-video-vault --test measure -- --ignored --nocapture --test-threads=1
+//! cargo test --release -p tpt-media-vault --test measure -- --ignored --nocapture --test-threads=1
 //! ```
 //!
 //! Rates and PSNRs are deterministic (the codec is a pure function of its
@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder, ResourceLimits};
 use tpt_media_core::{PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_vault::{VaultConfig, VaultDecoder, VaultEncoder};
+use tpt_media_vault::{VaultConfig, VaultDecoder, VaultEncoder};
 
 const W: usize = 176;
 const H: usize = 144;

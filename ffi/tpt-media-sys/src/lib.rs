@@ -64,13 +64,13 @@
 #![warn(missing_docs)]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use tpt_audio_aura::{
+use tpt_media_aura::{
     AuraConfig, AuraDecoder, AuraDynDecoder, AuraDynEncoder, AuraEncoder, AuraMode,
 };
-use tpt_audio_cinder::{
+use tpt_media_cinder::{
     CinderDecoder, CinderDynDecoder, CinderDynEncoder, CinderEncoder, CinderEncoderConfig,
 };
-use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedDynDecoder, ReedDynEncoder, ReedEncoder};
+use tpt_media_reed::{ReedConfig, ReedDecoder, ReedDynDecoder, ReedDynEncoder, ReedEncoder};
 use tpt_media_codec::{CodecConfig, CodecError, DynDecoder, DynEncoder};
 use tpt_media_core::{
     AudioFrame, ChannelLayout, CodecId, Frame, Packet, PacketFlags, SampleFormat, Timebase,

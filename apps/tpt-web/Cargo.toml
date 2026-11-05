@@ -1,5 +1,5 @@
 [package]
-name = "tpt-web"
+name = "tpt-media-web"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,7 @@ description = "Browser player core for .tpt media: WASM-compatible streaming dec
 
 [lib]
 # `cdylib` is the artifact a browser loads
-# (`cargo build -p tpt-web --target wasm32-unknown-unknown --release`);
+# (`cargo build -p tpt-media-web --target wasm32-unknown-unknown --release`);
 # `rlib` keeps the crate linkable by the host-side tests, the example and
 # the benchmark, and keeps `cargo build --workspace` working natively.
 crate-type = ["cdylib", "rlib"]
@@ -23,24 +23,24 @@ crate-type = ["cdylib", "rlib"]
 # `version` on every path dependency: required for `cargo package`.
 tpt-media-core = { workspace = true, features = ["std"] }
 tpt-media-codec = { workspace = true, features = ["std"] }
-tpt-container = { workspace = true, features = ["std"] }
-tpt-audio-cinder = { workspace = true, features = ["std"] }
-tpt-audio-aura = { workspace = true, features = ["std"] }
-tpt-audio-reed = { workspace = true, features = ["std"] }
-tpt-video-thrum = { workspace = true, features = ["std"] }
-tpt-video-vault = { workspace = true, features = ["std"] }
-tpt-video-mote = { workspace = true, features = ["std"] }
+tpt-media-format = { workspace = true, features = ["std"] }
+tpt-media-cinder = { workspace = true, features = ["std"] }
+tpt-media-aura = { workspace = true, features = ["std"] }
+tpt-media-reed = { workspace = true, features = ["std"] }
+tpt-media-thrum = { workspace = true, features = ["std"] }
+tpt-media-vault = { workspace = true, features = ["std"] }
+tpt-media-mote = { workspace = true, features = ["std"] }
 
 [features]
 default = []
-# Deterministic synthetic-media generators (`tpt_web::synth`): they run the
+# Deterministic synthetic-media generators (`tpt_media_web::synth`): they run the
 # encoders, which the player itself never needs. Enabled for this crate's own
 # tests, example and benchmark via the self dev-dependency below; a consumer
 # of the player does not pay for it.
 synth = []
 
 [dev-dependencies]
-tpt-web = { path = ".", features = ["synth"] }
+tpt-media-web = { path = ".", features = ["synth"] }
 
 [[example]]
 name = "make_demo"

@@ -1,4 +1,4 @@
-//! `tpt-video-thrum` - Thrum: TPT low-latency video communication codec.
+//! `tpt-media-thrum` - Thrum: TPT low-latency video communication codec.
 //!
 //! ## Design (v0.1)
 //!

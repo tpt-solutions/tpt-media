@@ -5,7 +5,7 @@
 
 use tpt_media_codec::{CodecConfig, CodecError, Decoder, Encoder};
 use tpt_media_core::{Packet, PacketFlags, PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_mote::{MoteConfig, MoteDecoder, MoteEncoder};
+use tpt_media_mote::{MoteConfig, MoteDecoder, MoteEncoder};
 
 const W: u32 = 32;
 const H: u32 = 32;

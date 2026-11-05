@@ -3,7 +3,7 @@
 //! The [`Container`] trait abstracts over the wire format of a media
 //! container so that codecs do not need to know whether they are
 //! packaged inside `.tpt`, `.mp4`, or some future TPT-defined format.
-//! The native implementation lives in the `tpt-container` crate.
+//! The native implementation lives in the `tpt-media-format` crate.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]

@@ -1,4 +1,4 @@
-//! `tpt-audio-cinder` — Cinder: low-latency real-time audio codec.
+//! `tpt-media-cinder` — Cinder: low-latency real-time audio codec.
 //!
 //! ## Algorithm
 //!
@@ -2209,7 +2209,7 @@ mod tests {
     #[test]
     fn decode_never_panics_on_corrupted_or_arbitrary_packets() {
         // §38 "codec fuzzing" / "malformed input": a deterministic
-        // corruption sweep, in the same spirit as `tpt-container`'s
+        // corruption sweep, in the same spirit as `tpt-media-format`'s
         // `corruption_never_panics_and_truncation_never_panics` (§24) —
         // no external fuzz-harness dependency. Every call must return a
         // `Result`, never panic.

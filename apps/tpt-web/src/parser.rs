@@ -1,7 +1,7 @@
 //! Incremental `.tpt` parser (todo.md section 45, "`.tpt` parser"; section
 //! 25, "incremental parsing").
 //!
-//! [`tpt_container::TptDemuxer`] borrows one contiguous `&[u8]` for its whole
+//! [`tpt_media_format::TptDemuxer`] borrows one contiguous `&[u8]` for its whole
 //! life. A browser hands the player bytes in `fetch()` chunks, and a
 //! long-lived wasm instance cannot keep the entire file (or a
 //! self-referential buffer + demuxer pair) alive. So this module is a small
@@ -34,7 +34,7 @@ use std::collections::VecDeque;
 
 use crate::error::{ContainerFault, WebError};
 use crate::limits::{run_body_cap, WebLimits, CLUS_OVERHEAD, MAX_TRAK_BYTES};
-use tpt_container::{
+use tpt_media_format::{
     decode_clus, decode_tmta, decode_trak, read_chunk_header, run_records, FileHeader,
     PacketRecord, CHUNK_CLUS, CHUNK_PKTS, CHUNK_TMTA, CHUNK_TRAK, CLUS_DISCONTINUITY,
     CLUS_END_OF_FRAME, CLUS_KEYFRAME, MAGIC,
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn whole_file_and_byte_at_a_time_agree_with_the_container_demuxer() {
         let file = synth::audio_tpt(synth::AudioKind::Cinder, 48_000, 0.25);
-        let (_h, _tracks, expected) = tpt_container::parse_tpt(&file).unwrap();
+        let (_h, _tracks, expected) = tpt_media_format::parse_tpt(&file).unwrap();
 
         let mut whole = StreamParser::new(WebLimits::default());
         whole.push(&file).unwrap();
@@ -589,7 +589,7 @@ mod tests {
     }
 
     fn header_bytes() -> Vec<u8> {
-        tpt_container::FileHeader::new(tpt_media_core::Timebase::MILLISECONDS)
+        tpt_media_format::FileHeader::new(tpt_media_core::Timebase::MILLISECONDS)
             .to_bytes()
             .to_vec()
     }
@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn corrupted_cluster_crc_is_dropped_not_decoded() {
-        use tpt_container::{encode_chunk, encode_clus, encode_trak};
+        use tpt_media_format::{encode_chunk, encode_clus, encode_trak};
         use tpt_media_core::{CodecId, MediaType, Timebase};
         let tb = Timebase::MILLISECONDS;
         let track = Track::new(0, MediaType::Audio, CodecId::new(*b"CIND"), tb);
@@ -662,7 +662,7 @@ mod tests {
         let mut body = encode_clus(
             0,
             0,
-            tpt_container::CLUS_KEYFRAME,
+            tpt_media_format::CLUS_KEYFRAME,
             0,
             None,
             true,

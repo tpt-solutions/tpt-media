@@ -1,13 +1,13 @@
 //! Decode-throughput benchmark for the browser player core (todo.md section
 //! 45, "performance benchmark").
 //!
-//! Measures the whole `tpt-web` path on the host: push bytes, parse the
+//! Measures the whole `tpt-media-web` path on the host: push bytes, parse the
 //! container, decode with the real codec, convert to planar `f32` / RGBA8,
 //! and pop the output. That is everything the wasm module does per file; the
 //! only thing it leaves out is JavaScript and the browser.
 //!
 //! ```text
-//! cargo bench -p tpt-web          # prints a markdown table
+//! cargo bench -p tpt-media-web          # prints a markdown table
 //! ```
 //!
 //! It is a plain `harness = false` timer rather than criterion: the number
@@ -20,8 +20,8 @@
 //! `apps/tpt-web/web/bench.mjs`; `docs/performance.md` records both.
 
 use std::time::Instant;
-use tpt_web::synth;
-use tpt_web::{Player, Status, WebError, WebLimits};
+use tpt_media_web::synth;
+use tpt_media_web::{Player, Status, WebError, WebLimits};
 
 const WARMUP: usize = 2;
 const RUNS: usize = 15;
@@ -71,7 +71,7 @@ fn main() {
     let fixtures = synth::benchmark_fixtures();
 
     println!(
-        "tpt-web native decode throughput ({} runs each after {} warm-up, median; \
+        "tpt-media-web native decode throughput ({} runs each after {} warm-up, median; \
          push slices of {} KiB)\n",
         RUNS,
         WARMUP,

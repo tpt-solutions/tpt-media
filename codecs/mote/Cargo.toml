@@ -1,5 +1,5 @@
 [package]
-name = "tpt-video-mote"
+name = "tpt-media-mote"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

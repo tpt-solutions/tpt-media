@@ -221,39 +221,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tpt-audio-aura"
-version = "0.2.0"
-dependencies = [
- "thiserror",
- "tpt-dsp-core",
- "tpt-media-bitstream",
- "tpt-media-codec",
- "tpt-media-core",
-]
-
-[[package]]
-name = "tpt-audio-cinder"
-version = "0.2.0"
-dependencies = [
- "thiserror",
- "tpt-dsp-core",
- "tpt-media-bitstream",
- "tpt-media-codec",
- "tpt-media-core",
-]
-
-[[package]]
-name = "tpt-container"
-version = "0.2.0"
-dependencies = [
- "thiserror",
- "tpt-media-bitstream",
- "tpt-media-codec",
- "tpt-media-container",
- "tpt-media-core",
-]
-
-[[package]]
 name = "tpt-dsp-core"
 version = "0.2.0"
 dependencies = [
@@ -264,11 +231,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "tpt-media-aura"
+version = "0.2.0"
+dependencies = [
+ "thiserror",
+ "tpt-dsp-core",
+ "tpt-media-bitstream",
+ "tpt-media-codec",
+ "tpt-media-core",
+]
+
+[[package]]
 name = "tpt-media-bitstream"
 version = "0.2.0"
 dependencies = [
  "libm",
  "thiserror",
+]
+
+[[package]]
+name = "tpt-media-cinder"
+version = "0.2.0"
+dependencies = [
+ "thiserror",
+ "tpt-dsp-core",
+ "tpt-media-bitstream",
+ "tpt-media-codec",
+ "tpt-media-core",
 ]
 
 [[package]]
@@ -301,15 +290,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tpt-media-format"
+version = "0.2.0"
+dependencies = [
+ "thiserror",
+ "tpt-media-bitstream",
+ "tpt-media-codec",
+ "tpt-media-container",
+ "tpt-media-core",
+]
+
+[[package]]
 name = "tpt-media-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "tpt-audio-aura",
- "tpt-audio-cinder",
- "tpt-container",
+ "tpt-media-aura",
+ "tpt-media-cinder",
  "tpt-media-codec",
  "tpt-media-core",
+ "tpt-media-format",
  "tpt-media-probe",
 ]
 
@@ -317,10 +317,10 @@ dependencies = [
 name = "tpt-media-probe"
 version = "0.2.0"
 dependencies = [
- "tpt-container",
  "tpt-media-codec",
  "tpt-media-container",
  "tpt-media-core",
+ "tpt-media-format",
 ]
 
 [[package]]

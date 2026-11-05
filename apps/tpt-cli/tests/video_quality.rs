@@ -1,8 +1,8 @@
 //! End-to-end video quality corpus (todo.md sections 36 + 37).
 //!
-//! Drives real `tpt-video-thrum` round trips over the synthetic corpus
-//! in `tpt_cli::video` and measures them with the video metrics in
-//! `tpt_cli::quality`. This is the video counterpart of
+//! Drives real `tpt-media-thrum` round trips over the synthetic corpus
+//! in `tpt_media_cli::video` and measures them with the video metrics in
+//! `tpt_media_cli::quality`. This is the video counterpart of
 //! `tests/quality.rs` (which does the same for the audio codecs).
 //!
 //! What is asserted, and what deliberately is not:
@@ -27,11 +27,11 @@
 //! indistinguishable from the ones under measurement — enough noise to
 //! swamp the number. See [`crate::memprobe`].
 
-use tpt_cli::quality::VideoReport;
-use tpt_cli::video::{corpus, measure_instrumented, Scene};
+use tpt_media_cli::quality::VideoReport;
+use tpt_media_cli::video::{corpus, measure_instrumented, Scene};
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::PixelFormat;
-use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
 
 const W: u32 = 176;
 const H: u32 = 144;

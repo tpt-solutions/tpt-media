@@ -1,4 +1,4 @@
-//! `tpt-container` — the native `.tpt` container format.
+//! `tpt-media-format` — the native `.tpt` container format.
 //!
 //! ## Binary layout (little-endian)
 //!

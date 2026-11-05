@@ -83,7 +83,7 @@ static GLOBAL: Counting = Counting;
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder, ResourceLimits};
 use tpt_media_core::{PixelFormat, VideoFrame};
-use tpt_video_vault::{VaultConfig, VaultDecoder, VaultEncoder};
+use tpt_media_vault::{VaultConfig, VaultDecoder, VaultEncoder};
 
 const W: u32 = 176;
 const H: u32 = 144;

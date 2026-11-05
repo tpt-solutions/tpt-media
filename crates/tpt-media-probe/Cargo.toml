@@ -16,8 +16,8 @@ description = "Container and codec introspection for the tpt-media stack."
 tpt-media-core = { workspace = true, default-features = false }
 tpt-media-codec = { workspace = true, default-features = false }
 tpt-media-container = { workspace = true, default-features = false }
-tpt-container = { workspace = true, default-features = false }
+tpt-media-format = { workspace = true, default-features = false }
 
 [features]
 default = ["std"]
-std = ["tpt-media-core/std", "tpt-media-codec/std", "tpt-media-container/std", "tpt-container/std"]
+std = ["tpt-media-core/std", "tpt-media-codec/std", "tpt-media-container/std", "tpt-media-format/std"]

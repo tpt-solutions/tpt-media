@@ -3,7 +3,7 @@
 //! packet, and extreme parameters. Complements the unit tests in `src/lib.rs`
 //! and the random sweeps in `property.rs`.
 
-use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
+use tpt_media_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
 use tpt_media_codec::{CodecConfig, CodecError, Decoder, Encoder, RealtimeDecoder};
 use tpt_media_core::{
     AudioFrame, ChannelLayout, Frame, Packet, PacketFlags, SampleFormat, Timebase, Timestamp,

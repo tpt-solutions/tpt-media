@@ -8,7 +8,7 @@
 //! CRC to each fuzzer input. The corpus then explores the bitstream itself.
 
 use libfuzzer_sys::fuzz_target;
-use tpt_audio_aura::{AuraConfig, AuraDecoder};
+use tpt_media_aura::{AuraConfig, AuraDecoder};
 use tpt_media_codec::{CodecConfig, Decoder};
 use tpt_media_core::{Packet, PacketFlags, Timebase, Timestamp};
 

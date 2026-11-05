@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::synth::{self, AudioKind};
-use tpt_container::TptMuxer;
+use tpt_media_format::TptMuxer;
 use tpt_media_codec::{Capabilities, CodecInfo, CodecResult, ResourceLimits};
 use tpt_media_core::{ChannelLayout, CodecId, SampleFormat, Track, TrackMedia};
 
@@ -124,10 +124,10 @@ fn audio_timestamps_are_contiguous_and_start_at_zero() {
 
 #[test]
 fn cinder_matches_a_directly_driven_decoder() {
-    use tpt_audio_cinder::{CinderDecoder, CinderEncoderConfig};
+    use tpt_media_cinder::{CinderDecoder, CinderEncoderConfig};
     use tpt_media_codec::{CodecConfig, Decoder};
     let file = synth::audio_tpt(AudioKind::Cinder, 48_000, 0.3);
-    let (_h, tracks, packets) = tpt_container::parse_tpt(&file).unwrap();
+    let (_h, tracks, packets) = tpt_media_format::parse_tpt(&file).unwrap();
     let mut dec = CinderDecoder::new(
         CodecConfig {
             version: tracks[0].codec_config.version,

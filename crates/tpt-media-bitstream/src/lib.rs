@@ -33,7 +33,7 @@ pub use bit_writer::{BitWriter, WriteError};
 
 /// §38 "bitstream fuzzing": deterministic, dependency-free corruption
 /// sweeps over every decode entry point this crate exposes, in the same
-/// spirit as `tpt-container`'s `corruption_never_panics_and_truncation_never_panics`
+/// spirit as `tpt-media-format`'s `corruption_never_panics_and_truncation_never_panics`
 /// (§24) — a fixed-seed LCG generates arbitrary/corrupted byte buffers
 /// and bit widths, and every call is required to return a `Result`
 /// (`Ok` or `Err`), never panic. No external fuzz-harness dependency

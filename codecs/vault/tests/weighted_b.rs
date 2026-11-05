@@ -7,7 +7,7 @@
 
 use tpt_media_codec::{CodecConfig, CodecError, Decoder, Encoder, ResourceLimits};
 use tpt_media_core::{Packet, PacketFlags, PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_vault::{packet_crc, VaultConfig, VaultDecoder, VaultEncoder};
+use tpt_media_vault::{packet_crc, VaultConfig, VaultDecoder, VaultEncoder};
 
 const W: usize = 176;
 const H: usize = 144;

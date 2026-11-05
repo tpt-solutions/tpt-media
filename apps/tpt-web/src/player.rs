@@ -55,7 +55,7 @@ use tpt_media_core::{MediaType, MetadataValue, Packet, PacketFlags, Timebase, Tr
 
 /// Track-metadata key under which `tpt encode` records the exact number of
 /// source samples, so the codecs' block padding can be trimmed from the last
-/// frame. (Mirrors the constant of the same value in `tpt-cli`; the key is
+/// frame. (Mirrors the constant of the same value in `tpt-media-cli`; the key is
 /// part of the file convention, not of either program.)
 pub const SAMPLE_COUNT_KEY: &str = "tpt.io.sample_count";
 

@@ -1,4 +1,4 @@
-//! `tpt-web`: the browser player core for `.tpt` media (todo.md section 45).
+//! `tpt-media-web`: the browser player core for `.tpt` media (todo.md section 45).
 //!
 //! The crate has three layers, thinnest last:
 //!
@@ -25,7 +25,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use tpt_web::{Player, Status, WebError, WebLimits};
+//! use tpt_media_web::{Player, Status, WebError, WebLimits};
 //!
 //! fn play(file: &[u8]) -> Result<(), WebError> {
 //!     let mut player = Player::new(WebLimits::default());

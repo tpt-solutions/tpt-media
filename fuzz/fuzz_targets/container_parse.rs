@@ -6,5 +6,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = tpt_container::parse_tpt(data);
+    let _ = tpt_media_format::parse_tpt(data);
 });

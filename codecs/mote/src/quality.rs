@@ -20,7 +20,7 @@
 //! dictionary's blockiness reads to a viewer, and PSNR is known to
 //! correlate poorly with perception on quantised-patch artefacts;
 //! treat it as a regression yardstick, not a claim of visual quality.
-//! The workspace-wide video metrics (todo.md 37) live in `tpt-cli`.
+//! The workspace-wide video metrics (todo.md 37) live in `tpt-media-cli`.
 
 use tpt_media_codec::{CodecError, CodecResult};
 use tpt_media_core::{PixelFormat, VideoFrame};

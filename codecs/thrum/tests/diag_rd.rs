@@ -1,12 +1,12 @@
 //! Diagnostic (ignored by default): Thrum's rate-distortion curve on real
 //! footage, as `RD,clip,qp,bytes,psnr` lines, so two builds can be compared at
 //! equal PSNR. Run in release mode:
-//! `cargo test --release -p tpt-video-thrum --test diag_rd -- --ignored --nocapture`
+//! `cargo test --release -p tpt-media-thrum --test diag_rd -- --ignored --nocapture`
 //! after `python benchmarks/run.py fetch`.
 
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
 use tpt_media_core::{PixelFormat, Timebase, Timestamp, VideoFrame};
-use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
 
 const W: usize = 352;
 const H: usize = 288;

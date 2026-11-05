@@ -1,4 +1,4 @@
-//! `tpt-video-vault` - Vault: TPT high-compression video codec.
+//! `tpt-media-vault` - Vault: TPT high-compression video codec.
 //!
 //! ## Design (v0.1)
 //!
