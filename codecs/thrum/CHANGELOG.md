@@ -19,6 +19,17 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Added
 
+- **Caller-buffer decode and allocation-free concealment (2026-11-05).**
+  `ThrumDecoder` implements `RealtimeDecoder` (`max_output_bytes`,
+  `decode_into`) and gains `conceal_into`. Both make zero heap allocation
+  calls per packet at steady state
+  (`tests/decode_alloc_count.rs`), and their output is byte-identical to
+  `decode` and `conceal`. The decoder now holds two picture slots allocated
+  once in `new`, swapped as reference and work buffer, in place of the
+  per-frame picture clones. Refused or damaged packets still leave the
+  reference unchanged. The owned `decode` output is unchanged; the
+  bitstream and `VERSION` are unchanged. Also fixes the docs' claim that
+  the decoder is not real-time: `real_time_decoder` was already set.
 - **Per-crate README, changelog, keywords and categories** (2026-09-30):
   crate-specific `README.md` and manifest `keywords`/`categories`. The README
   records the measured latency, rate and memory figures and the profiling

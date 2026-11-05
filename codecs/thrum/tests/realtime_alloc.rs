@@ -14,8 +14,10 @@
 //! trips this immediately, while ordinary scheduler noise cannot.
 //!
 //! What the decoder genuinely does per frame, and why the bound holds:
-//! it returns a `VideoFrame`, so one frame-sized buffer is inherent
-//! (1.5 bytes per pixel for 4:2:0). Everything else - the transform
+//! it returns a `VideoFrame`, so one frame-sized buffer is inherent to the
+//! owned `decode` API (1.5 bytes per pixel for 4:2:0). The caller-buffer
+//! `decode_into` path allocates nothing; `decode_alloc_count.rs` asserts that
+//! exactly. Everything else - the transform
 //! scratch, the block buffers, the motion-compensation candidates - is
 //! allocated once in `ThrumDecoder::new` and reused.
 

@@ -135,7 +135,7 @@ use tpt_media_bitstream::rice::{decode_riced, encode_riced};
 use tpt_media_bitstream::{BitReader, BitWriter};
 use tpt_media_codec::{
     Capabilities, CodecConfig, CodecError, CodecInfo, CodecResult, Decoder, DynDecoder,
-    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder, SupportedFormat,
+    DynDecoderFactory, DynEncoder, DynEncoderFactory, Encoder, RealtimeDecoder, SupportedFormat,
 };
 use tpt_media_core::{Frame, Packet, PacketFlags, PixelFormat, Timestamp, VideoFrame};
 /// Codec id for Thrum.
@@ -578,30 +578,48 @@ fn picture_from_frame(f: &VideoFrame) -> CodecResult<Picture> {
     }
     Ok(pic)
 }
+/// Write a picture's samples into `out` in the layout
+/// [`VideoFrame::alloc`] produces: the luma plane, then U, then V, each
+/// dense. `out` must hold at least the format's frame size.
+fn write_picture(pic: &Picture, out: &mut [u8]) {
+    let ln = pic.luma.data.len();
+    out[..ln].copy_from_slice(&pic.luma.data);
+    if pic.has_chroma() {
+        let cn = pic.chroma[0].data.len();
+        out[ln..ln + cn].copy_from_slice(&pic.chroma[0].data);
+        out[ln + cn..ln + 2 * cn].copy_from_slice(&pic.chroma[1].data);
+    }
+}
+
 /// Serialise back into a [`VideoFrame`] using the exact layout
 /// [`VideoFrame::alloc`] produces, so a decoded frame is
 /// byte-compatible with an unencoded one of the same format.
 fn picture_to_frame(pic: &Picture, pts: Timestamp) -> VideoFrame {
     let mut f = VideoFrame::alloc(pic.width as u32, pic.height as u32, pic.format);
     f.frame.pts = pts;
-    let stride = f.stride as usize;
-    for y in 0..pic.height {
-        let src = y * pic.width;
-        let dst = y * stride;
-        f.pixels[dst..dst + pic.width].copy_from_slice(&pic.luma.data[src..src + pic.width]);
-    }
-    if pic.has_chroma() {
-        let (cw, ch) = (pic.width / 2, pic.height / 2);
-        for c in 0..2 {
-            let base = stride * pic.height + c * (stride / 2) * ch;
-            for y in 0..ch {
-                let src = y * cw;
-                let dst = base + y * (stride / 2);
-                f.pixels[dst..dst + cw].copy_from_slice(&pic.chroma[c].data[src..src + cw]);
-            }
-        }
-    }
+    write_picture(pic, &mut f.pixels);
     f
+}
+
+/// Copy every plane of `src` into `dst`. Both are the same geometry,
+/// since a decoder's two slots are both allocated for its configuration.
+fn copy_picture(dst: &mut Picture, src: &Picture) {
+    dst.luma.data.copy_from_slice(&src.luma.data);
+    if src.has_chroma() {
+        dst.chroma[0].data.copy_from_slice(&src.chroma[0].data);
+        dst.chroma[1].data.copy_from_slice(&src.chroma[1].data);
+    }
+}
+
+/// Set a picture to the neutral start state: luma 0, chroma 128. This is
+/// the state [`Picture::new`] builds, reused in place so it allocates
+/// nothing.
+fn fill_neutral(pic: &mut Picture) {
+    pic.luma.data.fill(0);
+    if pic.has_chroma() {
+        pic.chroma[0].data.fill(128);
+        pic.chroma[1].data.fill(128);
+    }
 }
 
 // --- intra prediction -------------------------------------------------------
@@ -2031,19 +2049,25 @@ fn macroblock_sad(
 
 /// Thrum decoder.
 ///
-/// Keeps one reference picture (the deblocked reconstruction of the
-/// previous frame) and a copy of the last emitted frame for
-/// [`ThrumDecoder::conceal`]. There is no reordering buffer and no
-/// look-ahead, so `decode` emits exactly one frame per packet and the
-/// codec's latency is the cost of that one packet.
+/// Holds two picture slots, allocated once in [`ThrumDecoder::new`]. One
+/// slot is the reference (the deblocked reconstruction of the previous
+/// frame, which is also what concealment repeats) and the other is the
+/// work buffer the next frame decodes into. A successful decode swaps
+/// their roles, so steady-state decoding allocates nothing. There is no
+/// reordering buffer and no look-ahead, so `decode` emits exactly one
+/// frame per packet and the codec's latency is the cost of that one
+/// packet.
 pub struct ThrumDecoder {
     info: CodecInfo,
     cfg: CodecConfig,
     enc: ThrumConfig,
-    /// Decoded (post-deblock) previous frame - the P-frame reference.
-    reference: Option<Picture>,
-    /// Last frame handed out, kept for concealment.
-    last: Option<Picture>,
+    /// The two picture slots. Which one is the reference is `ref_slot`.
+    pics: [Picture; 2],
+    /// Whether `pics[ref_slot]` holds a decoded reference. False before
+    /// the first frame and after `flush`.
+    has_reference: bool,
+    /// Index into `pics` of the reference picture.
+    ref_slot: usize,
     scratch: BlockScratch,
 }
 
@@ -2061,12 +2085,15 @@ impl ThrumDecoder {
                 ..Capabilities::default()
             },
         );
+        let (w, h) = (enc.width as usize, enc.height as usize);
+        let format = enc.format;
         Ok(ThrumDecoder {
             info,
             cfg: codec_cfg,
             enc,
-            reference: None,
-            last: None,
+            pics: [Picture::new(w, h, format), Picture::new(w, h, format)],
+            has_reference: false,
+            ref_slot: 0,
             scratch: BlockScratch::new(),
         })
     }
@@ -2076,26 +2103,29 @@ impl ThrumDecoder {
     /// hierarchy. With no prior frame there is nothing to repeat, so the
     /// first-ever concealment is a flat mid-grey picture.
     pub fn conceal(&mut self, pts: Timestamp) -> CodecResult<VideoFrame> {
-        let pic = match &self.last {
-            Some(p) => p.clone(),
-            // Nothing decoded yet: a flat mid-grey picture, the same
-            // neutral start the intra DC predictor uses.
-            None => {
-                let w = self.enc.width as usize;
-                let h = self.enc.height as usize;
-                let mut p = Picture::new(w, h, self.enc.format);
-                for v in p.luma.data.iter_mut() {
-                    *v = 128;
-                }
-                for c in 0..2 {
-                    for v in p.chroma[c].data.iter_mut() {
-                        *v = 128;
-                    }
-                }
-                p
-            }
-        };
-        Ok(picture_to_frame(&pic, pts))
+        let mut f = VideoFrame::alloc(self.enc.width, self.enc.height, self.enc.format);
+        f.frame.pts = pts;
+        self.conceal_into(&mut f.pixels)?;
+        Ok(f)
+    }
+
+    /// Caller-buffer form of [`ThrumDecoder::conceal`]: write the
+    /// concealed frame's native bytes into `out` and return their count.
+    /// Allocates nothing. Output is byte-identical to `conceal`.
+    pub fn conceal_into(&mut self, out: &mut [u8]) -> CodecResult<usize> {
+        let n = self.enc.frame_bytes();
+        if out.len() < n {
+            return Err(CodecError::InvalidConfig(
+                "output buffer smaller than one Thrum frame",
+            ));
+        }
+        if self.has_reference {
+            write_picture(&self.pics[self.ref_slot], &mut out[..n]);
+        } else {
+            // Nothing decoded yet: the mid-grey start, every sample 128.
+            out[..n].fill(128);
+        }
+        Ok(n)
     }
 
     /// Number of reference pictures this decoder retains. Thrum uses
@@ -2105,19 +2135,16 @@ impl ThrumDecoder {
 
     /// Discard all decoder state (the `Decoder::flush` contract).
     fn reset(&mut self) {
-        self.reference = None;
-        self.last = None;
-    }
-}
-
-impl Decoder for ThrumDecoder {
-    type Frame = VideoFrame;
-
-    fn info(&self) -> &CodecInfo {
-        &self.info
+        self.has_reference = false;
+        self.ref_slot = 0;
     }
 
-    fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<VideoFrame>> {
+    /// Decode one packet into the work slot and make it the reference.
+    ///
+    /// On error the reference is left untouched, so a refused or damaged
+    /// packet never half-advances the stream. The decoded picture is
+    /// `pics[ref_slot]` on success.
+    fn decode_packet(&mut self, packet: &Packet) -> CodecResult<()> {
         self.cfg.limits.check_packet(packet.data.len())?;
         self.cfg
             .limits
@@ -2148,21 +2175,35 @@ impl Decoder for ThrumDecoder {
         }
         // A P-frame needs a reference; without one the stream is
         // undecodable rather than merely damaged.
-        if !intra && self.reference.is_none() {
+        if !intra && !self.has_reference {
             return Err(CodecError::NeedMoreInput);
         }
         self.scratch.step = quant_step(qp);
         let (mb_w, mb_h) = self.enc.mb_dims();
 
-        let reference = self.reference.clone();
-        let mut recon = match &reference {
-            Some(r) => r.clone(),
-            None => Picture::new(
-                self.enc.width as usize,
-                self.enc.height as usize,
-                self.enc.format,
-            ),
+        // The work slot is the one that is not the reference. Before the
+        // first frame there is no reference, so slot 0 is used and the
+        // reference is absent.
+        let recon_slot = if self.has_reference {
+            1 - self.ref_slot
+        } else {
+            0
         };
+        let (first, rest) = self.pics.split_at_mut(1);
+        let (recon, reference) = if recon_slot == 0 {
+            let reference = if self.has_reference {
+                Some(&rest[0])
+            } else {
+                None
+            };
+            (&mut first[0], reference)
+        } else {
+            (&mut rest[0], Some(&first[0]))
+        };
+        match reference {
+            Some(rf) => copy_picture(recon, rf),
+            None => fill_neutral(recon),
+        }
 
         // Raster order, matching the encoder's `for mb in 0..mb_count`
         // walk. (Iterating `mbx` in the outer loop here decodes the frame
@@ -2171,7 +2212,7 @@ impl Decoder for ThrumDecoder {
         // prediction context.)
         for mby in 0..mb_h {
             for mbx in 0..mb_w {
-                self.decode_macroblock(&mut r, &mut recon, reference.as_ref(), mbx, mby)?;
+                decode_macroblock(&mut self.scratch, &mut r, recon, reference, mbx, mby)?;
             }
         }
 
@@ -2182,10 +2223,25 @@ impl Decoder for ThrumDecoder {
             deblock_plane(&mut recon.chroma[1], beta, alpha, tc);
         }
 
-        let frame = picture_to_frame(&recon, packet.pts);
-        self.reference = Some(recon.clone());
-        self.last = Some(recon);
-        Ok(vec![frame])
+        self.ref_slot = recon_slot;
+        self.has_reference = true;
+        Ok(())
+    }
+}
+
+impl Decoder for ThrumDecoder {
+    type Frame = VideoFrame;
+
+    fn info(&self) -> &CodecInfo {
+        &self.info
+    }
+
+    fn decode(&mut self, packet: &Packet) -> CodecResult<Vec<VideoFrame>> {
+        self.decode_packet(packet)?;
+        Ok(vec![picture_to_frame(
+            &self.pics[self.ref_slot],
+            packet.pts,
+        )])
     }
 
     fn flush(&mut self) -> CodecResult<Vec<VideoFrame>> {
@@ -2193,135 +2249,157 @@ impl Decoder for ThrumDecoder {
         Ok(Vec::new())
     }
 }
-impl ThrumDecoder {
-    /// Decode one macroblock at `(mbx, mby)`, mirroring
-    /// [`ThrumEncoder::encode_macroblock`] bit for bit.
-    fn decode_macroblock(
-        &mut self,
-        r: &mut BitReader,
-        recon: &mut Picture,
-        reference: Option<&Picture>,
-        mbx: usize,
-        mby: usize,
-    ) -> CodecResult<()> {
-        let mx = mbx * MB_SIZE;
-        let my = mby * MB_SIZE;
-        let has_chroma = recon.has_chroma();
-        let intra = r.read(1).map_err(|_| CodecError::MalformedPacket)? == 1;
 
-        if intra {
-            for (bx, by) in LUMA_BLOCK_OFFSETS {
-                let pos = BlockPos {
-                    x0: mx + bx * BLOCK,
-                    y0: my + by * BLOCK,
-                };
-                let mode =
-                    IntraMode::from_bits(r.read(2).map_err(|_| CodecError::MalformedPacket)? as u8);
-                self.decode_intra_block(r, &mut recon.luma, pos, mode)?;
-            }
-            if has_chroma {
-                let pos = BlockPos {
-                    x0: mx / 2,
-                    y0: my / 2,
-                };
-                for c in 0..2 {
-                    let plane = &mut recon.chroma[c];
-                    self.decode_intra_block(r, plane, pos, IntraMode::Dc)?;
-                }
-            }
-            return Ok(());
+impl RealtimeDecoder for ThrumDecoder {
+    fn max_output_bytes(&self) -> usize {
+        self.enc.frame_bytes()
+    }
+
+    /// Decode one packet into `out` as native frame bytes. Refuses a
+    /// short `out` before touching any state, so a refusal never leaves
+    /// the stream half-advanced. Allocates nothing in steady state.
+    fn decode_into(&mut self, packet: &Packet, out: &mut [u8]) -> CodecResult<usize> {
+        let n = self.max_output_bytes();
+        if out.len() < n {
+            return Err(CodecError::InvalidConfig(
+                "output buffer smaller than one Thrum frame",
+            ));
         }
+        self.decode_packet(packet)?;
+        write_picture(&self.pics[self.ref_slot], &mut out[..n]);
+        Ok(n)
+    }
+}
 
-        let skip = r.read(1).map_err(|_| CodecError::MalformedPacket)? == 1;
-        if skip {
-            let reference = reference.ok_or(CodecError::NeedMoreInput)?;
-            copy_mb_from_reference(reference, recon, mx, my, 0, 0);
-            return Ok(());
-        }
-        let reference = reference.ok_or(CodecError::NeedMoreInput)?;
-        // MV fields are biased by MAX_SEARCH_RANGE, so 0..=32 maps back
-        // to -16..=16 and is always in range by construction.
-        let mv = MotionVector {
-            dx: r.read(MV_BITS).map_err(|_| CodecError::MalformedPacket)? as i32
-                - i32::from(MAX_SEARCH_RANGE),
-            dy: r.read(MV_BITS).map_err(|_| CodecError::MalformedPacket)? as i32
-                - i32::from(MAX_SEARCH_RANGE),
-        };
+/// Decode one macroblock at `(mbx, mby)`, mirroring
+/// [`ThrumEncoder::encode_macroblock`] bit for bit.
+fn decode_macroblock(
+    scratch: &mut BlockScratch,
+    r: &mut BitReader,
+    recon: &mut Picture,
+    reference: Option<&Picture>,
+    mbx: usize,
+    mby: usize,
+) -> CodecResult<()> {
+    let mx = mbx * MB_SIZE;
+    let my = mby * MB_SIZE;
+    let has_chroma = recon.has_chroma();
+    let intra = r.read(1).map_err(|_| CodecError::MalformedPacket)? == 1;
 
+    if intra {
         for (bx, by) in LUMA_BLOCK_OFFSETS {
-            self.decode_inter_block(
-                r,
-                &mut recon.luma,
-                &reference.luma,
-                BlockPos {
-                    x0: mx + bx * BLOCK,
-                    y0: my + by * BLOCK,
-                },
-                mv,
-            )?;
+            let pos = BlockPos {
+                x0: mx + bx * BLOCK,
+                y0: my + by * BLOCK,
+            };
+            let mode =
+                IntraMode::from_bits(r.read(2).map_err(|_| CodecError::MalformedPacket)? as u8);
+            decode_intra_block(scratch, r, &mut recon.luma, pos, mode)?;
         }
         if has_chroma {
             let pos = BlockPos {
                 x0: mx / 2,
                 y0: my / 2,
             };
-            let cmv = MotionVector {
-                dx: chroma_mv(mv.dx),
-                dy: chroma_mv(mv.dy),
-            };
             for c in 0..2 {
                 let plane = &mut recon.chroma[c];
-                let reference = &reference.chroma[c];
-                self.decode_inter_block(r, plane, reference, pos, cmv)?;
+                decode_intra_block(scratch, r, plane, pos, IntraMode::Dc)?;
             }
         }
-        Ok(())
+        return Ok(());
     }
 
-    /// Intra: read the block's levels, build the same prediction the
-    /// encoder used, and reconstruct.
-    fn decode_intra_block(
-        &mut self,
-        r: &mut BitReader,
-        recon: &mut Plane,
-        pos: BlockPos,
-        mode: IntraMode,
-    ) -> CodecResult<()> {
-        read_block(r, &mut self.scratch.levels)?;
-        intra_predict(recon, pos.x0, pos.y0, mode, &mut self.scratch.pred);
-        let levels = self.scratch.levels;
-        decode_block(&levels, &mut self.scratch);
-        recon.store_block(pos.x0, pos.y0, BLOCK, BLOCK, &self.scratch.recon);
-        Ok(())
+    let skip = r.read(1).map_err(|_| CodecError::MalformedPacket)? == 1;
+    if skip {
+        let reference = reference.ok_or(CodecError::NeedMoreInput)?;
+        copy_mb_from_reference(reference, recon, mx, my, 0, 0);
+        return Ok(());
     }
+    let reference = reference.ok_or(CodecError::NeedMoreInput)?;
+    // MV fields are biased by MAX_SEARCH_RANGE, so 0..=32 maps back
+    // to -16..=16 and is always in range by construction.
+    let mv = MotionVector {
+        dx: r.read(MV_BITS).map_err(|_| CodecError::MalformedPacket)? as i32
+            - i32::from(MAX_SEARCH_RANGE),
+        dy: r.read(MV_BITS).map_err(|_| CodecError::MalformedPacket)? as i32
+            - i32::from(MAX_SEARCH_RANGE),
+    };
 
-    /// Inter: read the block's levels, predict from the reference, and
-    /// reconstruct.
-    fn decode_inter_block(
-        &mut self,
-        r: &mut BitReader,
-        recon: &mut Plane,
-        reference: &Plane,
-        pos: BlockPos,
-        mv: MotionVector,
-    ) -> CodecResult<()> {
-        read_block(r, &mut self.scratch.levels)?;
-        load_mc_block(
-            reference,
-            pos.x0,
-            pos.y0,
-            BLOCK,
-            BLOCK,
-            mv.dx,
-            mv.dy,
-            &mut self.scratch.pred,
-        );
-        let levels = self.scratch.levels;
-        decode_block(&levels, &mut self.scratch);
-        recon.store_block(pos.x0, pos.y0, BLOCK, BLOCK, &self.scratch.recon);
-        Ok(())
+    for (bx, by) in LUMA_BLOCK_OFFSETS {
+        decode_inter_block(
+            scratch,
+            r,
+            &mut recon.luma,
+            &reference.luma,
+            BlockPos {
+                x0: mx + bx * BLOCK,
+                y0: my + by * BLOCK,
+            },
+            mv,
+        )?;
     }
+    if has_chroma {
+        let pos = BlockPos {
+            x0: mx / 2,
+            y0: my / 2,
+        };
+        let cmv = MotionVector {
+            dx: chroma_mv(mv.dx),
+            dy: chroma_mv(mv.dy),
+        };
+        for c in 0..2 {
+            let plane = &mut recon.chroma[c];
+            let reference = &reference.chroma[c];
+            decode_inter_block(scratch, r, plane, reference, pos, cmv)?;
+        }
+    }
+    Ok(())
 }
+
+/// Intra: read the block's levels, build the same prediction the
+/// encoder used, and reconstruct.
+fn decode_intra_block(
+    scratch: &mut BlockScratch,
+    r: &mut BitReader,
+    recon: &mut Plane,
+    pos: BlockPos,
+    mode: IntraMode,
+) -> CodecResult<()> {
+    read_block(r, &mut scratch.levels)?;
+    intra_predict(recon, pos.x0, pos.y0, mode, &mut scratch.pred);
+    let levels = scratch.levels;
+    decode_block(&levels, scratch);
+    recon.store_block(pos.x0, pos.y0, BLOCK, BLOCK, &scratch.recon);
+    Ok(())
+}
+
+/// Inter: read the block's levels, predict from the reference, and
+/// reconstruct.
+fn decode_inter_block(
+    scratch: &mut BlockScratch,
+    r: &mut BitReader,
+    recon: &mut Plane,
+    reference: &Plane,
+    pos: BlockPos,
+    mv: MotionVector,
+) -> CodecResult<()> {
+    read_block(r, &mut scratch.levels)?;
+    load_mc_block(
+        reference,
+        pos.x0,
+        pos.y0,
+        BLOCK,
+        BLOCK,
+        mv.dx,
+        mv.dy,
+        &mut scratch.pred,
+    );
+    let levels = scratch.levels;
+    decode_block(&levels, scratch);
+    recon.store_block(pos.x0, pos.y0, BLOCK, BLOCK, &scratch.recon);
+    Ok(())
+}
+
 // --- type-erased factories --------------------------------------------------
 
 /// Type-erased decoder factory.
