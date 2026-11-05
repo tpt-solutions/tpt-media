@@ -141,6 +141,10 @@ lockstep with the workspace.
 
 ### Fixed
 
+- **The memory harness is MSRV 1.86 again (2026-11-04 to 2026-11-05).** The
+  saturating dealloc counter in `memprobe.rs` uses a CAS loop. An earlier change
+  had switched it to `try_update`, which needs a newer toolchain. Behaviour is
+  unchanged. The Mote and Vault memory tests got the same change.
 - `tpt probe` reported that no codec was available, for codecs the same binary
   encodes and decodes one subcommand later. It called
   `tpt_media_probe::probe`, which answers from an *empty* registry — the right

@@ -34,7 +34,6 @@ tpt transcode --codec <name> [..] <in> [<out>]
 tpt benchmark --codec <name> [..] <in>
 tpt video-corpus [--json] [--fps <n>] [--frames <n>]
 tpt compare [--json] <reference> <test>   score a decoded file vs its original
-tpt compare [--json] <reference> <test>   score a decoded file vs its original
 tpt list-codecs
 tpt completions <bash|zsh|fish|powershell>
 tpt doctor
@@ -228,7 +227,7 @@ allocator behind `tests/memory_budget.rs`).
   field).
 - `--bitrate`, `--target-snr` and `--target-psnr` are per-file averages or per-file settings, not per-second limits.
 - `--quality` on Cinder sets the band step, so it moves the rate; `--bitrate` and `--target-snr` pick the setting for a size or quality instead.
-- Container framing costs about 11 bytes per packet in version 0.2 (43 in 0.1). `--bitrate` measures the whole file, including that framing, so on a very short clip a small target can sit below what the framing alone allows.
+- Container framing costs about 9 bytes per packet in version 0.2 (43 in 0.1). `--bitrate` measures the whole file, including that framing, so on a very short clip a small target can sit below what the framing alone allows.
 - `transcode` requires a `.tpt` input and a 44.1/48 kHz source track.
 - The JSON writer is hand-rolled (no serde) — which is how three
   malformed-output defects shipped and were then pinned by exact-shape

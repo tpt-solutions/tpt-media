@@ -5,7 +5,7 @@ Browser player core for `.tpt` media: a WASM-compatible streaming decoder with h
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.86%2B-orange.svg)](https://www.rust-lang.org)
 
-Decodes `.tpt` audio (Cinder, Aura, Reed) and video (Thrum) inside
+Decodes `.tpt` audio (Cinder, Aura, Reed) and video (Thrum, Vault, Mote) inside
 WebAssembly and hands planar-`f32` audio and RGBA8 pictures to a page that
 plays them with WebAudio and a canvas. Part of the
 [`tpt-media`](../../README.md) workspace —
@@ -22,7 +22,7 @@ plays them with WebAudio and a canvas. Part of the
 | Bindings | Plain `extern "C"` over integer handles + hand-written JS. **No `wasm-bindgen`** ([why](../../docs/web-design.md#3-why-a-plain-c-abi-and-not-wasm-bindgen)) |
 | Dependencies | Only workspace crates; nothing external |
 | `no_std` | No: an app is exempt from the `no_std`-first rule (CONTRIBUTING §10), not from §9.4 |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 |
 | License | MIT OR Apache-2.0 |
 

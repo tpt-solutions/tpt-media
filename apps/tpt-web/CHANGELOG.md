@@ -14,6 +14,11 @@ lockstep with the workspace.
 
 ### Changed
 
+- **The browser check no longer asserts a 48 kHz AudioContext** (2026-11-04).
+  The player creates the context without a `sampleRate`, so it runs at the output
+  device's rate, and 44.1 kHz is common. `browser-check.html` reports the rate
+  with `skip()`. The 48 kHz stream is still checked against the buffers handed to
+  the browser.
 - **Reads container 0.2 packet runs.** A `PKTS` run yields one packet per
   record, in order, and a run whose checksum fails is dropped whole. The
   per-chunk size cap rises to a run's worst case (64 KiB, or one packet), which
