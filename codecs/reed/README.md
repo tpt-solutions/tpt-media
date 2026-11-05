@@ -18,9 +18,9 @@ for bare metal. Part of the [`tpt-media`](../../README.md) workspace —
 | | |
 |---|---|
 | Role | Native low-bitrate speech codec (todo.md §31) |
-| Codec ID | `REED` · bitstream `VERSION = 1` |
+| Codec ID | `REED` · bitstream `VERSION = 2` |
 | Status | Implemented |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | Rates | 8 kHz and 16 kHz, mono, 20 ms frames |
@@ -29,7 +29,7 @@ for bare metal. Part of the [`tpt-media`](../../README.md) workspace —
 | `no_std` | Yes — CI builds it for `thumbv7em-none-eabi` |
 | Measured peak memory | 8 140 B against a documented < 16 KiB budget |
 
-## Design (v0.1)
+## Design
 
 A source-filter (LPC vocoder) model in the spirit of the classic 2.4 kbps
 LPC-10 codecs. Per 20 ms frame the encoder transmits:
@@ -44,8 +44,10 @@ LPC-10 codecs. Per 20 ms frame the encoder transmits:
   classifies the frame and estimates its period; the decoder drives an
   impulse train at that period.
 - **Excitation gain** — the residual's RMS, quantised in 1 dB steps over
-  62 dB. Index 0 is **exact mute**, so all-zero input round-trips to digital
-  silence rather than dither.
+  126 dB (a 7-bit index spanning −126 to 0 dB). Index 0 is **exact mute**, so
+  all-zero input round-trips to digital silence rather than dither. Version 1
+  had a 6-bit index over 62 dB, which clamped the gain a quiet voiced frame
+  needs; see the wire format section.
 - **Unvoiced excitation shape** — a shape-gain VQ over a fixed stochastic
   codebook of 1024 unit-RMS noise shapes. The codebook is **not transmitted**:
   both sides derive the identical entry from the index deterministically via
@@ -77,13 +79,26 @@ CLI: `--quality 0..=100` maps to Reed's LSF bit depth — a pure
 envelope-fidelity versus packet-size trade. Search cost is
 voicing-dependent, not quality-dependent.
 
+### Caller-buffer decode
+
+`ReedDecoder` implements `RealtimeDecoder`. `decode_into(packet, &mut [u8])`
+writes the frame's S16 samples into the caller's buffer and makes zero
+allocation calls per packet at steady state. Its output is byte-identical to
+`decode`. The encoder has no caller-buffer form, because it does not claim
+real-time operation.
+
 ## Wire format
 
 Little-endian bit packing via `tpt-media-bitstream`: 16-bit version, 3-bit LPC
-order code, 4-bit LSF bit depth, 1-bit voicing, 6-bit gain index, 10-bit pitch
+order code, 4-bit LSF bit depth, 1-bit voicing, 7-bit gain index, 10-bit pitch
 period (voiced) or codebook index (unvoiced), then `order` LSF indices of
 `lsf_bits` bits each, then a 4-byte CRC-32 trailer. Unsupported bitstream
 versions are rejected up front (todo.md §35).
+
+- **Version 2 (breaking, 2026-10-19):** the gain index is 7 bits, spanning
+  −126 to 0 dB in 1 dB steps (version 1 used 6 bits over −62 to 0 dB). Packets
+  are still 91 bits of parameters, which round to 12 bytes, so the
+  container-level rate is unchanged. Version 1 packets are rejected.
 
 ## Bare-metal build
 
@@ -130,6 +145,9 @@ behaviour, property tests, the corruption/truncation sweep, codec-private
 round trip, and `tests/realtime_alloc.rs` (32 steady-state passes over
 alternating voiced/noise frames, 512 KiB budget — the search regenerates
 entries into one fixed scratch frame rather than allocating per candidate).
+`tests/alloc_count.rs` pins zero allocation calls per packet on `decode_into`,
+and `tests/edge_cases.rs` covers hostile and degenerate inputs, including
+frames that are not exactly one frame long, which `encode` now refuses.
 
 ## Known limitations
 

@@ -17,6 +17,16 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ## [Unreleased]
 
+### Added
+
+- **Caller-buffer real-time decode (2026-11-04).** `ReedDecoder` implements
+  `RealtimeDecoder`. `decode_into` makes 0 allocation calls per packet at steady
+  state (`tests/alloc_count.rs`). The owned `decode` fell from 11 to 2 calls per
+  packet; the last four were in `tpt-dsp-core`'s `lsp_to_lpc`, which now has a
+  scratch variant (`lsp_to_lpc_with_scratch`, in `tpt-dsp` master, unreleased).
+  Output is byte-identical to `decode`. No wire change. The encoder is not in
+  scope, because its capabilities do not claim real-time operation.
+
 ### Changed
 
 - **Reed wire version 2 (breaking, 2026-10-19).** The gain index is 7 bits, not
