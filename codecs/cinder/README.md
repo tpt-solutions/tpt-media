@@ -17,14 +17,14 @@ conversation rather than for archival quality. Part of the
 | | |
 |---|---|
 | Role | Native real-time audio codec (todo.md §29) |
-| Codec ID | `CIND` · bitstream `VERSION = 1` |
+| Codec ID | `CIND` · bitstream `VERSION = 6` |
 | Status | Implemented |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | Formats | 16-bit mono `S16` @ 44.1 kHz and 48 kHz |
 | Frame sizes | 128 or 256 samples (default 256) |
-| Real-time | **Encoder and decoder** both real-time-safe (bounded allocation) |
+| Real-time | **Encoder and decoder** both real-time-safe: `RealtimeEncoder` and `RealtimeDecoder` make zero allocation calls per packet at steady state, and `conceal_into` does the same for lost packets |
 | Measured peak memory | 6 645 B against a documented < 32 KiB budget |
 
 ## Algorithm
@@ -32,8 +32,10 @@ conversation rather than for archival quality. Part of the
 - **Transform** — MDCT with a sine window (`tpt_dsp_core::mdct_sine_window`,
   shared with Aura).
 - **Quantisation** — uniform scalar, per-band step size.
-- **Entropy** — fixed-width bit fields for the uniform quantiser index. No
-  adaptive coder: at these block sizes the coder was not the bottleneck.
+- **Entropy** — the levels are range-coded under one of 16 geometric models,
+  chosen per packet by a 4-bit loudness class. Levels above the model's
+  alphabet escape to an Elias-gamma code, so fine band steps are not clipped
+  (wire version 6). Nothing carries over between packets.
 - **PLC** — finds the pitch period of the recent output and repeats it across the gap,
   fading over consecutive losses (`spec.txt` 5.1). With no usable period (stream start,
   silence, noise) it falls back to the last spectrum with pseudo-random sign flips. On the
@@ -86,6 +88,15 @@ what bytes are valid, not just the API):
   Version 1 packets are rejected. Bit depths 4–7 were also corrected: levels
   now clamp to the width's signed range. See `CHANGELOG.md`.
 
+- Version 3: fixed-point band steps in 1/1024 units (a whole-number step
+  truncated any step below 1.0).
+- Version 4: one step per packet, Rice-coded levels.
+- Version 5: range-coded levels under a per-packet loudness class.
+- Version 6 (2026-10-19): unclipped escape. Current.
+
+Each version is listed with its reasons in
+[`docs/codec-design.md`](../../docs/codec-design.md), "Cinder v6".
+
 - The CRC-32 trailer (`CRC_TRAILER_BYTES = 4`) was added over all preceding
   payload bytes; packets encoded before it are rejected.
 - The 16-bit bitstream version field was added; pre-version packets are
@@ -132,18 +143,36 @@ cargo test -p tpt-audio-cinder
   bounds and panicked instead of returning `MalformedPacket`.
 - `tests/realtime_alloc.rs` — a counting global allocator pins steady-state
   allocations over 31 encode+decode passes at a 512 KiB budget.
+- `tests/encode_alloc_count.rs`, `tests/decode_alloc_count.rs` and
+  `tests/conceal_alloc_count.rs` — zero allocation calls per packet at steady
+  state on the caller-buffer paths, at both frame sizes.
+- `tests/edge_cases.rs` — hostile and degenerate inputs on the public API.
 
 ## Known limitations
 
-- **Noise-like content plateaus at the default step.** With `band_steps` of
-  1.0, the ±127 level clamp limits noise and mixed material to about 21 dB
-  SNR at any bit depth from 5 to 10. That is a tuning limit: a larger step
-  lifts the ceiling, at the cost of noise on quiet material. Use
+- Quality is set by the band step (`--band-step`, `--quality`, or the
+  `--bitrate` and `--target-snr` searches). Use
   [`tpt-audio-aura`](../aura) for archival fidelity.
 - Mono only, 44.1/48 kHz, `S16` — anything else is refused with
   `CodecError::Unsupported`, not silently converted.
-- Fixed-width entropy coding is not rate-adaptive; `--bitrate` has no effect
-  because no codec here has rate control.
+- Wire version 6 is breaking. Version 1 to 5 packets are rejected, so files
+  written by an older Cinder must be re-encoded.
+
+## Real-time API
+
+Besides the owned `Encoder`/`Decoder` traits, Cinder implements the opt-in
+caller-buffer traits from `tpt-media-codec`. Nothing on the owned path changes,
+and the output of both paths is byte-identical.
+
+- `RealtimeEncoder`: `push_frame`, then `pop_packet_into` until it returns
+  `None`, then `drain_packet_into` for the tail. The input buffer grows once if
+  a push is larger than two blocks.
+- `RealtimeDecoder`: `decode_into(packet, &mut [u8])` writes S16 mono into the
+  caller's buffer. `max_output_bytes()` gives the size to allocate.
+- `CinderDecoder::conceal_into(&mut [u8])` is the caller-buffer form of
+  `conceal`, used for lost packets.
+
+Design: [`docs/caller-buffer-design.md`](../../docs/caller-buffer-design.md).
 
 ## License
 

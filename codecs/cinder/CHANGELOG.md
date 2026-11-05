@@ -17,6 +17,32 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ## [Unreleased]
 
+### Added
+
+- **Caller-buffer real-time encode (2026-11-04).** `CinderEncoder` implements
+  the new `RealtimeEncoder` trait from `tpt-media-codec`: `push_frame`,
+  `pop_packet_into` and `drain_packet_into`. Zero allocation calls per packet at
+  steady state, at both 256 and 128 samples per block
+  (`tests/encode_alloc_count.rs`). Packets, including the drain tail, are
+  byte-identical to the owned `Encoder`. A push of more than two blocks grows
+  the input buffer once. No wire change.
+- **Caller-buffer real-time decode (2026-11-04).** `CinderDecoder` implements
+  `RealtimeDecoder` (`max_output_bytes`, `decode_into`), which writes S16 mono
+  into a caller buffer. Measured 0 allocation calls over 191 steady-state
+  packets at both frame sizes (`tests/decode_alloc_count.rs`), down from 8 per
+  packet on the owned path. The owned `decode` now shares the same core and makes
+  2 calls per packet. Output is byte-identical; no wire change. The owned
+  `Decoder` API is unchanged. Design: `docs/caller-buffer-design.md`.
+- **Allocation-free concealment (2026-11-05).** New inherent method
+  `CinderDecoder::conceal_into(&mut [u8])`, the caller-buffer form of `conceal`.
+  It makes 0 allocation calls per concealed block
+  (`tests/conceal_alloc_count.rs`). Output is byte-identical to the previous
+  implementation, checked on 106 concealed frames at both frame sizes across
+  both fallback paths. The owned `conceal` shares the same core; the returned
+  `AudioFrame` still allocates.
+- `tests/edge_cases.rs` covers hostile and degenerate inputs on the public API
+  (2026-11-05).
+
 ### Changed
 
 - **Cinder v6: unclipped escape (wire version 6, breaking) (2026-10-19).**
