@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 Added
 
+- **Per-crate READMEs and changelogs brought up to date (2026-11-05).** Every
+  crate's README and changelog now covers the 2026-10 and 2026-11 changes: the
+  caller-buffer and cancellation traits, wire versions and the Vault v2 to v5
+  history, the header-size and edge-case refusals, and the fuzz harness, which
+  has its own changelog now. Every README's version line was still `0.1.0`, and
+  now reads `0.2.0`, matching the workspace.
+
 - **Caller-buffer real-time decode for Mote (2026-11-05).** `MoteDecoder`
   implements `RealtimeDecoder` and gains `conceal_into`. Frame packets make
   zero allocation calls at steady state, and output matches the owned API
