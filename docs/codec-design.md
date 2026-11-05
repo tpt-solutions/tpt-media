@@ -320,8 +320,10 @@ Known sharp edges, stated plainly:
 
 - The encoder is **not** claimed real-time (`real_time_encoder` is
   false): the exhaustive search costs `(2·search_range + 1)²` SAD
-  evaluations per macroblock. Only the decoder is claimed real-time,
-  pinned by `codecs/thrum/tests/realtime_alloc.rs`.
+  evaluations per macroblock. Only the decoder is claimed real-time:
+  `codecs/thrum/tests/realtime_alloc.rs` bounds its peak memory, and
+  `codecs/thrum/tests/decode_alloc_count.rs` asserts zero allocation
+  calls in `decode_into` and `conceal_into`.
 - **No rate control.** `qp` is a configuration constant, not
   adaptively chosen, so "adaptive" in the table above is a target and
   not yet a feature.
@@ -834,8 +836,10 @@ the decoder only — its encoder runs a documented 1024-entry codebook
 search per unvoiced frame and deliberately does *not* claim real-time
 safety (pinned by `codecs/reed/tests/realtime_alloc.rs`); Aura is
 offline on both sides (archival profile). Vault claims neither side
-real-time (an offline codec that allocates per RDO candidate); Thrum and
-Mote are covered in their own sections.
+real-time (an offline codec that allocates per RDO candidate). Thrum's
+decoder is real-time with zero allocation calls per packet on the
+caller-buffer path, and Mote's decoder does the same for frame packets
+(`codecs/mote/tests/decode_alloc_count.rs`).
 
 ## Determinism
 

@@ -3306,7 +3306,9 @@ The architecture must satisfy:
       construction; the declared graph (core/bitstream/codec →
       container → pipeline → apps, probe → container, everything on
       tpt-dsp) builds clean
-* [ ] real-time paths are allocation-free — Cinder's *decode* path is
+* [x] real-time paths are allocation-free — scoped to the codecs that
+      claim real-time (Cinder encode and decode, Reed decode, Thrum and
+      Mote decode). Cinder's *decode* path is
       now allocation-free in both directions: `RealtimeDecoder::decode_into`
       and `RealtimeEncoder::{push_frame, pop_packet_into, drain_packet_into}`
       make 0 allocation calls per packet at steady state, at both frame sizes
@@ -3314,12 +3316,21 @@ The architecture must satisfy:
       design in `docs/caller-buffer-design.md`). Cinder concealment is
       closed too: `CinderDecoder::conceal_into` makes 0 allocation calls per
       concealed block (`codecs/cinder/tests/conceal_alloc_count.rs`,
-      2026-11-05; output byte-identical to the old path). Still open: the
-      offline codecs. Reed's
-      `decode_into` is at 0 calls per packet (its `lsp_to_lpc` cost is
-      removed via the new `tpt-dsp-core::lsp_to_lpc_with_scratch`, on the
-      sibling repo's master), so the claim stays unchecked only for the
-      offline codecs
+      2026-11-05; output byte-identical to the old path). Thrum's decoder
+      is closed too (2026-11-05): `ThrumDecoder::decode_into` and
+      `conceal_into` make 0 allocation calls per packet
+      (`codecs/thrum/tests/decode_alloc_count.rs`), and the output is
+      byte-identical to the previous decoder. Reed's `decode_into` is at 0
+      calls per packet (its `lsp_to_lpc` cost is removed via the new
+      `tpt-dsp-core::lsp_to_lpc_with_scratch`, on the sibling repo's
+      master). Mote's decoder is closed too (2026-11-05): `MoteDecoder::
+      decode_into` and `conceal_into` make 0 allocation calls per frame
+      packet (`codecs/mote/tests/decode_alloc_count.rs`), with output
+      byte-identical to the previous decoder. Its dictionary packet is
+      stream state and is excluded. Out of scope, because they make no
+      real-time claim: the offline codecs (Aura, Vault), and the Reed,
+      Thrum and Mote encoders. A future claim on any of them reopens this
+      item
 * [x] malformed media cannot cause unbounded resource consumption —
       §19 limits + §47 audits + §38 sweeps + §42 hostile-input memory
       tests, with the three real overflow/OOB/bomb bugs they found

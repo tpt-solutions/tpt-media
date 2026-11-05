@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 Added
 
+- **Caller-buffer real-time decode for Mote (2026-11-05).** `MoteDecoder`
+  implements `RealtimeDecoder` and gains `conceal_into`. Frame packets make
+  zero allocation calls at steady state, and output matches the owned API
+  byte for byte. Dictionary packets are stream state and are excluded. See
+  `codecs/mote/CHANGELOG.md`.
+- **Caller-buffer real-time decode for Thrum (2026-11-05).** `ThrumDecoder`
+  implements `RealtimeDecoder` and gains `conceal_into`. Both make zero
+  allocation calls per packet at steady state, and their output matches the
+  owned API byte for byte. The decoder keeps two preallocated picture slots
+  in place of per-frame clones. See `codecs/thrum/CHANGELOG.md`.
 - **Caller-buffer real-time decode for Cinder (2026-11-04).** New opt-in trait
   `RealtimeDecoder` in `tpt-media-codec` (`max_output_bytes`, `decode_into`), with
   `CinderDecoder` as its first implementor. `decode_into` writes S16 mono into a

@@ -169,7 +169,10 @@ because the owned return values allocate.
 For a codec that claims real-time operation, a steady-state
 `encode`/`decode` loop performs **zero heap allocations** after
 construction, measured by the existing counting allocator with the budget
-set to 0. Offline codecs (Aura, Thrum, Vault, Mote) are out of scope.
+set to 0. Offline codecs (Aura, Vault) are out of scope. The real-time
+decoders (Cinder, Reed, Thrum, Mote) are in scope and meet the goal for
+frame packets. A dictionary packet (Mote) installs stream state and is
+measured as warm-up, not as per-frame work.
 
 ## Proposed shape
 
@@ -219,8 +222,13 @@ of the new ones, so there is one code path and the two cannot drift.
 3. **Reed** (`no_std`, bare-metal target), which uses the sinks without
    `alloc` if the sinks take slices. Check that the `thumbv7em-none-eabi`
    CI job still passes.
-4. Thrum and Mote only if a real-time consumer appears. Neither claims
-   real-time today.
+4. **Thrum decoder: done** (`ThrumDecoder::decode_into` and
+   `conceal_into`, measured by `codecs/thrum/tests/decode_alloc_count.rs`).
+5. **Mote decoder: done** (`MoteDecoder::decode_into` and `conceal_into`,
+   measured by `codecs/mote/tests/decode_alloc_count.rs`). Its dictionary
+   packet is stream state and is excluded from the measured region.
+   The Thrum and Mote encoders are not claimed real-time and stay out of
+   scope.
 
 Each step lands with: the zero-allocation assertion (budget 0, not
 512 KiB), bit-identical output against the owned-`Vec` path, and a
