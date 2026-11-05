@@ -17,9 +17,9 @@ and a psychoacoustically driven lossy mode. Part of the
 | | |
 |---|---|
 | Role | Native archival audio codec (todo.md §30) |
-| Codec ID | `AURA` · bitstream `VERSION = 1` |
+| Codec ID | `AURA` · bitstream `VERSION = 3` |
 | Status | Implemented |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | Modes | `lossless` (LPC + adaptive Rice), `lossy` (MDCT + Bark masking + noise shaping) |
@@ -64,10 +64,15 @@ gate which encode paths are *compiled*:
 
 ```toml
 [dependencies]
-tpt-audio-aura = { version = "0.1", default-features = false, features = ["std", "lossless"] }
+tpt-audio-aura = { version = "0.2", default-features = false, features = ["std", "lossless"] }
 ```
 
 Neither mode is a silently-degraded version of the other (CONTRIBUTING §10).
+
+`encode` takes whole blocks only: a frame must be exactly one block long
+(a zero-length frame returns no packets), and any other length is refused with
+`InvalidConfig` rather than truncated. `lpc_order` is limited to 0 to 31, since
+the header carries it in 5 bits.
 
 ## Wire format and versioning
 
@@ -82,6 +87,9 @@ changed, not just the API:
 - Lossy quantisation was reworked from flat 16-bit-per-coefficient steps to
   the per-band masking-driven table above. Pre-change lossy packets are
   **not decodable** by the current decoder.
+- Version 2: lossless residuals moved from Exp-Golomb to adaptive Rice.
+- Version 3: lossless packets carry a stereo bit and mode (L/R, L/S, R/S or
+  M/S per block). Current. Versions 1 and 2 are rejected.
 - The CRC-32 trailer was added; packets without it are rejected.
 - The 16-bit bitstream version field was added.
 
