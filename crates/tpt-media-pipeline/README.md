@@ -19,7 +19,7 @@ default) or against an injected clock for real-time work
 |---|---|
 | Role | Pipeline core (todo.md §26) |
 | Status | Implemented (all twelve core concepts) |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | `no_std` | Yes — builds for `wasm32-unknown-unknown` (CI job `wasm`) |

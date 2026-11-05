@@ -18,7 +18,7 @@ of the [`tpt-media`](../../README.md) workspace —
 |---|---|
 | Role | Bit-level I/O + entropy coding (todo.md §17) |
 | Status | Implemented; depended on by every codec and by `tpt-container` |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | `no_std` | Yes — builds for `wasm32-unknown-unknown` (CI job `wasm`) |

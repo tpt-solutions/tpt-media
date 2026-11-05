@@ -20,7 +20,7 @@ work. Part of the [`tpt-media`](../../README.md) workspace —
 | ABI version | `ABI_VERSION = 1`, queryable at runtime via `tpt_abi_version()` |
 | Header | `include/tpt_media.h` (hand-written, test-enforced) |
 | Status | Implemented for the audio family (Cinder, Aura, Reed) |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | Builds as | `rlib` (Rust consumers and tests) **and** `staticlib` (`tpt_media_sys.lib` for C linkers) |

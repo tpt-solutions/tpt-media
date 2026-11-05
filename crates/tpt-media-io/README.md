@@ -20,7 +20,7 @@ sources/sinks, never the other way round. Part of the
 |---|---|
 | Role | Media I/O (todo.md §27) |
 | Status | Implemented |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | `no_std` | Yes — `no_std + alloc` core, `std` adds file/stdin/stdout and the `f32` bridge |

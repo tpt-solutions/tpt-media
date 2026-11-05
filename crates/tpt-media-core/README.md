@@ -18,7 +18,7 @@ here, two crates cannot agree on it. Part of the
 |---|---|
 | Role | Shared media data model (todo.md §15) |
 | Status | Implemented; depended on by every other crate |
-| Version | `0.1.0`, lockstep with the workspace (CONTRIBUTING §9.1) |
+| Version | `0.2.0`, lockstep with the workspace (CONTRIBUTING §9.1) |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | `no_std` | Yes — builds for `wasm32-unknown-unknown` and `thumbv7em-none-eabi` (CI jobs `wasm`, `no_std`) |

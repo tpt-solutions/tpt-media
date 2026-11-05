@@ -22,7 +22,7 @@ designed from data rather than assumption. Part of the
 |---|---|
 | Role | Research harness (todo.md §56) |
 | Status | Implemented, experimental |
-| Version | `0.1.0`, lockstep with the workspace |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | `no_std` | No — offline analysis code, deliberately |
