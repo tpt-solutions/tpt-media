@@ -18,17 +18,17 @@ workspace — [workspace changelog](../../CHANGELOG.md) ·
 | | |
 |---|---|
 | Role | Native high-compression video codec (todo.md §33) |
-| Codec ID | `VAUL` · bitstream `VERSION = 1` |
-| Status | Implemented (v0.1); driven by `tpt-cli` (not yet the web player) |
-| Version | `0.1.0`, lockstep with the workspace |
+| Codec ID | `VAUL` · bitstream `VERSION = 5` |
+| Status | Implemented; driven by `tpt-cli` and playable in `tpt-web` |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 |
 | License | MIT OR Apache-2.0 |
 | Coded formats | `Gray8` and planar `Yuv420`, dimensions non-zero multiples of 8 |
 | Real-time | **Neither side** is claimed real-time (`Capabilities` is lossy only) |
-| `no_std` | The crate is `#![cfg_attr(not(feature = "std"), no_std)]` + `alloc`, like Thrum; bare-metal builds are **not** CI-verified for it |
+| `no_std` | Yes — `#![cfg_attr(not(feature = "std"), no_std)]` + `alloc`; CI builds it for `thumbv7em-none-eabi` with `--no-default-features` (job `no_std`) |
 | Measured peak memory | 482 784 B at 176×144 4:2:0 with 4 references, encoder + decoder together ([`docs/performance.md`](../../docs/performance.md)) |
 
-## Design (v0.1)
+## Design
 
 - **64×64 superblocks, recursively partitioned** down to a minimum of 8×8.
   A node is one *leaf* (one prediction + one residual) or four children.
@@ -85,10 +85,28 @@ allow 8. `VaultConfig::max_block_size` (8/16/32/64) is encoder-only.
 
 ## Wire format and versioning
 
-`16-bit version | 1 intra | 6 qp | 5 num_refs | 1 loop_filter`, then the
-superblocks, then a 4-byte CRC-32 trailer verified before any other bit is
-parsed; an unsupported version is rejected up front (todo.md §35). The leaf
-syntax is in [`docs/codec-design.md`](../../docs/codec-design.md).
+```text
+16 bits version | 2 ftype | 6 qp | 5 num_refs | 1 loop_filter | 16 poc
+  [+ 2 bits b-weight for B frames: 0 average, 1 quarter past, 2 three quarters past, 3 reserved]
+  [+ 2 bits LTR flags for I/P frames: ltr_used, ltr_update]
+superblocks in raster order (a non-skip B leaf adds a 2-bit combine mode)
+32 bits CRC-32 over everything before it
+```
+
+The CRC and version are checked before any other bit is parsed; an unsupported
+version is rejected up front (todo.md §35). Version history, each with its
+reasons and the field-by-field leaf syntax, is in
+[`docs/codec-design.md`](../../docs/codec-design.md), "Vault":
+
+- **v2:** frame type and picture order count (B frames, display reordering).
+  Also fixed B leaves that had dropped their coefficient tiles.
+- **v3:** a per-frame bi-prediction weight for B frames.
+- **v4:** a per-leaf combine mode for B leaves: weighted bi, forward-only,
+  or backward-only.
+- **v5:** the optional long-term reference (`ltr_used`, `ltr_update`).
+
+Versions 1 to 4 are rejected. Nothing released emitted anything but the
+current version.
 `VaultConfig::max_packet_bits` *derives* the worst-case packet size from the
 level clamp and the per-code bit bound; the encoder checks every finished
 packet against it. A test drives the finest quantiser over uniform noise and
@@ -140,7 +158,13 @@ codec: the content is smooth and highly predictable.
 cargo test -p tpt-video-vault
 ```
 
-56 tests: 18 unit tests (Rice lengths against the real writer, coefficient
+76 tests in total, counting the `#[ignore]`d measurement harnesses
+(`cargo test -p tpt-video-vault -- --list`). The breakdown below predates
+`tests/edge_cases.rs`, which adds six hostile-input tests: wrong geometry or
+format, short pixel buffers, zero-length and truncated packets, invalid configs,
+extreme pixel content, and overflowing geometry.
+
+18 unit tests (Rice lengths against the real writer, coefficient
 block round trips and the worst-case bound at all four transform sizes,
 transform round trip and a DC known answer, half-pel interpolation known
 answers and off-picture safety, intra availability and a plane-extrapolation
@@ -169,11 +193,11 @@ in `docs/performance.md`.
   `tpt-dsp-core`'s FFT-backed `FastDct2dPlan` in std builds (bare metal
   keeps the direct path); since 2026-10-05 every §36 corpus scene fits
   the 33.3 ms QCIF frame budget (2.9-22.2 ms/frame, `docs/performance.md`).
-- No per-leaf weight or combine-mode signalling, no long-term references
-  or reference reordering (the references are simply the last N
-  pictures), no per-block quantiser adaptation. Per-*frame* weighted
-  bi-prediction exists (the v3 B-frame header's 2-bit weight, chosen per
-  B frame by exact frame `J` across the average and both quarter
+- Per-leaf combine modes exist (v4), and one long-term reference exists (v5).
+  There is no reference reordering (the references are the last N pictures
+  plus the long-term one) and no per-block quantiser adaptation. Per-*frame*
+  weighted bi-prediction exists (the v3 B-frame header's 2-bit weight, chosen
+  per B frame by exact frame `J` across the average and both quarter
   weights — at the cost of up to three encodes per B frame). Rate control (`target_bits_per_frame`), B-frames
   (`b_frames`), scene-cut detection (`scene_cut`) and coefficient-level
   RDO (`rdoq`) exist as encoder-only knobs; the scene-cut constants and
