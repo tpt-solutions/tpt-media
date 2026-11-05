@@ -15,6 +15,19 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 
 ### Added
 
+- **`RealtimeDecoder` and `RealtimeEncoder` traits (2026-11-04).** Opt-in
+  companions to `Decoder` and `Encoder` for caller-owned storage. The decoder
+  side is `max_output_bytes` and `decode_into`. The encoder side is `push_frame`,
+  `pop_packet_into` and `drain_packet_into`, with `max_packet_bytes`. The owned
+  traits are unchanged. Design: `docs/caller-buffer-design.md`. Implemented by
+  `CinderDecoder` and `CinderEncoder`, and by `ReedDecoder` and `MoteDecoder` and
+  `ThrumDecoder` on the decode side.
+- **Cooperative cancellation (2026-10-15).** `CancelToken` is a shared one-way
+  flag. The `CancellableDecoder`, `CancellableEncoder`, `CancellableDynDecoder`
+  and `CancellableDynEncoder` adapters check it before every
+  `decode`/`encode`/`flush`/`drain` call and return `CodecError::Cancelled` once
+  it is set. The granularity is one call, so a cancelled call never stops midway.
+  There is no wall-clock deadline.
 - **`tests/dyn_contract.rs` — the crate's first integration test.** Every
   test until now was inline, and inline tests can reach private items, so
   nothing proved the framework is usable from *outside* the crate — which is

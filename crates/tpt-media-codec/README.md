@@ -17,8 +17,8 @@ it claims it can do, and what it refuses to be asked beyond. Part of the
 | | |
 |---|---|
 | Role | Codec abstraction + registry (todo.md §18, §19) |
-| Status | Implemented; implemented by Cinder, Aura, Reed, Thrum |
-| Version | `0.1.0`, lockstep with the workspace |
+| Status | Implemented; implemented by Aura, Cinder, Mote, Reed, Thrum, Vault |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
 | `no_std` | Yes — builds for `wasm32-unknown-unknown` (CI job `wasm`) |
@@ -37,6 +37,10 @@ it claims it can do, and what it refuses to be asked beyond. Part of the
 - Type-erased `DynEncoder` / `DynDecoder` + `Registry` for codec-agnostic
   callers, and `DynFrame` for payloads whose media type is only known at
   runtime.
+- `RealtimeDecoder` / `RealtimeEncoder` — opt-in caller-buffer traits for
+  real-time code that must not allocate per packet (see below).
+- `CancelToken` and the `Cancellable*` adapters — cooperative cancellation at
+  call granularity (see below).
 
 ## Usage
 
@@ -80,6 +84,32 @@ registry.register_encoder(tpt_audio_aura::AuraDynEncoder::default());
 `tpt_media_config` mapping rely on. A codec whose encoder is not real-time
 (Reed, Thrum) says so — `real_time_encoder: false`.
 
+## Caller-buffer real-time traits
+
+`Encoder::encode` and `Decoder::decode` return owned `Vec`s, which allocates on
+every packet. A codec that claims real-time operation can also implement the
+opt-in companion traits, which write into storage the caller owns:
+
+- `RealtimeDecoder` — `max_output_bytes()` and `decode_into(packet, out)`. The
+  caller allocates `out` once. A short buffer is refused before any decoder
+  state changes.
+- `RealtimeEncoder` — `push_frame`, then `pop_packet_into` until it returns
+  `None`, then `drain_packet_into` for the tail. `max_packet_bytes()` gives the
+  size of the output buffer.
+
+Implemented by Cinder (both), and by Mote, Reed and Thrum on the decode side.
+The owned traits are unchanged, and each implementation's output is
+byte-identical to its owned path. Design: `docs/caller-buffer-design.md`.
+
+## Cancellation
+
+`CancelToken` is a shared one-way flag. Wrap a codec in `CancellableDecoder`
+or `CancellableEncoder` (or the `Dyn` variants) and hold a clone of the token.
+Each `decode`, `encode`, `flush` and `drain` call checks the flag first and
+returns `CodecError::Cancelled` once it is set. A call in progress is never
+interrupted, and there is no wall-clock deadline, so output never depends on the
+machine's speed.
+
 ## `flush` vs `drain`
 
 Both exist because end-of-stream and stream-reuse are different problems:
@@ -119,7 +149,9 @@ cargo test -p tpt-media-codec
 ```
 
 Covers the error model, both limit presets and every check helper, capability
-flags, the type-erased wrappers, and the registry's factory dispatch.
+flags, the type-erased wrappers, the registry's factory dispatch, and the
+cancellation adapters. `tests/dyn_contract.rs` drives the type-erased path from
+outside the crate.
 
 ## Known limitations
 
