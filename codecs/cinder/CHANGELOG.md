@@ -1,6 +1,6 @@
-# Changelog — tpt-audio-cinder
+# Changelog — tpt-media-cinder
 
-Scoped record of changes to `tpt-audio-cinder`. The workspace-wide release log
+Scoped record of changes to `tpt-media-cinder`. The workspace-wide release log
 — including cross-cutting changes and the lockstep version bump that ships
 every crate together — is the root [`CHANGELOG.md`](../../CHANGELOG.md). This
 file is a filtered view of it: a change touching only this crate is recorded
@@ -44,6 +44,8 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
   (2026-11-05).
 
 ### Changed
+
+- **Renamed to `tpt-media-cinder` (2026-11-05).** The package was `tpt-audio-cinder`. The crate name now carries the `tpt-media-` prefix, so it is clear it belongs to this repository. Rust imports change from `tpt_audio_cinder` to `tpt_media_cinder`. The directory and the code are unchanged.
 
 - **Cinder v6: unclipped escape (wire version 6, breaking) (2026-10-19).**
   The level escape's excess is now an Elias-gamma prefix plus `bits_per_coef`

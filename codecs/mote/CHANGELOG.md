@@ -1,6 +1,6 @@
-# Changelog — tpt-video-mote
+# Changelog — tpt-media-mote
 
-Scoped record of changes to `tpt-video-mote`. The workspace-wide release log —
+Scoped record of changes to `tpt-media-mote`. The workspace-wide release log —
 including cross-cutting changes and the lockstep version bump that ships every
 crate together — is the root [`CHANGELOG.md`](../../CHANGELOG.md). This file
 is a filtered view of it: a change touching only this crate is recorded here
@@ -16,6 +16,10 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 > a guess (todo.md §35).
 
 ## [Unreleased]
+
+### Changed
+
+- **Renamed to `tpt-media-mote` (2026-11-05).** The package was `tpt-video-mote`. The crate name now carries the `tpt-media-` prefix, so it is clear it belongs to this repository. Rust imports change from `tpt_video_mote` to `tpt_media_mote`. The directory and the code are unchanged.
 
 ### Added
 

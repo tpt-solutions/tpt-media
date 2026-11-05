@@ -1,6 +1,6 @@
-# Changelog — tpt-audio-reed
+# Changelog — tpt-media-reed
 
-Scoped record of changes to `tpt-audio-reed`. The workspace-wide release log —
+Scoped record of changes to `tpt-media-reed`. The workspace-wide release log —
 including cross-cutting changes and the lockstep version bump that ships every
 crate together — is the root [`CHANGELOG.md`](../../CHANGELOG.md). This file
 is a filtered view of it: a change touching only this crate is recorded here
@@ -28,6 +28,8 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
   scope, because its capabilities do not claim real-time operation.
 
 ### Changed
+
+- **Renamed to `tpt-media-reed` (2026-11-05).** The package was `tpt-audio-reed`. The crate name now carries the `tpt-media-` prefix, so it is clear it belongs to this repository. Rust imports change from `tpt_audio_reed` to `tpt_media_reed`. The directory and the code are unchanged.
 
 - **Reed wire version 2 (breaking, 2026-10-19).** The gain index is 7 bits, not
   6, and spans −126 to 0 dB in 1 dB steps, not −62 to 0. Version 1 clamped the

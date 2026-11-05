@@ -1,6 +1,6 @@
-# Changelog — tpt-cli
+# Changelog — tpt-media-cli
 
-Scoped record of changes to `tpt-cli`. The workspace-wide release log —
+Scoped record of changes to `tpt-media-cli`. The workspace-wide release log —
 including cross-cutting changes and the lockstep version bump that ships every
 crate together — is the root [`CHANGELOG.md`](../../CHANGELOG.md). This file
 is a filtered view of it: a change touching only this crate is recorded here
@@ -200,6 +200,8 @@ lockstep with the workspace.
   removed.
 
 ### Changed
+
+- **Renamed to `tpt-media-cli` (2026-11-05).** The package was `tpt-cli`. The crate name now carries the `tpt-media-` prefix, so it is clear it belongs to this repository. Rust imports change from `tpt_cli` to `tpt_media_cli`. The directory and the code are unchanged. The installed binary is still `tpt`.
 
 - **`--quality` moves Cinder's rate (2026-10-19).** It maps onto the band step
   (64 to 0.25, log scale) rather than only the escape width. Explicit

@@ -125,6 +125,18 @@ Added
 
 Changed
 
+- **Crates renamed with the `tpt-media-` prefix (2026-11-05).** So that each crate
+  clearly belongs to this repository, the package names now carry the prefix:
+  `tpt-audio-cinder`, `tpt-audio-aura` and `tpt-audio-reed` are now `tpt-media-cinder`,
+  `tpt-media-aura` and `tpt-media-reed`; `tpt-video-thrum`, `tpt-video-vault` and
+  `tpt-video-mote` are now `tpt-media-thrum`, `tpt-media-vault` and `tpt-media-mote`;
+  `tpt-container` is now `tpt-media-format` (`tpt-media-container` already names the
+  generic container-trait crate); `tpt-cli` is now `tpt-media-cli`; `tpt-web` is now
+  `tpt-media-web`. Rust imports use the underscore form (for example `tpt_media_cinder`).
+  The installed binary is still `tpt`, and directories are unchanged. The wasm build
+  writes `tpt_media_web.wasm`. Historical entries below keep the names they shipped with.
+  Each affected crate's changelog has the same entry.
+
 - **Aura and Reed `encode` refuse frames that are not exactly one block (2026-11-05).**
   Both codecs used to truncate a longer frame to its first block with no error,
   which silently dropped input. A zero-length frame now yields no packets, and any

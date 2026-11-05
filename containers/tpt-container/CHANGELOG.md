@@ -1,6 +1,6 @@
-# Changelog — tpt-container
+# Changelog — tpt-media-format
 
-Scoped record of changes to `tpt-container`. The workspace-wide release log —
+Scoped record of changes to `tpt-media-format`. The workspace-wide release log —
 including cross-cutting changes and the lockstep version bump that ships every
 crate together — is the root [`CHANGELOG.md`](../../CHANGELOG.md). This file
 is a filtered view of it: a change touching only this crate is recorded here
@@ -17,6 +17,8 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
 ## [Unreleased]
 
 ### Changed
+
+- **Renamed to `tpt-media-format` (2026-11-05).** The package was `tpt-container`. The crate name now carries the `tpt-media-` prefix, so it is clear it belongs to this repository. Rust imports change from `tpt_container` to `tpt_media_format`. The directory and the code are unchanged. The name `tpt-media-container` belongs to the generic container-trait crate, so the format crate takes `tpt-media-format`.
 
 - **Container format 0.2: packet runs (2026-10-19).** Packets are written in
   `PKTS` chunks of up to 32 packets of one track, with timestamps as deltas from

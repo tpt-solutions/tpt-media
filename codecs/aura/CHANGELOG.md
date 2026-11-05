@@ -1,6 +1,6 @@
-# Changelog — tpt-audio-aura
+# Changelog — tpt-media-aura
 
-Scoped record of changes to `tpt-audio-aura`. The workspace-wide release log —
+Scoped record of changes to `tpt-media-aura`. The workspace-wide release log —
 including cross-cutting changes and the lockstep version bump that ships every
 crate together — is the root [`CHANGELOG.md`](../../CHANGELOG.md). This file
 is a filtered view of it: a change touching only this crate is recorded here
@@ -42,6 +42,8 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
   (2026-09-11).
 
 ### Changed
+
+- **Renamed to `tpt-media-aura` (2026-11-05).** The package was `tpt-audio-aura`. The crate name now carries the `tpt-media-` prefix, so it is clear it belongs to this repository. Rust imports change from `tpt_audio_aura` to `tpt_media_aura`. The directory and the code are unchanged.
 
 - **Lossy quantisation reworked** to be psychoacoustically driven
   (2026-09-07): each MDCT bin is mapped to a Bark critical band, bands are
