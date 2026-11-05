@@ -21,17 +21,17 @@ patches. The decoder is a table lookup and a copy. Part of the
 |---|---|
 | Role | Native extreme-edge video codec (todo.md §34) |
 | Codec ID | `MOTE` · bitstream `VERSION = 1` |
-| Status | Implemented (v0.1); driven by the CLI's y4m bridge |
-| Version | `0.1.0`, lockstep with the workspace |
+| Status | Implemented; driven by the CLI's y4m bridge and playable in `tpt-web` |
+| Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 |
 | License | MIT OR Apache-2.0 |
 | Coded formats | `Gray8` and planar `Yuv420` |
 | Dimensions | multiples of 16; long edge ≤ 848, short edge ≤ 480 ("≤480p", either orientation) |
 | Dictionary | 1–4096 entries of 8×8 bytes; index is `ceil(log2(entries))` bits, **12 bits at 4096** |
-| Real-time | Decoder: bounded work, one table lookup per patch. Encoder is not (`real_time_encoder: false`) |
-| `no_std` | Source is `no_std`-compatible (`--no-default-features` builds); like Thrum it links `tpt-dsp-core` with `std`, and no bare-metal target is CI-verified |
+| Real-time | Decoder: bounded work, one table lookup per patch, and zero allocation calls per frame packet on `decode_into` / `conceal_into`. Encoder is not (`real_time_encoder: false`) |
+| `no_std` | Yes — CI builds it for `thumbv7em-none-eabi` with `--no-default-features` (job `no_std`) |
 
-## Design (v0.1)
+## Design
 
 - **Patches.** 8×8 blocks of one plane, dimension 64, numbered plane by plane
   (Y, U, V) in raster order. Multiples of 16 make even 4:2:0 chroma tile
@@ -99,6 +99,17 @@ just memorises the frame. For the full 4096-entry target, train offline.
 `MoteDecoder::conceal` repeats the last frame (mid-grey before the first).
 `MoteEncoder::dictionary_packet` re-emits the dictionary for a late joiner.
 
+### Caller-buffer decode
+
+`MoteDecoder` implements `RealtimeDecoder`. `decode_into(packet, &mut [u8])`
+writes the frame into the caller's buffer, and `conceal_into` is the
+caller-buffer form of `conceal`. Frame packets make zero heap allocation calls
+at steady state, and the output is byte-identical to `decode` and `conceal`.
+The decoder holds two preallocated picture slots in place of per-frame clones.
+A dictionary packet yields no output (`decode_into` returns `0`) and still
+allocates, because it installs stream state. A refused packet leaves the
+reference frame unchanged.
+
 The quality metric (`compare`, `QualityReport`) is defined in
 [`src/quality.rs`](src/quality.rs): luma PSNR is the primary figure, with
 all-plane PSNR and mean absolute error alongside.
@@ -139,7 +150,11 @@ determinism, and a §38 hostile-input sweep including bit flips with a repaired
 CRC and random bodies behind a valid header), `low_bitrate.rs` (exact
 12-bit-per-patch key frame, heartbeat, 2-entry floor, static-camera bandwidth),
 `temporal.rs` (the temporal-prediction investigation) and `memory.rs`
-(counting allocator, full 4096-entry dictionary).
+(counting allocator, full 4096-entry dictionary), `decode_alloc_count.rs`
+(zero allocation calls per frame packet on the caller-buffer path) and
+`edge_cases.rs` (wrong geometry or format, short pixel buffers, empty and
+truncated packets, invalid configs, extreme pixel content, and overflowing
+geometry, all refused or handled without a panic).
 
 ## Known limitations
 

@@ -28,6 +28,11 @@ lockstep with the workspace; no API-stability guarantee pre-1.0
   installs stream state. The decoder holds two preallocated picture slots in
   place of per-frame clones. Refused or damaged packets leave the reference
   unchanged. The bitstream and `VERSION` are unchanged.
+- **Edge-case tests (2026-11-05).** `tests/edge_cases.rs` covers wrong geometry
+  and format, short pixel buffers, zero-length and truncated packets, invalid
+  configs, extreme pixel content, and overflowing geometry. Each case is refused
+  or handled without a panic. The counting-allocator memory test now uses a
+  CAS loop for its saturating counter, for MSRV 1.86.
 
 - **The crate itself** (2026-09-30, todo.md §34): Mote, the extreme edge/IoT
   video codec. 8×8 patch dictionary VQ with up to 4096 entries (12-bit index),
