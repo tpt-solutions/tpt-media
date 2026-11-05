@@ -18,7 +18,7 @@ of the [`tpt-media`](../../README.md) workspace —
 | | |
 |---|---|
 | Role | Container-format abstraction (todo.md §18/§20 boundary) |
-| Status | Implemented; the `.tpt` implementation lives in [`tpt-container`](../../containers/tpt-container) |
+| Status | Implemented; the `.tpt` implementation lives in [`tpt-media-format`](../../containers/tpt-container) |
 | Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 — verified, enforced by CI's `msrv` job |
 | License | MIT OR Apache-2.0 |
@@ -85,7 +85,7 @@ impl Container for MyContainer {
 `ARCHITECTURE.md` §7 documents the real container behaviour (index/`IDX `,
 `CRC1`, streaming) and `docs/container-design.md` is the full `.tpt`
 specification. The dependency direction matters: probe → container, never the
-reverse — that edge was inverted in 2026-09 because `tpt-container` had an
+reverse — that edge was inverted in 2026-09 because `tpt-media-format` had an
 unused dependency on probe.
 
 ## Testing

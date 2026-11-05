@@ -1,4 +1,4 @@
-# tpt-audio-reed
+# tpt-media-reed
 
 Reed: TPT extremely-low-bandwidth speech codec (no_std LPC vocoder with LSP quantization and stochastic-excitation VQ).
 
@@ -61,7 +61,7 @@ frame, so gaps fade out instead of buzzing.
 ## Usage
 
 ```rust
-use tpt_audio_reed::{ReedConfig, ReedDecoder, ReedEncoder};
+use tpt_media_reed::{ReedConfig, ReedDecoder, ReedEncoder};
 use tpt_media_codec::{Decoder, Encoder};
 use tpt_media_core::CodecConfig;
 
@@ -103,7 +103,7 @@ versions are rejected up front (todo.md §35).
 ## Bare-metal build
 
 ```bash
-cargo build -p tpt-audio-reed --target thumbv7em-none-eabi --no-default-features
+cargo build -p tpt-media-reed --target thumbv7em-none-eabi --no-default-features
 ```
 
 That is what CI's `no_std` job runs. Float math is `libm`-backed there — this
@@ -113,7 +113,7 @@ is **not** a fixed-point implementation (todo.md §31).
 ## Benchmarks & profiling
 
 ```bash
-cargo bench -p tpt-audio-reed
+cargo bench -p tpt-media-reed
 ```
 
 `benches/codec_bench.rs` — encode/decode of 64 × 320-sample (20 ms) frames at
@@ -131,13 +131,13 @@ input is a worst case, not a typical one. Decode is one codebook-entry
 regeneration plus LPC synthesis: 5.9 µs against a 20 ms budget.
 Tables: [`docs/performance.md`](../../docs/performance.md).
 
-Profiling recipe: `cargo bench -p tpt-audio-reed`, then `cargo flamegraph
+Profiling recipe: `cargo bench -p tpt-media-reed`, then `cargo flamegraph
 --bench codec_bench` (Linux) / `Instruments` (macOS) / `VTune` (Windows).
 
 ## Testing
 
 ```bash
-cargo test -p tpt-audio-reed
+cargo test -p tpt-media-reed
 ```
 
 Envelope and pitch preservation are pinned explicitly, alongside PLC

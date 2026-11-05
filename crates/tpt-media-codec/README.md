@@ -75,8 +75,8 @@ Registering implementations so codec-agnostic callers can find them:
 use tpt_media_codec::Registry;
 
 let mut registry = Registry::new();
-registry.register_decoder(tpt_audio_cinder::CinderDynDecoder::default());
-registry.register_encoder(tpt_audio_aura::AuraDynEncoder::default());
+registry.register_decoder(tpt_media_cinder::CinderDynDecoder::default());
+registry.register_encoder(tpt_media_aura::AuraDynEncoder::default());
 ```
 
 `Capabilities` is a claim, not a hint: `real_time_decoder` /

@@ -1,4 +1,4 @@
-// tpt-web.js: browser playback on top of the tpt-web wasm decoder.
+// tpt-web.js: browser playback on top of the tpt-media-web wasm decoder.
 //
 // tpt-decoder.js moves bytes across the wasm boundary; this file decides
 // WHEN things happen: fetching, WebAudio scheduling, canvas drawing, pause,
@@ -59,7 +59,7 @@ export class TptPlayer {
   /**
    * @param {object} opts
    * @param {HTMLCanvasElement} [opts.canvas]   where video is drawn
-   * @param {string|URL|ArrayBuffer|Uint8Array} [opts.wasmUrl]  defaults to ./tpt_web.wasm next to this file
+   * @param {string|URL|ArrayBuffer|Uint8Array} [opts.wasmUrl]  defaults to ./tpt_media_web.wasm next to this file
    * @param {object} [opts.limits]              see TptModule.open (all optional)
    * @param {(stats: object) => void} [opts.onStats]
    * @param {(info: object) => void} [opts.onInfo]   stream info once tracks are known
@@ -69,7 +69,7 @@ export class TptPlayer {
   constructor({ canvas, wasmUrl, limits = {}, onStats, onInfo, onEnded, onError } = {}) {
     this.canvas = canvas ?? null;
     this.g2d = canvas ? canvas.getContext("2d") : null;
-    this.wasmUrl = wasmUrl ?? new URL("./tpt_web.wasm", import.meta.url);
+    this.wasmUrl = wasmUrl ?? new URL("./tpt_media_web.wasm", import.meta.url);
     // Packets are decoded in file order, so a full video queue also holds
     // back the audio packets behind it. 8 pictures keeps roughly half a
     // second of look-ahead at 15 fps (about a quarter second at 30 fps); the

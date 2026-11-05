@@ -1,4 +1,4 @@
-# tpt-video-vault
+# tpt-media-vault
 
 Vault: TPT high-compression video codec (64x64 superblocks, recursive partitioning, half-pel motion, multi-reference, RDO).
 
@@ -19,7 +19,7 @@ workspace — [workspace changelog](../../CHANGELOG.md) ·
 |---|---|
 | Role | Native high-compression video codec (todo.md §33) |
 | Codec ID | `VAUL` · bitstream `VERSION = 5` |
-| Status | Implemented; driven by `tpt-cli` and playable in `tpt-web` |
+| Status | Implemented; driven by `tpt-media-cli` and playable in `tpt-media-web` |
 | Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 |
 | License | MIT OR Apache-2.0 |
@@ -63,7 +63,7 @@ workspace — [workspace changelog](../../CHANGELOG.md) ·
 
 ```rust
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
-use tpt_video_vault::{VaultConfig, VaultDecoder, VaultEncoder};
+use tpt_media_vault::{VaultConfig, VaultDecoder, VaultEncoder};
 
 let vc = VaultConfig {
     width: 176,
@@ -127,7 +127,7 @@ never reach the parser.
 ## Benchmarks & profiling
 
 ```bash
-cargo bench -p tpt-video-vault
+cargo bench -p tpt-media-vault
 ```
 
 `benches/codec_bench.rs`, 4-frame clips of a gradient with a panning textured
@@ -155,11 +155,11 @@ codec: the content is smooth and highly predictable.
 ## Testing
 
 ```bash
-cargo test -p tpt-video-vault
+cargo test -p tpt-media-vault
 ```
 
 76 tests in total, counting the `#[ignore]`d measurement harnesses
-(`cargo test -p tpt-video-vault -- --list`). The breakdown below predates
+(`cargo test -p tpt-media-vault -- --list`). The breakdown below predates
 `tests/edge_cases.rs`, which adds six hostile-input tests: wrong geometry or
 format, short pixel buffers, zero-length and truncated packets, invalid configs,
 extreme pixel content, and overflowing geometry.
@@ -212,8 +212,8 @@ in `docs/performance.md`.
 - The closed loop has no drift when encoder and decoder run the same build on
   the same target; the transform is `f32` and the workspace makes no
   cross-target bit-exactness claim (todo.md §39).
-- Playable in the `tpt-web` browser player (with Mote, since 2026-10-05)
-  and driven by `tpt-cli`: `--codec vault` works for `encode`, `decode`,
+- Playable in the `tpt-media-web` browser player (with Mote, since 2026-10-05)
+  and driven by `tpt-media-cli`: `--codec vault` works for `encode`, `decode`,
   `transcode` and `benchmark` through the y4m bridge, it is in the probe
   capability table, and `tpt video-corpus --codec vault` measures it over
   the §36 corpus. The cross-codec table is in `todo.md` §33 — measured on

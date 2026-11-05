@@ -21,7 +21,7 @@ The bitstream reader and writer use 64-bit accumulators for two reasons:
    than slicing the buffer byte-by-byte.
 
 The workspace builds for a 32-bit bare-metal target in CI
-(`thumbv7em-none-eabi`, via `tpt-audio-reed`), but performance
+(`thumbv7em-none-eabi`, via `tpt-media-reed`), but performance
 *measurement* is 64-bit only; the API itself is platform-agnostic.
 
 ## 3. Why no `f64` timestamps?

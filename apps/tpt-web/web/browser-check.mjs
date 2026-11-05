@@ -1,4 +1,4 @@
-// Real-browser check for tpt-web (todo.md section 45).
+// Real-browser check for tpt-media-web (todo.md section 45).
 //
 //   node apps/tpt-web/web/build.mjs && node apps/tpt-web/web/browser-check.mjs
 //
@@ -52,8 +52,8 @@ if (!browser) {
   process.exit(1);
 }
 
-if (!(await readable(join(here, "tpt_web.wasm")))) {
-  console.error("tpt_web.wasm is missing - run `node apps/tpt-web/web/build.mjs` first.");
+if (!(await readable(join(here, "tpt_media_web.wasm")))) {
+  console.error("tpt_media_web.wasm is missing - run `node apps/tpt-web/web/build.mjs` first.");
   process.exit(1);
 }
 

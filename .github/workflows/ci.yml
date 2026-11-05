@@ -94,12 +94,12 @@ jobs:
       # claim-then-verify pass caught (§33).
       - name: cargo build no_std codecs
         run: |
-          cargo build -p tpt-audio-reed --target thumbv7em-none-eabi --no-default-features --locked
-          cargo build -p tpt-video-vault --target thumbv7em-none-eabi --no-default-features --locked
-          cargo build -p tpt-video-mote --target thumbv7em-none-eabi --no-default-features --locked
+          cargo build -p tpt-media-reed --target thumbv7em-none-eabi --no-default-features --locked
+          cargo build -p tpt-media-vault --target thumbv7em-none-eabi --no-default-features --locked
+          cargo build -p tpt-media-mote --target thumbv7em-none-eabi --no-default-features --locked
 
   wasm:
-    name: wasm32 build (foundation crates + tpt-web)
+    name: wasm32 build (foundation crates + tpt-media-web)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -119,9 +119,9 @@ jobs:
       # glue; it is not a browser, so this step alone covers neither audible
       # output nor canvas drawing. The step after it does, to the extent a
       # runner without a sound card allows.
-      - name: build tpt-web for wasm32
+      - name: build tpt-media-web for wasm32
         run: node apps/tpt-web/web/build.mjs
-      - name: tpt-web wasm smoke tests (Node)
+      - name: tpt-media-web wasm smoke tests (Node)
         run: node apps/tpt-web/web/check.mjs && node apps/tpt-web/web/mock-browser.mjs
       # todo.md §45: the real browser APIs, on the runner's preinstalled
       # Chrome. This is not a claim that anyone heard the audio - a CI runner
@@ -130,7 +130,7 @@ jobs:
       # it can: the page and the wasm load in a real engine, the canvas is
       # real, and nothing regresses to FAIL. Locally, on a machine with a
       # sound card, all 29 checks run (web/browser-check.mjs).
-      - name: tpt-web real-browser check (headless Chrome)
+      - name: tpt-media-web real-browser check (headless Chrome)
         run: node apps/tpt-web/web/browser-check.mjs
 
   fuzz:

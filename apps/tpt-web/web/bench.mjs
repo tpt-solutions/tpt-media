@@ -1,6 +1,6 @@
 // WebAssembly decode-throughput benchmark, run under Node's V8.
 //
-//   cargo run -p tpt-web --example make_demo -- --bench-dir bench-inputs
+//   cargo run -p tpt-media-web --example make_demo -- --bench-dir bench-inputs
 //   node apps/tpt-web/web/build.mjs
 //   node apps/tpt-web/web/bench.mjs bench-inputs        # a directory of .tpt files
 //   node apps/tpt-web/web/bench.mjs demo.tpt            # or a single file
@@ -23,7 +23,7 @@ const RUNS = 15;
 const SLICE = 16 * 1024;
 
 const here = dirname(fileURLToPath(import.meta.url));
-const mod = await TptModule.load(await readFile(join(here, "tpt_web.wasm")));
+const mod = await TptModule.load(await readFile(join(here, "tpt_media_web.wasm")));
 
 function decodeAll(file) {
   const d = mod.open();
@@ -56,7 +56,7 @@ const files = (await stat(arg)).isDirectory()
   : [arg];
 
 console.log(
-  `tpt-web wasm decode throughput under Node ${process.version} / V8 ${process.versions.v8} ` +
+  `tpt-media-web wasm decode throughput under Node ${process.version} / V8 ${process.versions.v8} ` +
     `(${RUNS} runs each after ${WARMUP} warm-up, median; push slices of ${SLICE / 1024} KiB)\n`
 );
 console.log("| file | size | median | min | realtime factor | input MB/s | video fps |");

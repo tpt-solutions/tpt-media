@@ -1,4 +1,4 @@
-# tpt-audio-cinder
+# tpt-media-cinder
 
 Cinder: TPT native real-time low-latency audio codec (MDCT + scalar quantisation + PLC).
 
@@ -49,7 +49,7 @@ conversation rather than for archival quality. Part of the
 ## Usage
 
 ```rust
-use tpt_audio_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
+use tpt_media_cinder::{CinderDecoder, CinderEncoder, CinderEncoderConfig};
 use tpt_media_codec::{Decoder, Encoder};
 use tpt_media_core::{CodecConfig, Packet};
 
@@ -105,7 +105,7 @@ Each version is listed with its reasons in
 ## Benchmarks & profiling
 
 ```bash
-cargo bench -p tpt-audio-cinder
+cargo bench -p tpt-media-cinder
 ```
 
 `benches/codec_bench.rs` — encode of 64 × 512-sample blocks, and decode of
@@ -123,14 +123,14 @@ Encode and decode together are about 15 µs per hop against a 5.3 ms frame
 budget at 256/48 kHz, which leaves roughly three orders of magnitude of
 headroom. Canonical tables: [`docs/performance.md`](../../docs/performance.md).
 
-Profiling recipe: release build, `cargo bench -p tpt-audio-cinder`, then
+Profiling recipe: release build, `cargo bench -p tpt-media-cinder`, then
 `cargo flamegraph --bench codec_bench -- -c <case>` on Linux,
 `Instruments` on macOS, `VTune` on Windows.
 
 ## Testing
 
 ```bash
-cargo test -p tpt-audio-cinder
+cargo test -p tpt-media-cinder
 ```
 
 - Round-trip encode/decode, silence stays silent, determinism at the
@@ -152,7 +152,7 @@ cargo test -p tpt-audio-cinder
 
 - Quality is set by the band step (`--band-step`, `--quality`, or the
   `--bitrate` and `--target-snr` searches). Use
-  [`tpt-audio-aura`](../aura) for archival fidelity.
+  [`tpt-media-aura`](../aura) for archival fidelity.
 - Mono only, 44.1/48 kHz, `S16` — anything else is refused with
   `CodecError::Unsupported`, not silently converted.
 - Wire version 6 is breaking. Version 1 to 5 packets are rejected, so files

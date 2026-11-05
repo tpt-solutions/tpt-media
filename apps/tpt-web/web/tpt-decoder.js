@@ -1,4 +1,4 @@
-// tpt-decoder.js: the thin JavaScript half of the tpt-web C ABI.
+// tpt-decoder.js: the thin JavaScript half of the tpt-media-web C ABI.
 //
 // This file is the hand-written counterpart of apps/tpt-web/src/abi.rs (there
 // is no wasm-bindgen). It has no DOM dependency, so it runs unchanged in a
@@ -93,7 +93,7 @@ export class TptModule {
     const version = instance.exports.tpt_web_abi_version();
     if (version !== ABI_VERSION) {
       throw new Error(
-        `tpt-web ABI mismatch: module is v${version}, tpt-decoder.js expects v${ABI_VERSION}`
+        `tpt-media-web ABI mismatch: module is v${version}, tpt-decoder.js expects v${ABI_VERSION}`
       );
     }
     return new TptModule(instance);

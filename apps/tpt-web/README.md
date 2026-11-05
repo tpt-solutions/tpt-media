@@ -1,4 +1,4 @@
-# tpt-web
+# tpt-media-web
 
 Browser player core for `.tpt` media: a WASM-compatible streaming decoder with hard memory limits and a plain C-ABI export surface.
 
@@ -17,7 +17,7 @@ plays them with WebAudio and a canvas. Part of the
 | | |
 |---|---|
 | Role | WASM browser player (todo.md §45) |
-| Artifact | `cdylib` → `tpt_web.wasm` (~368 KiB release) plus an `rlib` for native tests |
+| Artifact | `cdylib` → `tpt_media_web.wasm` (~368 KiB release) plus an `rlib` for native tests |
 | Codecs | Cinder, Aura, Reed (audio); Thrum, Vault, Mote (video) — all six in `DecoderTable::native()`; see [Adding a codec](#adding-a-codec) |
 | Bindings | Plain `extern "C"` over integer handles + hand-written JS. **No `wasm-bindgen`** ([why](../../docs/web-design.md#3-why-a-plain-c-abi-and-not-wasm-bindgen)) |
 | Dependencies | Only workspace crates; nothing external |
@@ -30,7 +30,7 @@ plays them with WebAudio and a canvas. Part of the
 
 ```bash
 rustup target add wasm32-unknown-unknown        # once
-node apps/tpt-web/web/build.mjs                 # builds web/tpt_web.wasm (512 MiB memory cap)
+node apps/tpt-web/web/build.mjs                 # builds web/tpt_media_web.wasm (512 MiB memory cap)
 cd apps/tpt-web/web && python -m http.server    # any static server works
 # open http://localhost:8000/ and press "Play demo.tpt"
 ```
@@ -38,7 +38,7 @@ cd apps/tpt-web/web && python -m http.server    # any static server works
 `web/` is a static folder: `index.html`, `tpt-web.js` (playback),
 `tpt-decoder.js` (ABI glue), `demo.tpt` (4 s of synthetic Cinder audio and
 160x96 Thrum video, regenerable with
-`cargo run -p tpt-web --example make_demo`). No bundler, no npm. The page can
+`cargo run -p tpt-media-web --example make_demo`). No bundler, no npm. The page can
 also play a local file (file picker) or stream a URL.
 
 > **Browser-tested, with one stated limit.** The decoder and JS glue are
@@ -58,7 +58,7 @@ also play a local file (file picker) or stream a URL.
 ```js
 import { TptModule, Status } from "./tpt-decoder.js";
 
-const mod = await TptModule.load("./tpt_web.wasm");
+const mod = await TptModule.load("./tpt_media_web.wasm");
 const dec = mod.open({ maxVideoQueueFrames: 8 });     // every limit optional, clamped by the module
 
 for await (const chunk of fetchChunks("song.tpt")) {  // Uint8Arrays from fetch().body
@@ -92,7 +92,7 @@ The player is plain Rust; the wasm layer is a veneer. Everything below runs
 natively and is what the unit tests cover.
 
 ```rust
-use tpt_web::{Player, Status, WebError, WebLimits};
+use tpt_media_web::{Player, Status, WebError, WebLimits};
 
 let mut player = Player::new(WebLimits::default());
 for chunk in file.chunks(16 * 1024) {
@@ -156,14 +156,14 @@ else changes; see [`docs/web-design.md`](../../docs/web-design.md) section 8.
 > `DecoderTable::native()` and no ABI function accepts a table (a
 > `DecoderBuilder` is a Rust `fn` pointer, which cannot cross the wasm
 > boundary). So from a browser the only route is: add the codec as a dependency
-> of `tpt-web` and put one line in `DecoderTable::native()`. `register` is for
+> of `tpt-media-web` and put one line in `DecoderTable::native()`. `register` is for
 > Rust callers embedding the `rlib`.
 
 ## Testing
 
 ```bash
-cargo test -p tpt-web                                    # 49 tests: parser, player, ABI, conversions, limits, fuzz sweeps
-cargo clippy -p tpt-web --all-targets -- -D warnings
+cargo test -p tpt-media-web                                    # 49 tests: parser, player, ABI, conversions, limits, fuzz sweeps
+cargo clippy -p tpt-media-web --all-targets -- -D warnings
 node apps/tpt-web/web/build.mjs                          # wasm32 build
 node apps/tpt-web/web/check.mjs                          # built wasm + JS glue under Node (11 checks)
 node apps/tpt-web/web/mock-browser.mjs                   # tpt-web.js logic vs fake WebAudio/canvas
@@ -185,8 +185,8 @@ ceiling.
 ## Benchmarks
 
 ```bash
-cargo bench -p tpt-web                                   # native table
-cargo run -p tpt-web --example make_demo -- --bench-dir bench-inputs
+cargo bench -p tpt-media-web                                   # native table
+cargo run -p tpt-media-web --example make_demo -- --bench-dir bench-inputs
 node apps/tpt-web/web/bench.mjs bench-inputs             # the same files as wasm, under Node/V8
 ```
 

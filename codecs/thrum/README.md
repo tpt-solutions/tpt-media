@@ -1,4 +1,4 @@
-# tpt-video-thrum
+# tpt-media-thrum
 
 Thrum: TPT low-latency video communication codec (I/P frames, intra refresh, 8x8 DCT).
 
@@ -67,7 +67,7 @@ A **macroblock** is 16×16 luma (four 8×8 blocks) plus, for 4:2:0, one 8×8 U
 ## Usage
 
 ```rust
-use tpt_video_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
+use tpt_media_thrum::{ThrumConfig, ThrumDecoder, ThrumEncoder};
 use tpt_media_codec::{Decoder, Encoder};
 use tpt_media_core::CodecConfig;
 
@@ -106,7 +106,7 @@ provably cannot overflow.
 ## Benchmarks & profiling
 
 ```bash
-cargo bench -p tpt-video-thrum
+cargo bench -p tpt-media-thrum
 ```
 
 `benches/codec_bench.rs` — I/P encode + decode of 8-frame clips at 176×144
@@ -138,12 +138,12 @@ considerably smaller, because skip and intra refresh both key on small
 predicted residual. Tables:
 [`docs/performance.md`](../../docs/performance.md).
 
-Profiling recipe: `cargo bench -p tpt-video-thrum`, then `cargo flamegraph
+Profiling recipe: `cargo bench -p tpt-media-thrum`, then `cargo flamegraph
 
 ## Testing
 
 ```bash
-cargo test -p tpt-video-thrum
+cargo test -p tpt-media-thrum
 ```
 
 45 unit tests (transform/quantiser/entropy round trips, intra-mode
@@ -175,7 +175,7 @@ does not allocate it at all.
 - Reachable from the CLI through the y4m bridge: `tpt encode --codec thrum
   in.y4m out.tpt`, `tpt decode`, and `tpt benchmark` drive it end to end, and
   `tpt video-corpus` measures it over the §36 corpus. The bridge is
-  progressive-only, `C420*`/`Cmono`-only, and lives in `tpt-cli`'s `y4m`
+  progressive-only, `C420*`/`Cmono`-only, and lives in `tpt-media-cli`'s `y4m`
   module rather than in `tpt-media-io`.
 
 ## License

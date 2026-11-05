@@ -39,12 +39,12 @@ When a limit is exceeded, the decoder returns
 (`max_metadata_bytes` against a raw `TMTA` body, for example).
 `TptDemuxer` accepts limits via `with_limits`/`new_streaming_with_limits`.
 
-## Browser Player Memory Limits (§45, `tpt-web`)
+## Browser Player Memory Limits (§45, `tpt-media-web`)
 
 `apps/tpt-web` runs the decoders inside WebAssembly, where the memory
 model changes the threat: linear memory only grows, and a failed growth
 aborts the whole module, so a hostile file must be refused *before* it
-can ask for memory rather than after. `tpt_web::WebLimits` wraps
+can ask for memory rather than after. `tpt_media_web::WebLimits` wraps
 `ResourceLimits` with the player-level bounds; the design and full table
 are in [`web-design.md`](web-design.md) section 7. In summary:
 
@@ -131,7 +131,7 @@ that CI already runs:
   read/peek/skip, Huffman, Rice, and the range decoder over arbitrary
   and corrupted bytes. Found and fixed a divide-by-zero on a
   post-`EndOfInput` `RangeDecoder` (2026-09-11).
-- `tpt-container` — `corruption_never_panics_and_truncation_never_panics`
+- `tpt-media-format` — `corruption_never_panics_and_truncation_never_panics`
   (every truncation point + 512 seeded bit-flips of a full fixture).
 - `tpt-audio-{aura,cinder}` — arbitrary packets + truncation + bit-flip
   sweeps of each decoder. Found and fixed Cinder's out-of-bounds

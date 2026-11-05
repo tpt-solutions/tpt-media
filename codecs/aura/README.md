@@ -1,4 +1,4 @@
-# tpt-audio-aura
+# tpt-media-aura
 
 Aura: TPT high-fidelity / archival audio codec (lossless LPC + lossy MDCT).
 
@@ -46,7 +46,7 @@ information beyond what is in the packet.
 ## Usage
 
 ```rust
-use tpt_audio_aura::{AuraConfig, AuraDecoder, AuraEncoder, AuraMode};
+use tpt_media_aura::{AuraConfig, AuraDecoder, AuraEncoder, AuraMode};
 use tpt_media_codec::{Decoder, Encoder};
 use tpt_media_core::CodecConfig;
 
@@ -64,7 +64,7 @@ gate which encode paths are *compiled*:
 
 ```toml
 [dependencies]
-tpt-audio-aura = { version = "0.2", default-features = false, features = ["std", "lossless"] }
+tpt-media-aura = { version = "0.2", default-features = false, features = ["std", "lossless"] }
 ```
 
 Neither mode is a silently-degraded version of the other (CONTRIBUTING §10).
@@ -96,7 +96,7 @@ changed, not just the API:
 ## Benchmarks & profiling
 
 ```bash
-cargo bench -p tpt-audio-aura
+cargo bench -p tpt-media-aura
 ```
 
 `benches/codec_bench.rs` — lossless encode/decode of 32 × 1024-sample blocks
@@ -112,13 +112,13 @@ residual, versus band-quantised MDCT coefficients. Aura's profile is
 archival, not real-time. Tables:
 [`docs/performance.md`](../../docs/performance.md).
 
-Profiling recipe: `cargo bench -p tpt-audio-aura`, then `cargo flamegraph
+Profiling recipe: `cargo bench -p tpt-media-aura`, then `cargo flamegraph
 --bench codec_bench` (Linux) / `Instruments` (macOS) / `VTune` (Windows).
 
 ## Testing
 
 ```bash
-cargo test -p tpt-audio-aura
+cargo test -p tpt-media-aura
 ```
 
 - Bit-exact lossless round trips over the §36 corpus.

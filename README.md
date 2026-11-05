@@ -10,7 +10,7 @@ The native TPT media framework and codec ecosystem.
 timestamps, packet/frame abstractions, codec interfaces, the `.tpt` container,
 bitstream and entropy primitives, media pipelines, native TPT codecs, a probing
 library, the `tpt` command-line tool, and a stable C ABI (`tpt-media-sys`,
-§46). A WASM browser player (`tpt-web`, §45) decodes `.tpt` audio and video in
+§46). A WASM browser player (`tpt-media-web`, §45) decodes `.tpt` audio and video in
 the browser.
 
 `tpt-media` is **not** a general-purpose DSP library. All transforms,
@@ -45,17 +45,17 @@ Every crate listed below is a workspace member.
 | [`tpt-media-pipeline`](crates/tpt-media-pipeline)   | Node-based pipeline (Source → Demux → Decode → Sink)    |
 | [`tpt-media-io`](crates/tpt-media-io)         | PCM/WAV/raw I/O integration                             |
 | [`tpt-media-probe`](crates/tpt-media-probe)      | Container + codec introspection                         |
-| [`tpt-container`](containers/tpt-container)        | The native `.tpt` container format                      |
+| [`tpt-media-format`](containers/tpt-container)        | The native `.tpt` container format                      |
 | [`tpt-media-representation`](crates/tpt-media-representation) | Swappable signal-representation trait contracts (research) |
 | [`tpt-media-research`](crates/tpt-media-research)   | Representation research harness (`docs/representation-research.md`) |
-| [`tpt-audio-cinder`](codecs/cinder)      | Real-time low-latency audio codec                       |
-| [`tpt-audio-aura`](codecs/aura)       | High-fidelity / archival audio (lossless + lossy)       |
-| [`tpt-audio-reed`](codecs/reed)        | Extremely low-bandwidth speech codec (`no_std` LPC vocoder) |
-| [`tpt-video-thrum`](codecs/thrum)   | Real-time video communication (I/P, intra refresh, 8x8 DCT)  |
-| [`tpt-cli`](apps/tpt-cli)              | Command-line encoder/decoder/probe                      |
-| [`tpt-video-vault`](codecs/vault)     | High-compression video (64x64 superblocks, recursive partitioning, half-pel, multi-reference, RDO) |
-| [`tpt-video-mote`](codecs/mote)       | Extreme-edge video (8x8 patch dictionary VQ, 12-bit index, temporal skip) |
-| [`tpt-web`](apps/tpt-web)              | WASM browser player (streaming decode, WebAudio + canvas demo) |
+| [`tpt-media-cinder`](codecs/cinder)      | Real-time low-latency audio codec                       |
+| [`tpt-media-aura`](codecs/aura)       | High-fidelity / archival audio (lossless + lossy)       |
+| [`tpt-media-reed`](codecs/reed)        | Extremely low-bandwidth speech codec (`no_std` LPC vocoder) |
+| [`tpt-media-thrum`](codecs/thrum)   | Real-time video communication (I/P, intra refresh, 8x8 DCT)  |
+| [`tpt-media-cli`](apps/tpt-cli)              | Command-line encoder/decoder/probe                      |
+| [`tpt-media-vault`](codecs/vault)     | High-compression video (64x64 superblocks, recursive partitioning, half-pel, multi-reference, RDO) |
+| [`tpt-media-mote`](codecs/mote)       | Extreme-edge video (8x8 patch dictionary VQ, 12-bit index, temporal skip) |
+| [`tpt-media-web`](apps/tpt-web)              | WASM browser player (streaming decode, WebAudio + canvas demo) |
 | [`tpt-media-sys`](ffi/tpt-media-sys)       | Stable C ABI (§46: opaque handles, error codes, C header)  |
 
 Each crate link goes to its own `README.md`, which carries the usage examples,
@@ -94,11 +94,11 @@ cargo build --workspace --locked
 cargo test  --workspace --locked
 ```
 
-The `tpt-audio-reed` crate is `no_std`-compatible and can additionally be built
+The `tpt-media-reed` crate is `no_std`-compatible and can additionally be built
 for bare-metal targets:
 
 ```bash
-cargo build -p tpt-audio-reed --target thumbv7em-none-eabi --no-default-features
+cargo build -p tpt-media-reed --target thumbv7em-none-eabi --no-default-features
 ```
 
 The `.tpt` decoders also run in the browser. See

@@ -1,4 +1,4 @@
-# tpt-cli
+# tpt-media-cli
 
 TPT media command-line interface (probe, encode, decode, transcode, inspect, benchmark).
 
@@ -47,7 +47,7 @@ tpt --help
 cargo install --path apps/tpt-cli
 
 # or straight from git
-cargo install --git https://github.com/TPT-Solutions/tpt-media tpt-cli
+cargo install --git https://github.com/TPT-Solutions/tpt-media tpt-media-cli
 ```
 
 Prebuilt binaries for Linux, macOS and Windows are on the
@@ -59,14 +59,14 @@ release ships a `SHA256SUMS` file; check a download with
 ## Build and run
 
 ```bash
-cargo build -p tpt-cli
-cargo run -p tpt-cli -- list-codecs
+cargo build -p tpt-media-cli
+cargo run -p tpt-media-cli -- list-codecs
 
-cargo run -p tpt-cli -- encode --codec aura --quality 80 in.wav out.tpt
-cargo run -p tpt-cli -- probe --json out.tpt
-cargo run -p tpt-cli -- decode --codec aura out.tpt back.wav
-cargo run -p tpt-cli -- transcode --codec cinder out.tpt small.tpt
-cargo run -p tpt-cli -- benchmark --codec aura --json in.wav
+cargo run -p tpt-media-cli -- encode --codec aura --quality 80 in.wav out.tpt
+cargo run -p tpt-media-cli -- probe --json out.tpt
+cargo run -p tpt-media-cli -- decode --codec aura out.tpt back.wav
+cargo run -p tpt-media-cli -- transcode --codec cinder out.tpt small.tpt
+cargo run -p tpt-media-cli -- benchmark --codec aura --json in.wav
 ```
 
 ## Options
@@ -203,10 +203,10 @@ from an empty registry because a library cannot know what its caller linked in;
 ## Testing
 
 ```bash
-cargo test -p tpt-cli
+cargo test -p tpt-media-cli
 ```
 
-Every command executes through `tpt_cli::run(argv, &Ctx)`, where `Ctx` injects
+Every command executes through `tpt_media_cli::run(argv, &Ctx)`, where `Ctx` injects
 `read_file` / `read_stdin` / `write_file` closures and binary stdout is
 returned as `Outcome.binary_stdout`. Tests supply in-memory fakes and assert
 exit code plus captured streams — including full Aura encode→decode round
@@ -221,7 +221,7 @@ allocator behind `tests/memory_budget.rs`).
 
 ## Known limitations
 
-- Video I/O goes through the `tpt-cli` y4m bridge, not `tpt-media-io`:
+- Video I/O goes through the `tpt-media-cli` y4m bridge, not `tpt-media-io`:
   progressive only, `C420*`/`Cmono` only, and aspect ratio is parsed and
   discarded rather than round-tripped (the `.tpt` track model has no aspect
   field).

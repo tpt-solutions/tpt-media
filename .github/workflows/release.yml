@@ -27,7 +27,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --locked -p tpt-cli --target ${{ matrix.target }}
+        run: cargo build --release --locked -p tpt-media-cli --target ${{ matrix.target }}
       - name: Package
         run: |
           mkdir -p out

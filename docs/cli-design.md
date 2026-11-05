@@ -1,6 +1,6 @@
 # CLI Design (§43)
 
-`tpt-cli` is the TPT media command-line interface: a single `tpt` binary
+`tpt-media-cli` is the TPT media command-line interface: a single `tpt` binary
 that probes, encodes, decodes, transcodes, inspects and benchmarks media.
 The §43 requirements (todo.md lines 1333–1356) map to code as follows.
 
@@ -93,7 +93,7 @@ code path produces it.
   measured encode+decode passes, and reports median/min wall time,
   real-time factors, payload bytes / bits-per-sample / bitrate, and the
   §37 quality metrics (SNR + log-spectral distance from
-  `tpt_cli::quality`) of the round trip. `--json` emits the same data
+  `tpt_media_cli::quality`) of the round trip. `--json` emits the same data
   structurally; a bit-exact round trip reports `"bit_exact": true`
   instead of an unrepresentable infinite `snr_db`.
 
@@ -107,7 +107,7 @@ code path produces it.
   comes out, so a lossless round trip is a byte-identical file — and
   deliberately narrow: progressive only (`Ip`), `C420*`/`Cmono` only, and
   aspect ratio is parsed then discarded because the `.tpt` track model has
-  no aspect field. It lives in `tpt-cli`, not in `tpt-media-io`.
+  no aspect field. It lives in `tpt-media-cli`, not in `tpt-media-io`.
 - `video-corpus` is live (2026-09-28; generalised to all three video codecs
   2026-10-01): measures `thrum`, `vault` or `mote` (`--codec`, default
   `thrum`) over the §36 synthetic video corpus — PSNR, SSIM, bitrate,
@@ -119,7 +119,7 @@ code path produces it.
 
 ## Testability
 
-All commands execute through `tpt_cli::run(argv_without_prog, &Ctx)` where
+All commands execute through `tpt_media_cli::run(argv_without_prog, &Ctx)` where
 `Ctx` injects `read_file`, `read_stdin` and `write_file` closures. Binary
 stdout (an output path of `-` or omitted) is returned as
 `Outcome.binary_stdout` for tests to inspect. Tests in

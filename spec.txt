@@ -57,34 +57,34 @@ dct.rs: 1D and 2D Type-II DCT and inverse DCT (up to 8x8).
 mdct.rs: Modified DCT with overlapping windows (256, 1024, 2048, 4096 points).
 lpc.rs: Autocorrelation and Levinson-Durbin recursion for Linear Predictive Coding.
 5. The Audio Codecs
-5.1 tpt-audio-cinder (Real-Time)
+5.1 tpt-media-cinder (Real-Time)
 Target: WebRTC, Gaming, Live Streaming.
 Algorithm: Pure Transform Coding.
 Window Size: 128 or 256 samples (approx 2.5ms to 5ms at 48kHz) for ultra-low algorithmic latency.
 Math: MDCT with a sine window.
 Packet Loss Concealment (PLC): If a packet is lost, the decoder extracts the pitch period of the previous frame and repeats/stretches the waveform to fill the gap.
 Features: No LPC, no speech/music detection. Treats all audio as raw waveform.
-5.2 tpt-audio-aura (High-Fidelity / Archival)
+5.2 tpt-media-aura (High-Fidelity / Archival)
 Target: Music streaming, Archival, Audiophile.
 Mode A (Lossless): High-order LPC (up to order 32) to predict the signal. The residual is compressed using Rice Coding (public domain). Bit-perfect reconstruction.
 Mode B (Lossy): Large MDCT (2048 or 4096 points).
 Psychoacoustics: Calculates Bark-scale critical bands. Applies simultaneous frequency masking and temporal masking. Quantization noise is shaped to fall below the masking threshold.
 Precision: Internal math uses f64 to prevent rounding artifacts in high frequencies.
-5.3 tpt-audio-reed (Edge / IoT)
+5.3 tpt-media-reed (Edge / IoT)
 Target: Smart devices, Walkie-talkies, $2 microcontrollers.
 Algorithm: Code-Excited Linear Prediction (CELP) / Pure LPC.
 Constraints: Hardcoded to 8kHz or 16kHz sample rate. Mono only.
 Vector Quantization (VQ): Instead of sending raw LPC residuals, the encoder matches the residual to a pre-generated, public-domain codebook (dictionary) of 1024 speech shapes. Sends only a 10-bit index.
 Rust Implementation: #![no_std]. Uses fixed-point i16/i32 math. No floating-point unit (FPU) required.
 6. The Video Codecs
-6.1 tpt-video-thrum (Real-Time)
+6.1 tpt-media-thrum (Real-Time)
 Target: Video conferencing, Cloud gaming.
 Frame Types: I-frames and P-frames ONLY. No B-frames.
 Intra-Refresh: Instead of massive keyframes, 5% of macroblocks are forced to Intra-mode every frame to recover from packet loss without bandwidth spikes.
 Motion Estimation: Full-pixel block matching using Sum of Absolute Differences (SAD).
 Transform: 4x4 and 8x8 DCT.
 Filtering: Simple 3x3 deblocking filter on block edges (no complex boundary strength calculations).
-6.2 tpt-video-vault (Archival)
+6.2 tpt-media-vault (Archival)
 Target: VOD, Digital Archival, Master files.
 Block Structure: Superblocks up to 64x64, recursively partitioned down to 8x8.
 Motion Estimation: Full-pixel and half-pixel (using a simple, unpatented 2-tap bilinear filter, avoiding 6/8-tap FIR patents).
@@ -97,7 +97,7 @@ D
 R
 J=D+λR) to find the absolute minimum file size.
 Reference Frames: Up to 16 previous frames.
-6.3 tpt-video-mote (Edge / IoT)
+6.3 tpt-media-mote (Edge / IoT)
 Target: Security cameras, Drones, Low-bandwidth telemetry.
 Algorithm: Dictionary Coding / Vector Quantization.
 How it works: The encoder and decoder share a pre-trained dictionary of 4096 common 8x8 pixel patches (e.g., grass, sky, brick walls).
@@ -105,13 +105,13 @@ Compression: The encoder splits the frame into 8x8 blocks, finds the closest mat
 Resolution: Hardcoded to max 480p. Upscaled on the client via Lanczos filtering.
 Bitrate: Achieves < 50kbps for video.
 7. Phase 1 & 2 Distribution & Tooling
-7.1 tpt-cli (The Command Line Interface)
+7.1 tpt-media-cli (The Command Line Interface)
 Located in apps/tpt-cli. Built using the clap crate.
-tpt-cli encode -i input.wav -o output.tpt -c aura --lossless
-tpt-cli decode -i input.tpt -o output.wav
-tpt-cli probe -i input.tpt (Prints container and track metadata).
+tpt-media-cli encode -i input.wav -o output.tpt -c aura --lossless
+tpt-media-cli decode -i input.tpt -o output.wav
+tpt-media-cli probe -i input.tpt (Prints container and track metadata).
 Distribution: Compiled via GitHub Actions for Windows, macOS, and Linux, and attached to GitHub Releases.
-7.2 tpt-web (The WASM Viral Player)
+7.2 tpt-media-web (The WASM Viral Player)
 Located in apps/tpt-web.
 Uses wasm-bindgen to expose the decoders to JavaScript.
 A simple HTML5/Canvas/WebAudio frontend.

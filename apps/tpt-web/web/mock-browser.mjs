@@ -55,7 +55,7 @@ globalThis.cancelAnimationFrame = () => { rafCb = null; };
 const rafPump = setInterval(() => { const cb = rafCb; rafCb = null; cb?.(); }, 4);
 
 const { TptPlayer } = await import("./tpt-web.js");
-const wasm = new Uint8Array(await readFile(join(here, "tpt_web.wasm")));
+const wasm = new Uint8Array(await readFile(join(here, "tpt_media_web.wasm")));
 const demo = new Uint8Array(await readFile(join(here, "demo.tpt")));
 
 const canvas = {

@@ -449,9 +449,9 @@ Known sharp edges, stated plainly:
   dictionary size, not by a target.
 - **The encoder is not real-time** (`real_time_encoder` is false): a key
   frame is one accelerated 4096-entry search per patch.
-- **Wired into the `tpt-web` player** (2026-10-05, with Vault: both took
+- **Wired into the `tpt-media-web` player** (2026-10-05, with Vault: both took
   the §8 route — dependency + `DecoderTable::native()` line + a builder
-  reconstructing the decoder from the track). It *is* driven by `tpt-cli`:
+  reconstructing the decoder from the track). It *is* driven by `tpt-media-cli`:
   `--codec mote` works for `encode`, `decode`, `transcode` and `benchmark`
   through the y4m bridge, it is in the probe capability table, and
   `tpt video-corpus --codec mote` measures it over the §36 corpus. The
@@ -647,8 +647,8 @@ Known sharp edges, stated plainly:
 - **Closed-loop exactness assumes the same build and target on both sides**;
   the transform is `f32` and the workspace makes no cross-target bit-exactness
   claim (todo.md §39).
-- **In the `tpt-web` player since 2026-10-05** (with Mote, via
-  `DecoderTable::native()`). It *is* also driven by `tpt-cli`:
+- **In the `tpt-media-web` player since 2026-10-05** (with Mote, via
+  `DecoderTable::native()`). It *is* also driven by `tpt-media-cli`:
   `--codec vault` works for `encode`, `decode`, `transcode` and `benchmark`
   through the y4m bridge, it is in the probe capability table, and
   `tpt video-corpus --codec vault` measures it over the §36 corpus. Its
@@ -708,7 +708,7 @@ emit in display order. That means a bounded reorder buffer (at most
 extends), an explicit end-of-stream flush that releases held frames
 (the decoder's existing `drain`), and one decision for consumers:
 `decode()` returns *display-order* frames with gaps the caller waits
-through. `tpt-web`'s push player feeds packets one at a time and
+through. `tpt-media-web`'s push player feeds packets one at a time and
 presents what comes out, so it inherits the reorder delay unchanged —
 but its "presented N pictures" counters and the demo timing shift by
 the B-depth, and `real_time_decoder` gains a caveat (reorder latency
@@ -717,7 +717,7 @@ the B-depth, and `real_time_decoder` gains a caveat (reorder latency
 **Tests to add before coding.** Display-order round trip through an
 I/P/B/P/B sequence; a B-frame whose forward and backward references
 disagree (the averaging path); `max_packet_bits` bound at `b_frames`
-= 2; corruption sweeps over the new header fields; and the tpt-web
+= 2; corruption sweeps over the new header fields; and the tpt-media-web
 reorder-buffer drain at end of stream.
 
 ### Vault B-frames v0.3 stage 1 — per-frame weighted prediction (shipped 2026-10-07)
@@ -870,12 +870,12 @@ The current versions, and where each layout is specified:
 
 | Codec | Crate | `VERSION` | Layout specified | Integrity |
 | ----- | ----- | --------- | ---------------- | --------- |
-| Cinder | `tpt-audio-cinder` | 2 | above, "Cinder v2 — wire format" and "Cinder v2 — overlap-add redesign" | none in v2 (documented limitation) |
-| Aura | `tpt-audio-aura` | 1 | above, "Aura v1 — wire format" | CRC-32 trailer |
-| Reed | `tpt-audio-reed` | 1 | above, "Reed v0.1 — implemented design" | CRC-32 trailer |
-| Thrum | `tpt-video-thrum` | 1 | above, "Thrum v0.1 — implemented design" | CRC-32 trailer |
-| Vault | `tpt-video-vault` | 2 | above, "Vault v0.1 — implemented design" (v2: 2-bit frame type + 16-bit poc, the B-frames groundwork) | CRC-32 trailer |
-| Mote | `tpt-video-mote` | 1 | above, "Mote v0.1 — implemented design" (frame packets + provable bound) | CRC-32 trailer |
+| Cinder | `tpt-media-cinder` | 2 | above, "Cinder v2 — wire format" and "Cinder v2 — overlap-add redesign" | none in v2 (documented limitation) |
+| Aura | `tpt-media-aura` | 1 | above, "Aura v1 — wire format" | CRC-32 trailer |
+| Reed | `tpt-media-reed` | 1 | above, "Reed v0.1 — implemented design" | CRC-32 trailer |
+| Thrum | `tpt-media-thrum` | 1 | above, "Thrum v0.1 — implemented design" | CRC-32 trailer |
+| Vault | `tpt-media-vault` | 2 | above, "Vault v0.1 — implemented design" (v2: 2-bit frame type + 16-bit poc, the B-frames groundwork) | CRC-32 trailer |
+| Mote | `tpt-media-mote` | 1 | above, "Mote v0.1 — implemented design" (frame packets + provable bound) | CRC-32 trailer |
 
 A wire-format change bumps `VERSION`, fails fast against every older
 decoder, and must land with its layout table extended here and its

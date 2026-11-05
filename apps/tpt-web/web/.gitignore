@@ -1,2 +1,2 @@
 # Build output of `node build.mjs`.
-tpt_web.wasm
+tpt_media_web.wasm

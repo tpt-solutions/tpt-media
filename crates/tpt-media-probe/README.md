@@ -41,7 +41,7 @@ let report = probe_file("input.tpt")?;
 
 // Resolve codec capabilities against real implementations:
 let mut registry = Registry::new();
-registry.register_decoder(tpt_audio_cinder::CinderDynDecoder::default());
+registry.register_decoder(tpt_media_cinder::CinderDynDecoder::default());
 let report = probe_with_registry(&bytes, &registry);
 ```
 
@@ -75,7 +75,7 @@ not a guess.
 
 ## Design notes
 
-Dependency direction: probe → container, never the reverse. `tpt-container`
+Dependency direction: probe → container, never the reverse. `tpt-media-format`
 had an unused dependency on probe that was inverted in 2026-09.
 
 ## Testing

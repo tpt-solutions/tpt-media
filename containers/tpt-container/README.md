@@ -1,4 +1,4 @@
-# tpt-container
+# tpt-media-format
 
 The native `.tpt` container format: TLV chunks, header, TRAK, CLUS, seeking, streaming.
 
@@ -55,7 +55,7 @@ footer, written by `finalize`). Field-by-field:
 ## Usage
 
 ```rust
-use tpt_container::{TptMuxer, TptDemuxer};
+use tpt_media_format::{TptMuxer, TptDemuxer};
 use tpt_media_core::{Timebase, Packet, Timestamp};
 
 let tb = Timebase { num: 1, den: 48_000 };
@@ -74,7 +74,7 @@ while let Some(packet) = d.next_packet()? {
 One-shot helpers for the common case:
 
 ```rust
-use tpt_container::{build_tpt, parse_tpt};
+use tpt_media_format::{build_tpt, parse_tpt};
 
 let bytes  = build_tpt(tb, &[(0, b"AURA", &[])], &packets);
 let (header, tracks, packets) = parse_tpt(&bytes)?;
@@ -110,7 +110,7 @@ is follow-up work, not a done fact (CONTRIBUTING §10).
 ## Benchmarks & profiling
 
 ```bash
-cargo bench -p tpt-container
+cargo bench -p tpt-media-format
 ```
 
 `benches/container_bench.rs` — mux + demux of a 200-packet stream
@@ -118,13 +118,13 @@ cargo bench -p tpt-container
 22 µs (0.11 µs/packet). Tables:
 [`docs/performance.md`](../../docs/performance.md).
 
-Profiling recipe: `cargo bench -p tpt-container`, then `cargo flamegraph
+Profiling recipe: `cargo bench -p tpt-media-format`, then `cargo flamegraph
 --bench container_bench` (Linux) / `Instruments` (macOS) / `VTune` (Windows).
 
 ## Testing
 
 ```bash
-cargo test -p tpt-container
+cargo test -p tpt-media-format
 ```
 
 - `corruption_never_panics_and_truncation_never_panics` — deterministic

@@ -1,4 +1,4 @@
-# tpt-video-mote
+# tpt-media-mote
 
 Mote: TPT extreme edge/IoT video codec (8x8 patch dictionary VQ, 4096 entries, 12-bit index, temporal skip).
 
@@ -21,7 +21,7 @@ patches. The decoder is a table lookup and a copy. Part of the
 |---|---|
 | Role | Native extreme-edge video codec (todo.md §34) |
 | Codec ID | `MOTE` · bitstream `VERSION = 1` |
-| Status | Implemented; driven by the CLI's y4m bridge and playable in `tpt-web` |
+| Status | Implemented; driven by the CLI's y4m bridge and playable in `tpt-media-web` |
 | Version | `0.2.0`, lockstep with the workspace |
 | MSRV | 1.86 |
 | License | MIT OR Apache-2.0 |
@@ -76,7 +76,7 @@ per luma pixel (plus a 34-bit header and the CRC).
 
 ```rust
 use tpt_media_codec::{CodecConfig, Decoder, Encoder};
-use tpt_video_mote::{Dictionary, MoteConfig, MoteDecoder, MoteEncoder, TrainConfig};
+use tpt_media_mote::{Dictionary, MoteConfig, MoteDecoder, MoteEncoder, TrainConfig};
 
 let cfg = MoteConfig { width: 320, height: 240, ..MoteConfig::default() };
 
@@ -117,8 +117,8 @@ all-plane PSNR and mean absolute error alongside.
 ## Benchmarks
 
 ```bash
-cargo bench -p tpt-video-mote
-cargo test  --release -p tpt-video-mote --test memory -- --nocapture
+cargo bench -p tpt-media-mote
+cargo test  --release -p tpt-media-mote --test memory -- --nocapture
 ```
 
 **The bandwidth target is defined by these benchmarks, not promised for
@@ -137,7 +137,7 @@ at 480p rests on temporal skip.
 ## Testing
 
 ```bash
-cargo test -p tpt-video-mote
+cargo test -p tpt-media-mote
 ```
 
 42 unit tests (dictionary and training determinism, dimension rules, patch-grid

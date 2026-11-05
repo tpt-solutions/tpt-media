@@ -25,8 +25,8 @@ The following APIs are real-time-safe in `0.1.x`:
   external buffer)
 - `tpt-media-codec::Decoder::decode` for codecs in real-time mode
   (cinder, thrum, reed)
-- `tpt-audio-cinder::Decoder::decode`
-- `tpt-audio-reed::Decoder::decode`
+- `tpt-media-cinder::Decoder::decode`
+- `tpt-media-reed::Decoder::decode`
 
 ## Offline Profile
 
@@ -56,13 +56,13 @@ this repo:
 
 | crate | bench | what it measures |
 | --- | --- | --- |
-| `tpt-audio-cinder` | `benches/codec_bench.rs` | encode/decode of 64×512-sample blocks @ 48 kHz |
-| `tpt-audio-aura` | `benches/codec_bench.rs` | lossless encode/decode of 32×1024-sample blocks @ 48 kHz |
-| `tpt-audio-reed` | `benches/codec_bench.rs` | encode/decode of 64×320-sample (20 ms) frames @ 16 kHz |
-| `tpt-video-thrum` | `benches/codec_bench.rs` | I-frame/P-frame encode + decode of 8-frame clips, 176×144 4:2:0 and 640×480 mono |
-| `tpt-video-mote` | `benches/codec_bench.rs` | key/delta encode + decode of 8-frame fixed-camera clips at 320×240 (mono, 4:2:0) and 640×480 mono, with bandwidth and PSNR printed; dictionary training |
-| `tpt-video-vault` | `benches/codec_bench.rs` | I-frame/P-frame encode + decode of 4-frame clips, 176×144 and 352×288 4:2:0; `tests/measure.rs` (`#[ignore]`d) prints the rate/quality/tool tables below |
-| `tpt-container` | `benches/container_bench.rs` | mux + demux of a 200-packet stream |
+| `tpt-media-cinder` | `benches/codec_bench.rs` | encode/decode of 64×512-sample blocks @ 48 kHz |
+| `tpt-media-aura` | `benches/codec_bench.rs` | lossless encode/decode of 32×1024-sample blocks @ 48 kHz |
+| `tpt-media-reed` | `benches/codec_bench.rs` | encode/decode of 64×320-sample (20 ms) frames @ 16 kHz |
+| `tpt-media-thrum` | `benches/codec_bench.rs` | I-frame/P-frame encode + decode of 8-frame clips, 176×144 4:2:0 and 640×480 mono |
+| `tpt-media-mote` | `benches/codec_bench.rs` | key/delta encode + decode of 8-frame fixed-camera clips at 320×240 (mono, 4:2:0) and 640×480 mono, with bandwidth and PSNR printed; dictionary training |
+| `tpt-media-vault` | `benches/codec_bench.rs` | I-frame/P-frame encode + decode of 4-frame clips, 176×144 and 352×288 4:2:0; `tests/measure.rs` (`#[ignore]`d) prints the rate/quality/tool tables below |
+| `tpt-media-format` | `benches/container_bench.rs` | mux + demux of a 200-packet stream |
 | `tpt-media-bitstream` | `benches/bitstream_bench.rs` | bit I/O, Rice, range, Huffman at codec batch sizes |
 | `tpt-media-pipeline` | `benches/pipeline_bench.rs` | `Source→map→Sink` drive over 1 000 packets |
 
@@ -87,8 +87,8 @@ same machine when judging a change.
 | `aura_lossless/decode` (32 packets) | 2.37 ms | 74 µs/packet | ~290× |
 | `reed/encode` (64×320 samples = 1.28 s audio, alternating voiced/noise) | 17.0 ms | 266 µs/frame | ~75× |
 | `reed/decode` (64 packets) | 375 µs | 5.9 µs/packet | ~3400× |
-| `tpt_container/mux` (200 packets) | 84 µs | 0.42 µs/packet | — |
-| `tpt_container/demux` (200 packets) | 22 µs | 0.11 µs/packet | — |
+| `tpt_media_format/mux` (200 packets) | 84 µs | 0.42 µs/packet | — |
+| `tpt_media_format/demux` (200 packets) | 22 µs | 0.11 µs/packet | — |
 | `bitstream/bit_write` (1024 ops) | 2.6 µs | 2.5 ns/op | — |
 | `bitstream/bit_read` (1024 ops) | 3.9 µs | 3.9 ns/op | — |
 | `bitstream/rice_encode` (256 values, k=2) | 232 µs | 0.9 µs/value | — |
@@ -158,7 +158,7 @@ Readings worth recording honestly:
 
 ### Mote (added 2026-09-30)
 
-`cargo bench -p tpt-video-mote` (release profile, criterion, 10 samples,
+`cargo bench -p tpt-media-mote` (release profile, criterion, 10 samples,
 300 ms warm-up, 3 s measurement). **Measured on a shared Windows x64 dev
 machine while other agents were building concurrently, so treat every timing
 as roughly ±2×**: two consecutive runs disagreed by up to 2× on the same
@@ -232,7 +232,7 @@ Readings worth recording honestly:
   error leaves more patches above the skip threshold each frame.
 
 *Memory* (`tests/memory.rs`, counting allocator; `cargo test --release -p
-tpt-video-mote --test memory -- --nocapture`; 160×112 4:2:0, the full
+tpt-media-mote --test memory -- --nocapture`; 160×112 4:2:0, the full
 4096-entry dictionary; exact figures depend on geometry, the dictionary term
 does not):
 
@@ -249,7 +249,7 @@ dictionary plus about three frames (reference, working copy, output).
 
 ### Vault (added 2026-09-30)
 
-`cargo bench -p tpt-video-vault` (criterion, 10 samples, 300 ms warm-up,
+`cargo bench -p tpt-media-vault` (criterion, 10 samples, 300 ms warm-up,
 5 s measurement, release profile, same Windows x64 dev machine). Each
 iteration codes a 4-frame clip: `encode_i_frame` codes four intra frames
 (`keyframe_interval = 0`), `encode_p_frame` codes one I-frame then three
@@ -304,7 +304,7 @@ dominant term. (The levers for further work, if it is ever needed:
 fewer priced candidates per leaf, and per-block `qp`.)
 
 Everything below comes from `codecs/vault/tests/measure.rs`
-(`cargo test --release -p tpt-video-vault --test measure -- --ignored
+(`cargo test --release -p tpt-media-vault --test measure -- --ignored
 --nocapture --test-threads=1`): 8-frame 176×144 4:2:0 clips, one I-frame
 then seven P-frames (`keyframe_interval` 60), `max_refs` 4 unless stated.
 The clips are synthetic. Bytes are per frame averaged over the clip; PSNR is
@@ -488,7 +488,7 @@ path does not allocate it at all.
 
 *Peak* working sets — the high-water mark of live heap bytes, which is
 the number a memory budget is stated in — are measured by
-`apps/tpt-cli/tests/memory_budget.rs` through `tpt-cli`'s `memprobe`
+`apps/tpt-cli/tests/memory_budget.rs` through `tpt-media-cli`'s `memprobe`
 harness (a `TrackingAlloc` global allocator whose `MemoryProbe` windows
 report live-heap peaks and cumulative churn). It measures Cinder, Aura,
 Reed, and Thrum in a steady-state streaming pass where nothing is
@@ -571,7 +571,7 @@ measurement is taken):
 | Aura   | 64 KiB           | 0                | < 256 KiB         | 25 330 B      |
 | Reed   | 1 KiB            | 0                | < 16 KiB          | 8 140 B       |
 | Thrum  | 64 KiB           | 1                | < 1 MiB           | 152 503 B (length-independent: 152 200 B over 6 frames vs 152 503 B over 48) |
-| Vault  | 4 MiB            | 16               | < 128 MiB         | 482 784 B at 176×144 4:2:0 with 4 references (encoder + decoder together, `codecs/vault/tests/memory.rs`; identical over 6 and 10 frames, 483 088 B over 24); 253 536 B with 1 reference; 1 402 096 B with 16 references over 24 frames — about 76.4–76.6 KB per extra reference, i.e. two 38 016 B frames (one in each store). Not pinned by `tpt-cli`'s budget test; the budget column is a ceiling that has only been measured at QCIF |
+| Vault  | 4 MiB            | 16               | < 128 MiB         | 482 784 B at 176×144 4:2:0 with 4 references (encoder + decoder together, `codecs/vault/tests/memory.rs`; identical over 6 and 10 frames, 483 088 B over 24); 253 536 B with 1 reference; 1 402 096 B with 16 references over 24 frames — about 76.4–76.6 KB per extra reference, i.e. two 38 016 B frames (one in each store). Not pinned by `tpt-media-cli`'s budget test; the budget column is a ceiling that has only been measured at QCIF |
 | Mote   | frame-sized (26 880 B at 160×112 4:2:0) | 1 | decoder < 1 MiB at ≤ QVGA 4:2:0 (256 KiB dictionary + ~3 frames); encoder < 2 MiB (adds the `f32` search copy) | decoder 289 156 B resident + 53 920 B pass peak; encoder 1 343 047 B resident, 1 397 431 B peak (160×112 4:2:0, 4096 entries; `codecs/mote/tests/memory.rs`) |
 
 The budget column is the ceiling each codec's streaming working set must
@@ -602,17 +602,17 @@ deliberately not budgeted to zero: Thrum's measured churn is
 must hand back), bounded by `thrum_per_frame_churn_is_bounded` to
 proportionality with a frame rather than to nothing.
 
-## Browser player (`tpt-web`, todo.md §45)
+## Browser player (`tpt-media-web`, todo.md §45)
 
 Two measurements of the same operation on byte-identical inputs: push
 16 KiB slices into a `Player`, parse the container, decode with the real
 codec, convert to planar `f32` / RGBA8, pop everything. Median of 15 runs
 after 2 warm-up runs, whole-file.
 
-- **Native**: `cargo bench -p tpt-web` (`benches/decode_throughput.rs`,
+- **Native**: `cargo bench -p tpt-media-web` (`benches/decode_throughput.rs`,
   bench profile = release + debug info).
 - **WebAssembly**: `node apps/tpt-web/web/build.mjs`, then
-  `cargo run -p tpt-web --example make_demo -- --bench-dir DIR`, then
+  `cargo run -p tpt-media-web --example make_demo -- --bench-dir DIR`, then
   `node apps/tpt-web/web/bench.mjs DIR` (`web/bench.mjs`). This is the
   `wasm32-unknown-unknown` release build running in Node 22.18 / V8 12.4 —
   **not a browser tab**: no WebAudio, no canvas, no main-thread contention.

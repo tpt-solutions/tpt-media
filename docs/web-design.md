@@ -1,4 +1,4 @@
-# Web Player Design (`tpt-web`)
+# Web Player Design (`tpt-media-web`)
 
 Design notes for `apps/tpt-web` (todo.md §45): a browser player for `.tpt`
 media whose decoding runs in WebAssembly. The user-facing overview is
@@ -39,8 +39,8 @@ Out of scope, on purpose:
                        limits.rs     WebLimits: hard bounds, ceiling, memory estimate
                        synth.rs      (feature `synth`) deterministic media via real encoders
  ─────────────────────────────────────────────────────────────────────────────────────
- workspace crates      tpt-container (format decoders), tpt-media-codec (DynDecoder,
-                       ResourceLimits), tpt-audio-{cinder,aura,reed}, tpt-video-thrum
+ workspace crates      tpt-media-format (format decoders), tpt-media-codec (DynDecoder,
+                       ResourceLimits), tpt-audio-{cinder,aura,reed}, tpt-media-thrum
 ```
 
 Everything from `player.rs` down is ordinary Rust with no `cfg(target_arch)`.
@@ -102,7 +102,7 @@ reaches one (see §7), and a page can simply instantiate a fresh module.
 
 ## 5. The `.tpt` parser
 
-`tpt_container::TptDemuxer` borrows one contiguous `&[u8]` for its lifetime.
+`tpt_media_format::TptDemuxer` borrows one contiguous `&[u8]` for its lifetime.
 A browser delivers bytes in `fetch()` chunks and cannot hold the whole file
 (or a self-referential buffer-plus-demuxer). So `StreamParser` is a small push
 parser that owns a *bounded* buffer and drops bytes as they are consumed.
@@ -200,7 +200,7 @@ player, parser and ABI know nothing about concrete codecs; they speak
    `DynDecoder`.
 2. Either `table.register(*b"XXXX", MediaType::Video, "name", build_xxx)` on a
    table given to `Player::with_table`, or add one line to
-   `DecoderTable::native()` once the codec crate is a dependency of `tpt-web`.
+   `DecoderTable::native()` once the codec crate is a dependency of `tpt-media-web`.
 
 **The extension point is Rust-only, and that is a real limitation** (recorded
 2026-10-01, found by asking who can actually reach it). `tpt_web_open` builds
@@ -208,10 +208,10 @@ its player with `Player::new(limits)`, which is `DecoderTable::native()`
 exactly; there is no ABI entry point that accepts a table, and a
 `DecoderBuilder` is a Rust `fn` pointer that cannot cross the boundary in any
 case. **The only way a codec becomes playable in a browser is to become a
-dependency of `tpt-web` and be added to `DecoderTable::native()`** — which is
+dependency of `tpt-media-web` and be added to `DecoderTable::native()`** — which is
 the route Vault and Mote took on 2026-10-05 (both now in `native()`; the
 rebuilt wasm is ~368 KB and the Node checks pass against it). The `register`
-route exists for Rust callers embedding the crate natively (`tpt-web` is also
+route exists for Rust callers embedding the crate natively (`tpt-media-web` is also
 an `rlib`).
 
 `a_registered_codec_plays_without_touching_the_player` (a fake codec) proves
@@ -226,7 +226,7 @@ step 2 needs no other change. Two constraints a new codec meets:
 The audio builders do **not** go through `tpt_media_codec::Registry`: the
 Cinder/Aura/Reed registry factories build from `Default` configs and ignore
 the track, so a 44.1 kHz file or a non-default Cinder bit depth would decode
-wrongly. The builders instead mirror `tpt-cli`'s track-to-decoder logic.
+wrongly. The builders instead mirror `tpt-media-cli`'s track-to-decoder logic.
 Thrum's factory is per-geometry and is built per track.
 
 ## 9. The browser side
@@ -246,8 +246,8 @@ and a full video queue also holds back the audio behind it.
 
 | Claim | Evidence | Where |
 | --- | --- | --- |
-| Parser, player, conversions, limits, ABI logic | 49 native tests (45 unit + 3 public-API + 1 doctest) incl. bit-exact Aura round trip, Cinder vs. a directly driven decoder, byte-at-a-time = whole-file, deterministic fuzz | `cargo test -p tpt-web` |
-| Builds as a real wasm module | `cargo build -p tpt-web --target wasm32-unknown-unknown --release` (328 KiB) | `web/build.mjs`, CI `wasm` job |
+| Parser, player, conversions, limits, ABI logic | 49 native tests (45 unit + 3 public-API + 1 doctest) incl. bit-exact Aura round trip, Cinder vs. a directly driven decoder, byte-at-a-time = whole-file, deterministic fuzz | `cargo test -p tpt-media-web` |
+| Builds as a real wasm module | `cargo build -p tpt-media-web --target wasm32-unknown-unknown --release` (328 KiB) | `web/build.mjs`, CI `wasm` job |
 | The wasm + JS glue decode correctly and survive hostile input | 11 checks under Node: exact sample/frame counts, 300 mutated/truncated/noise files with zero traps, handle and limit behaviour | `web/check.mjs` |
 | `tpt-web.js` control flow (push, back-pressure, scheduling, pacing, end, stop, errors) | executed against the real wasm with **fake** AudioContext/canvas | `web/mock-browser.mjs` |
 | **Real WebAudio and real canvas output** | 29 checks in headless Chrome against the *unmodified* player: real `AudioContext` created and released (`state` `closed`, `baseLatency` 0.01 s), 375 real `AudioBufferSourceNode`s totalling 4.0000 s scheduled back to back, canvas read back with `getImageData` (2834 distinct colours, 15 360/15 360 opaque, 0 dropped, 0 decode errors), plus the shipped `index.html` driven in an iframe to end of stream. Repeated 3x, 29/29 each, ~8.8 s. | `web/browser-check.mjs` + `web/serve.mjs` |
@@ -269,7 +269,7 @@ and the canvas is real, not that playback ran.
 
 ## 11. Known limitations
 
-- No seeking (the parser is forward-only; `tpt_container` seeking needs the
+- No seeking (the parser is forward-only; `tpt_media_format` seeking needs the
   whole file). One audio and one video track are played; others are counted
   in `ignored_tracks`.
 - Decoding runs on the page's main thread. At 100x+ real time for audio and

@@ -257,10 +257,10 @@ the `no_std` CI job:
   `#![cfg_attr(not(feature = "std"), no_std)]`:
   `tpt-media-core`, `-bitstream`, `-codec`, `-pipeline`, `-io`,
   `-probe`, Reed, and Thrum — Reed being the one CI-verified
-  bare-metal build. `tpt-container`, Cinder, and Aura carry the
+  bare-metal build. `tpt-media-format`, Cinder, and Aura carry the
   `std`-feature scaffolding but not the attribute, so they are
   std-only today (converting them is follow-up work, not a done
-  fact). `tpt-cli` is a std binary by design (§43).
+  fact). `tpt-media-cli` is a std binary by design (§43).
 
 ## 11. Benchmarks
 

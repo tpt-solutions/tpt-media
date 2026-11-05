@@ -51,7 +51,7 @@
   right. No production consumer existed (Aura's lossless path is
   Exp-Golomb), so this is not a wire-format change. See
   `CHANGELOG.md [Unreleased] / Fixed`.
-* **2026-09-14 — `tpt-cli`'s JSON writer emitted invalid JSON for every
+* **2026-09-14 — `tpt-media-cli`'s JSON writer emitted invalid JSON for every
   probe with tracks** (found while adding `benchmark --json`). Three
   related defects: `object()`/`arr()` double-emitted the field
   separator (`"key":,{...}`), `close()` picked its bracket from the
@@ -139,7 +139,7 @@
   checked off (2026-11-04).**
 * ~~**`CHANGELOG.md`'s `[Unreleased]` entry overstates scope.**~~
   **Fixed 2026-09-07 (later same day):** removed the
-  not-yet-on-disk claims about `apps/`, `ffi/`, `tpt-cli`, `tpt-web`,
+  not-yet-on-disk claims about `apps/`, `ffi/`, `tpt-media-cli`, `tpt-media-web`,
   `tpt-media-sys`, and `tpt-video-{thrum,vault,mote}`, replaced
   with an honest note that they're target structure pending
   implementation, and added a `### Fixed` section summarising the
@@ -219,7 +219,7 @@
   can be `0`. Fixed by rejecting `total > self.range` up front (which
   also covers the general case of a caller-supplied `total` genuinely
   exceeding `range`, not just this poisoned-state case). (2)
-  `tpt-audio-cinder`'s decoder read `n_bands` and each band's `n_coeffs`
+  `tpt-media-cinder`'s decoder read `n_bands` and each band's `n_coeffs`
   directly from the packet with no bound relative to `frame_size`, so a
   malformed/adversarial packet claiming more bands/coefficients than
   actually fit in the decoded spectrum buffer indexed it out of bounds
@@ -342,7 +342,7 @@ convention as the rest of this document.
 * [x] Safe Rust wherever practical — every library crate now carries
       `#![forbid(unsafe_code)]` (2026-09-29), so the claim is enforced
       by the compiler rather than asserted; the only `unsafe` in the
-      workspace is `tpt-cli`'s `memprobe` `GlobalAlloc` (a measurement
+      workspace is `tpt-media-cli`'s `memprobe` `GlobalAlloc` (a measurement
       harness, and apps are std-by-design) plus the per-codec tests'
       counting allocators (test code, outside the forbidden libs)
 * [x] `unsafe` isolated and documented — with the forbid pass above,
@@ -353,7 +353,7 @@ convention as the rest of this document.
       carry the `cfg_attr` no_std switch (core, bitstream, codec,
       pipeline, io, probe, Reed, Thrum); Reed is CI-verified on
       `thumbv7em-none-eabi`; CONTRIBUTING §10 records the convention
-      and the honest exceptions (`tpt-container`, Cinder, Aura are
+      and the honest exceptions (`tpt-media-format`, Cinder, Aura are
       std-only today despite their feature scaffolding)
 * [x] deterministic behavior where practical — §39: decode, muxing,
       and scalar DSP are pinned deterministic by tests; encoding is
@@ -402,7 +402,7 @@ convention as the rest of this document.
       no_std foundation crates compile for `wasm32-unknown-unknown`
       with std off (probe had never actually been built for the
       target and was missing `alloc` imports — fixed), and a new CI
-      `wasm` job keeps that verified; §45's `tpt-web` was built on
+      `wasm` job keeps that verified; §45's `tpt-media-web` was built on
       top of them on 2026-09-30, and the *components* claim is tested fact
 * [ ] stable FFI boundary — the ABI now *exists* (§46 v0.1, 2026-09-29)
       with a stated stability rule, but "stable" is the 1.0 gate (§53's
@@ -641,7 +641,7 @@ Current DCT-IV implementation is suitable as a correctness reference but must be
   | ---: | ---: | ---: | :--- | ---: |
   | 128 | 2.667 ms | 214 µs | 8.0% — **passes**, thinly | 0.34 µs (0.01%) |
   | 256 | 5.333 ms | 822 µs | 15.4% — **fails** | 0.69 µs (0.01%) |
-  So Cinder's *previous* code called the direct `mdct`/`imdct`, which already missed this target at its larger supported frame size, and only barely cleared it at the smaller one, before accounting for anything else in the encode/decode path. **Follow-up done 2026-09-08:** `codecs/cinder/src/lib.rs` now uses `FastMdctPlan` — `CinderEncoder` holds one plan sized to its fixed `frame_size`; `CinderDecoder` holds one plan per supported size (128 and 256, selected per-packet via `mdct_plan_for`, since the wire format self-describes frame size independent of the decoder's own configured default) so a size-128 packet decoded on a size-256-configured decoder still inverts correctly. Plans are built once at construction (the one-time FFT-plan/twiddle allocation) and only `forward`/`inverse` run in the hot path, which allocate nothing. All 6 existing `tpt-audio-cinder` tests still pass unchanged. `FastMdctPlan` clears the ≤10% target by ~3 orders of magnitude at both sizes, so the codec now meets its own real-time claim in practice, not just in the benchmark suite.
+  So Cinder's *previous* code called the direct `mdct`/`imdct`, which already missed this target at its larger supported frame size, and only barely cleared it at the smaller one, before accounting for anything else in the encode/decode path. **Follow-up done 2026-09-08:** `codecs/cinder/src/lib.rs` now uses `FastMdctPlan` — `CinderEncoder` holds one plan sized to its fixed `frame_size`; `CinderDecoder` holds one plan per supported size (128 and 256, selected per-packet via `mdct_plan_for`, since the wire format self-describes frame size independent of the decoder's own configured default) so a size-128 packet decoded on a size-256-configured decoder still inverts correctly. Plans are built once at construction (the one-time FFT-plan/twiddle allocation) and only `forward`/`inverse` run in the hot path, which allocate nothing. All 6 existing `tpt-media-cinder` tests still pass unchanged. `FastMdctPlan` clears the ≤10% target by ~3 orders of magnitude at both sizes, so the codec now meets its own real-time claim in practice, not just in the benchmark suite.
 * [x] Implement optimized DCT-IV — `FastDctIvPlan` (added 2026-09-07): same FFT/chirp technique as `FastMdctPlan`, specialized to DCT-IV's `θ(m,k)=(π/N)(m+½)(k+½)` (zero-padded to `2N` since both indices range only `0..N`, unlike MDCT)
 * [x] Preserve reference implementation for verification — the direct `dct_iv` stays; `FastDctIvPlan` is checked against it, not a replacement
 * [x] Add scalar/SIMD equivalence tests — `fast_dct_iv_matches_reference` (direct `dct_iv` vs `FastDctIvPlan` across 4 sizes) and `fast_dct_iv_is_self_inverse_up_to_scale`; `FastDctIvPlan` is `FftPlan`/RustFFT-backed (same SIMD-dispatch rationale as `FastMdctPlan`)
@@ -981,7 +981,7 @@ Support:
 * [x] Define timestamp conversion
 * [x] Define overflow behavior — `rescale()` corrected 2026-09-07 (see Known Issues); `i128` intermediates with explicit `checked_mul` on every step, returns `None` on any overflow, identity-rescaling short-circuited. `rescale_overflow_returns_none` replaced with one whose inputs actually overflow `i64` (1 Hz → 90 kHz, 90 000× expansion); a sanity test (`1 s → 90 kHz == 90 000`) guards against the previous factor-swap bug
 * [x] Define negative timestamp handling — `Add`/`Sub` (Timestamp + Duration, Timestamp − Duration) now **saturate** to `i64::MAX`/`i64::MIN` in the direction of the signed Duration, instead of silently returning the unchanged left-hand side via `unwrap_or(self.ticks)`. New fallible variants `Timestamp::checked_add_duration` / `checked_sub_duration` return `Option<Timestamp>` for callers that genuinely need to detect overflow. Saturation direction is signed-duration-aware, not left-hand-side-aware (a positive duration saturates upward; a negative duration saturates downward), so `0 - Duration{-1} == +1` and `i64::MIN - Duration{+1} == i64::MIN`. Tests: `timestamp_add_duration_saturates_on_overflow`, `timestamp_sub_duration_saturates_on_overflow`, `timestamp_checked_{add,sub}_duration_propagates_none`, `timestamp_add_sub_negative_duration_round_trips`
-* [x] Define discontinuities — `PacketFlags::DISCONTINUITY` was already present in `tpt-media-core` but undocumented and not round-tripped through the v1 `.tpt` wire format (the "second flags bit is actually `END_OF_FRAME`, not discontinuity" finding in Known Issues). Now: full semantic doc comment on the flag, `Packet::is_discontinuity()` / `is_end_of_frame()` accessors added, `tpt-container` muxer and demuxer both round-trip bit 0x04. Test: `discontinuity_flag_round_trips_through_container`, plus `discontinuity_flag_accessor`, `end_of_frame_flag_accessor`, `packet_flags_are_independent`
+* [x] Define discontinuities — `PacketFlags::DISCONTINUITY` was already present in `tpt-media-core` but undocumented and not round-tripped through the v1 `.tpt` wire format (the "second flags bit is actually `END_OF_FRAME`, not discontinuity" finding in Known Issues). Now: full semantic doc comment on the flag, `Packet::is_discontinuity()` / `is_end_of_frame()` accessors added, `tpt-media-format` muxer and demuxer both round-trip bit 0x04. Test: `discontinuity_flag_round_trips_through_container`, plus `discontinuity_flag_accessor`, `end_of_frame_flag_accessor`, `packet_flags_are_independent`
 * [x] Define clock domains — new `tpt-media-core::sync::ClockDomain` (named `(String, Timebase)` pair; equality is by *name only*, deliberately, so two accidentally-similar timebases in different domains can't be silently equated). See `crates/tpt-media-core/src/sync.rs`
 * [x] Define synchronization model — `tpt-media-core::sync::{SyncPoint, SyncMap, SyncError}`. `SyncPoint` pins one moment in one `ClockDomain` to one moment in another; `SyncMap` collects pins and translates timestamps between domains by **linear interpolation** between adjacent pins, deliberately **rejecting extrapolation** (returns `SyncError::OutOfRange`) to prevent A/V drift bugs; `f64` arithmetic is confined to the API boundary (seconds), with `i64` ticks everywhere else. `DomainMismatch` covers wrong-timebase inputs. Test coverage: 12 sync tests including exact-pin-match, two-pin interpolation, three-pin local interpolation, before/after-pin rejection, wrong-timebase rejection, zero-length-interval (no divide-by-zero), negative-time, and wallclock→video
 * [x] Add audio/video sync tests — `audio_video_sync_end_to_end` exercises a realistic 48 kHz-audio × 90 kHz-video scenario with two pins (t=0 and t=60 s), covering exact-pin match, interpolated values, and out-of-range rejection
@@ -1063,7 +1063,7 @@ All decoders must support bounded resources.
   gained `max_metadata_bytes` (`permissive()` 16MiB, `strict()`/`Default`
   64KiB) + `ResourceLimitKind::MetadataSize` + `check_metadata`, following
   the existing `check_packet`/`check_allocation` pattern. Wired into
-  `tpt-container`'s `TptDemuxer`: a new `limits: ResourceLimits` field
+  `tpt-media-format`'s `TptDemuxer`: a new `limits: ResourceLimits` field
   (new `with_limits`/`new_streaming_with_limits` constructors alongside
   the existing `new`/`new_streaming`, which now default to
   `ResourceLimits::default()`), checked in `index_tmta` against the raw
@@ -1496,7 +1496,7 @@ simple prediction
 low-complexity transforms
 ```
 
-2026-09-28: `tpt-video-thrum` is a working implementation of all of
+2026-09-28: `tpt-media-thrum` is a working implementation of all of
 the below. Design notes in `docs/codec-design.md`; measured numbers in
 `docs/performance.md`; algorithm sources in `docs/provenance.md`.
 
@@ -1624,7 +1624,7 @@ Initial intra-refresh target:
 
 **Purpose:** high-compression video.
 
-2026-09-30: `tpt-video-vault` (`codecs/vault`, codec id `VAUL`) is a
+2026-09-30: `tpt-media-vault` (`codecs/vault`, codec id `VAUL`) is a
 working implementation of the checklist below, as an I/P codec with no
 B-frames. Design notes in `docs/codec-design.md`; measured numbers in
 `docs/performance.md`; algorithm sources in `docs/provenance.md` (every
@@ -1910,7 +1910,7 @@ Not done, and why (left honestly open):
       measured cost is no longer the obstacle
 * [x] bare-metal `no_std` verification — 2026-10-05, and the claim was
       false until it was tested (the recurring pattern): `cargo build
-      -p tpt-video-vault --target thumbv7em-none-eabi
+      -p tpt-media-vault --target thumbv7em-none-eabi
       --no-default-features` failed inside `bitflags` because both
       video codecs' dependency blocks forced `features = ["std"]` onto
       `tpt-media-core`/`-bitstream`/`-codec`/`tpt-dsp-core`
@@ -1922,7 +1922,7 @@ Not done, and why (left honestly open):
       `no_std` job alongside reed
 * [x] a WASM build and the web player (§45) now include Vault —
       2026-10-05, via the exact route §8 of `docs/web-design.md`
-      recorded: the codec became a `tpt-web` dependency and got a
+      recorded: the codec became a `tpt-media-web` dependency and got a
       `DecoderTable::native()` line plus a builder mirroring the CLI's
       track reconstruction. Mote came along in the same change (it had
       the same gap); the rebuilt wasm is ~368 KB and the Node checks
@@ -1967,7 +1967,7 @@ Do not claim an absolute global minimum.
 
 **Purpose:** extreme edge / IoT video.
 
-All items below implemented 2026-09-30 in `codecs/mote` (`tpt-video-mote`,
+All items below implemented 2026-09-30 in `codecs/mote` (`tpt-media-mote`,
 `MOTE`, bitstream v1); design in `docs/codec-design.md`, measurements in
 `docs/performance.md`, sources in `docs/provenance.md`. 55 tests (42 unit,
 7 property/hostile-input, 4 low-bitrate, 1 temporal, 1 memory).
@@ -2088,7 +2088,7 @@ Create reference corpora.
       (`cinder_real_recordings_meet_quality_floors`, Cinder at 10 bits:
       19.70 and 19.55 dB; `aura_real_recordings_are_bit_exact`). Those tests
       are `#[ignore]`d because the corpus is git-ignored; run them with
-      `cargo test -p tpt-cli --test quality -- --ignored` after `python
+      `cargo test -p tpt-media-cli --test quality -- --ignored` after `python
       benchmarks/run.py fetch`. Still unchecked: two clips are not a corpus.
       Not approximated synthetically (consistent with §7's honest
       pitch-corpus stance)
@@ -2199,7 +2199,7 @@ scene through real Thrum round trips):
 * [x] decode CPU — `VideoReport.decode` (`Timing`, per-frame)
 * [x] memory — `VideoReport.memory`: a `MemoryReport` carrying the
       measured peak live heap and cumulative churn, filled by the
-      `tpt-cli::memprobe` tracking allocator when the process installed
+      `tpt-media-cli::memprobe` tracking allocator when the process installed
       it (§42) and honestly `None` when it did not — an absent
       measurement and a measurement of zero are different facts
 
@@ -2219,7 +2219,7 @@ scene through real Thrum round trips):
 Audited crate by crate against the categories above, since the umbrella items
 can only be checked when every crate has been swept. **Every foundation crate
 has now been swept** (2026-09-30 → 2026-10-01):
-`tpt-media-bitstream`, `tpt-container`, `tpt-media-codec`,
+`tpt-media-bitstream`, `tpt-media-format`, `tpt-media-codec`,
 `tpt-media-pipeline`, `tpt-media-representation`, `tpt-media-research`,
 `tpt-media-container` (1 → 16 tests; its single previous test asserted nothing
 that could fail), `tpt-media-io` (`sink.rs` 0 → 12 tests; it held the 64 KiB
@@ -2297,7 +2297,7 @@ LCG strategy (§38 note above) rather than a property-framework crate:
 ## Fuzzing
 
 **Strategy note (2026-09-11):** this project's established fuzzing
-approach — set by `tpt-container`'s
+approach — set by `tpt-media-format`'s
 `corruption_never_panics_and_truncation_never_panics` (§24) — is a
 deterministic, dependency-free corruption/truncation sweep (a fixed-seed
 LCG driving bit-flips and truncation over a real fixture, asserting
@@ -2319,7 +2319,7 @@ untrusted input; none of them add an external fuzz-harness dependency.
   (`corruption_never_panics_and_truncation_never_panics`); this item was
   just never checked off here
 * [x] codec fuzzing — 2026-09-11: `decode_never_panics_on_corrupted_or_arbitrary_packets`
-  added to both `tpt-audio-aura` and `tpt-audio-cinder` (arbitrary bytes +
+  added to both `tpt-media-aura` and `tpt-media-cinder` (arbitrary bytes +
   full truncation sweep + bit-flip sweep of a real packet). **Found and
   fixed a real out-of-bounds write in Cinder**: `n_bands`/`n_coeffs` are
   read straight from the packet with no bound relative to `frame_size`,
@@ -2338,7 +2338,7 @@ untrusted input; none of them add an external fuzz-harness dependency.
   chunks in its fixture
 * [x] truncated packets — covered by the container truncation sweep (§24)
   and the new per-codec truncation sweeps above (Aura/Cinder)
-* [x] random packet ordering — `tpt-audio-cinder`'s
+* [x] random packet ordering — `tpt-media-cinder`'s
   `jittered_pts_are_preserved_not_reordered` (§29, added 2026-09-09)
   delivers packets out of PTS order and asserts no reordering/panic;
   Aura has no cross-packet decode state at all (`AuraDecoder` holds no
@@ -2490,7 +2490,7 @@ allocations
       mechanism the per-codec `realtime_alloc.rs` tests each carried
       (four near-identical copies) into one reusable harness:
       `TrackingAlloc` (a `GlobalAlloc` mirroring live heap bytes into
-      atomics — the one `unsafe` block in `tpt-cli`, confined there on
+      atomics — the one `unsafe` block in `tpt-media-cli`, confined there on
       purpose) plus `MemoryProbe`, a mutually-exclusive measurement
       window reporting the high-water mark of *live* bytes and
       cumulative churn, saturating on frees that predate the window so
@@ -2537,7 +2537,7 @@ allocations
 
 # 43. CLI
 
-Create `tpt-cli`.
+Create `tpt-media-cli`.
 
 Commands:
 
@@ -2596,15 +2596,15 @@ Create `tpt-media-probe`.
 * [x] report codec capabilities — framework `Registry` availability plus
       the native codec family table (2026-09-08)
 
-The probe consumes `tpt-container` directly via `TptDemuxer` (tracks +
+The probe consumes `tpt-media-format` directly via `TptDemuxer` (tracks +
 full packet scan); the dependency edge was inverted so probe → container
-(removed the unused `tpt-media-probe` edge from `tpt-container`, §52).
+(removed the unused `tpt-media-probe` edge from `tpt-media-format`, §52).
 
 ---
 
 # 45. WASM
 
-Create `tpt-web`.
+Create `tpt-media-web`.
 
 * [x] WASM-compatible decoder — 2026-09-30: `apps/tpt-web` builds for
       `wasm32-unknown-unknown` (`cdylib`, 328 KiB release) with Cinder, Aura,
@@ -2614,7 +2614,7 @@ Create `tpt-web`.
       exactly (192 000 samples, 60 frames) and survives 300 hostile files
       with zero traps, under Node (`web/check.mjs`)
 * [x] `.tpt` parser — `StreamParser`: bounded incremental push parser reusing
-      `tpt-container`'s chunk decoders; sizes checked from the chunk header
+      `tpt-media-format`'s chunk decoders; sizes checked from the chunk header
       before buffering, unknown chunks skipped unbuffered, bad CRC-32
       clusters dropped; byte-at-a-time output identical to whole-file;
       deterministic mutation/truncation sweeps
@@ -2678,7 +2678,7 @@ Create `tpt-web`.
       errors, and its canvas ended up 160x96. Opening the same page by
       hand in Chrome is still worth doing: the check reads the page's
       counters, it cannot see the page.
-* [x] performance benchmark — `cargo bench -p tpt-web` (native) and
+* [x] performance benchmark — `cargo bench -p tpt-media-web` (native) and
       `web/bench.mjs` (the same byte-identical inputs as wasm under
       Node/V8). Real numbers in `docs/performance.md`: e.g. Cinder 30 s
       decodes in ~18 ms native / ~26 ms wasm (1100-1650x real time), Thrum
@@ -2798,7 +2798,7 @@ export also runs under `catch_unwind` — a Rust panic becomes
   sweeps (Aura/Cinder OOB write fix) and the integer-overflow audit above;
   see `CHANGELOG.md` for the full list of fixes this produced
 * [x] allocation exhaustion protection — 2026-09-11: found and fixed a
-  real gap in `tpt-container`'s `decode_idx`: `entry_count` is a fully
+  real gap in `tpt-media-format`'s `decode_idx`: `entry_count` is a fully
   attacker-controlled `u32` (up to ~4.29 billion) that was passed
   straight to `Vec::with_capacity` with no check against the actual
   (possibly tiny) input size, so a malformed `IDX ` chunk of only a few
@@ -2939,7 +2939,7 @@ All twelve exist and were audited against the code 2026-09-28 (see §53's
 documentation-baseline note for what the audit found and fixed):
 
 * [x] README — crate table now distinguishes implemented vs *(planned)*
-      (Vault, Mote, `tpt-web`) and lists the two research crates that
+      (Vault, Mote, `tpt-media-web`) and lists the two research crates that
       existed but were missing from it; since 2026-09-30 every implemented
       crate's name links to its own README (CONTRIBUTING §9.4)
 * [x] ARCHITECTURE — `ARCHITECTURE.md`; §6's codec-trait snippet now
@@ -2952,7 +2952,7 @@ documentation-baseline note for what the audit found and fixed):
       and the Real-Time/Determinism/Versioning sections describe
       implemented behavior instead of intent
 * [x] container specification — `docs/container-design.md` (verified
-      against `tpt-container`: header layout, TRAK/TMTA/CLUS/IDX /CRC1,
+      against `tpt-media-format`: header layout, TRAK/TMTA/CLUS/IDX /CRC1,
       seek behavior, streaming)
 * [x] pipeline specification — `docs/pipeline-design.md` (written with
       the implementation; verified)
@@ -3113,7 +3113,7 @@ Avoid cyclic dependencies.
 Before 0.1:
 
 * [x] workspace builds — `cargo check --workspace` is clean
-* [x] CI operational — `.github/workflows/ci.yml` gates (`fmt --check`, clippy `--all-targets -- -D warnings`, `cargo build/test --workspace --locked`) all pass, and the no_std `tpt-audio-reed` job (`--target thumbv7em-none-eabi --no-default-features`) now builds: workspace `default-features = false` on `tpt-media-{core,bitstream,codec}` with members opting back into `std`, thiserror 1.x→2.x (1.x hard-requires `std`), `String`/no_std-gate fixes in `tpt-media-codec`, and `libm` for the required float math (2026-09-09)
+* [x] CI operational — `.github/workflows/ci.yml` gates (`fmt --check`, clippy `--all-targets -- -D warnings`, `cargo build/test --workspace --locked`) all pass, and the no_std `tpt-media-reed` job (`--target thumbv7em-none-eabi --no-default-features`) now builds: workspace `default-features = false` on `tpt-media-{core,bitstream,codec}` with members opting back into `std`, thiserror 1.x→2.x (1.x hard-requires `std`), `String`/no_std-gate fixes in `tpt-media-codec`, and `libm` for the required float math (2026-09-09)
 * [x] basic media model
 * [x] timestamp model — rational timebase, `rescale` overflow bug fixed 2026-09-07 (see Known Issues), signed-duration saturation + `checked_{add,sub}_duration`, disciplined `ClockDomain`/`SyncMap` (§16 all green)
 * [x] bitstream primitives — the range coder finding was corrected 2026-09-07 (all bitstream tests pass); this gate item was blocked only on that
@@ -3121,8 +3121,8 @@ Before 0.1:
 * [x] one working codec — Cinder and Aura both have real, signal-preserving encode/decode round trips
 * [x] fuzz infrastructure — 2026-09-11: §38's deterministic
   corruption/truncation sweeps now cover `tpt-media-bitstream` (new,
-  found a real bug), `tpt-container` (pre-existing, §24),
-  `tpt-audio-aura`/`tpt-audio-cinder` (new, found a real bug), and
+  found a real bug), `tpt-media-format` (pre-existing, §24),
+  `tpt-media-aura`/`tpt-media-cinder` (new, found a real bug), and
   `tpt-media-probe` (new). No external fuzz-harness dependency; see §38's
   strategy note for why
 * [x] documentation baseline — audited 2026-09-28, every top-level doc
@@ -3220,7 +3220,7 @@ Before 0.4:
       superblocks partitioned to 8×8, half-pel motion, up to 16 references,
       2D DCT 4×4–32×32, static Rice, an H.263 Annex J loop filter, RDO on
       `J = D + λR`, versioned bitstream with a CRC-32 trailer. Driven by
-      `tpt-cli` (`--codec vault`) and measured over the §36 corpus. Audited
+      `tpt-media-cli` (`--codec vault`) and measured over the §36 corpus. Audited
       2026-10-01: this line was last touched 2026-09-07, before the crate
       existed
 * [x] Mote prototype — `codecs/mote` v0.1, 2026-09-30 (§34)
@@ -3499,7 +3499,7 @@ patched in the CLI.
 
 * [x] `--bitrate` for audio `encode`, `transcode` and `benchmark` (Cinder, Reed; Aura refuses). The Cinder search runs down to the finest step (1/1024), so any target the codec can meet is reached.
 * [x] `tpt compare <ref> <test>` — SNR/LSD for wav, PSNR/SSIM for y4m
-* [x] `vault` clippy failure fixed with a `PassParams` struct; `cargo clippy -p tpt-video-vault -D warnings` passes
+* [x] `vault` clippy failure fixed with a `PassParams` struct; `cargo clippy -p tpt-media-vault -D warnings` passes
 * [x] `--resample <hz>` (windowed-sinc, reports the change). The kernel is computed once per phase and cached; a test checks it against the direct form to within 1 LSB.
 * [x] stereo downmix for mono-only codecs (reported)
 * [x] 8/16/24/32-bit integer and float WAV input, converted to 16-bit (reported)
@@ -3519,7 +3519,7 @@ patched in the CLI.
 
 ## Planned: needs a format or codec change
 
-* [x] **Container format 0.2: packet runs** (done 2026-10-19). Packets go into `PKTS` runs of up to 32 packets of one track (and at most 64 KiB), with timestamps as deltas from the run base. `IDX ` version 2 has one entry per chunk. On a 30 s Cinder file the `.tpt` goes from 339,273 to 162,871 bytes (payload 97,181 in both), about 11.7 bytes of framing per packet against 43. Version 0.2 readers read 0.1 files. **Breaking for 0.1 readers**, which skip `PKTS` and see no packets in a 0.2 file. Updated: `tpt-container` (writer, scan index, seeks, checksums, IDX), `tpt-web` (run parser with a pending queue, byte cap), `tools/tpt-py` (PKTS parser, index v2), `tpt-media-probe` tests, and `docs/container-design.md`. Cross-checked: the Rust and Python readers agree on Cinder, Aura, Reed, Thrum, Vault (B-frames), Mote and the 0.1 `demo.tpt`.
+* [x] **Container format 0.2: packet runs** (done 2026-10-19). Packets go into `PKTS` runs of up to 32 packets of one track (and at most 64 KiB), with timestamps as deltas from the run base. `IDX ` version 2 has one entry per chunk. On a 30 s Cinder file the `.tpt` goes from 339,273 to 162,871 bytes (payload 97,181 in both), about 11.7 bytes of framing per packet against 43. Version 0.2 readers read 0.1 files. **Breaking for 0.1 readers**, which skip `PKTS` and see no packets in a 0.2 file. Updated: `tpt-media-format` (writer, scan index, seeks, checksums, IDX), `tpt-media-web` (run parser with a pending queue, byte cap), `tools/tpt-py` (PKTS parser, index v2), `tpt-media-probe` tests, and `docs/container-design.md`. Cross-checked: the Rust and Python readers agree on Cinder, Aura, Reed, Thrum, Vault (B-frames), Mote and the 0.1 `demo.tpt`.
 * [x] **Cinder escape too narrow for fine steps** (done 2026-10-19, Cinder wire version 6). The level clamp was about ±127 at 8 bits, so fine steps clipped. The escape excess is now an Elias-gamma prefix with `bits_per_coef` raw low bits, and levels reach ±2^20. On the 30 s music SNR at step 1/16 goes from 12.2 to 36.3 dB. The bitrate and SNR searches now reach 1/1024. The `--quality` dial stops at 1/16, because finer steps make very large files. Version 5 streams are rejected and must be re-encoded. Regenerated: `demo.tpt` (and checked with the wasm build and `check.mjs`) and the A/B page clips and figures.
 * [x] **Mote had no quality dial** (done 2026-10-19, no wire change). Its output was 29.69 dB at every quality. The recommended change was a codec quantiser, but Mote's dictionary size is already encoder-only and carried in the stream, and it moves quality: 28.5 dB at 64 entries, 31.1 dB at 1024. `--quality` now maps onto it (64 to 4096, log scale), and `--target-psnr` searches it. A quantiser inside the codec would still be a stronger tool, and it stays open as a codec question.
 

@@ -50,11 +50,11 @@ codecs/    ← native TPT codecs, each implementing tpt-media-codec
   mote  ← extreme-edge video         (implemented, todo.md §34)
 
 containers/
-  tpt-container — the native .tpt format (implements tpt-media-container)
+  tpt-media-format — the native .tpt format (implements tpt-media-container)
 
 apps/
-  tpt-cli — encode/decode/transcode/probe/inspect/benchmark CLI
-  tpt-web — WASM browser player        (todo.md §45; docs/web-design.md)
+  tpt-media-cli — encode/decode/transcode/probe/inspect/benchmark CLI
+  tpt-media-web — WASM browser player        (todo.md §45; docs/web-design.md)
 
 ffi/
   tpt-media-sys — stable C ABI         (todo.md §46)
@@ -65,7 +65,7 @@ ffi/
 ```text
 tpt-media ─────────► tpt-dsp        (never reversed)
 codecs  ──────────► tpt-media-codec ─► tpt-media-core
-tpt-cli, tpt-web ─► codecs, tpt-container, tpt-media-*
+tpt-media-cli, tpt-media-web ─► codecs, tpt-media-format, tpt-media-*
 tpt-media-sys ────► all public APIs
 ```
 
@@ -196,14 +196,14 @@ codec-level I/O lives in `apps/tpt-cli` and `apps/tpt-web` (browser, fed by
 
 ## 10. WASM and FFI
 
-`tpt-web` shipped 2026-09-30 (todo.md §45; design in `docs/web-design.md`).
+`tpt-media-web` shipped 2026-09-30 (todo.md §45; design in `docs/web-design.md`).
 `tpt-media-sys` shipped its
 first slice 2026-09-29 (todo.md §46): the codec abstraction — packet,
 frame, encoder, decoder — as opaque, panic-guarded C handles with error
 codes, an ABI version, a hand-written kept-in-sync header, and a C
 integration test; container/demuxer/muxer handles are the v0.2 surface.
 
-- `tpt-web` exposes a streaming player (incremental `.tpt` parser, the
+- `tpt-media-web` exposes a streaming player (incremental `.tpt` parser, the
   Cinder/Aura/Reed/Thrum decoders, planar-`f32` audio and RGBA video out) to
   JavaScript through a plain `extern "C"` surface over integer handles, with
   hand-written JS glue. It does **not** use `wasm-bindgen`: the surface is

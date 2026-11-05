@@ -23,7 +23,7 @@ if (!Number.isInteger(capMiB) || capMiB < 16 || capMiB > 4096) {
 const flags = `-C link-arg=--max-memory=${capMiB * 1024 * 1024}`;
 const cargo = spawnSync(
   "cargo",
-  ["build", "-p", "tpt-web", "--target", "wasm32-unknown-unknown", "--release"],
+  ["build", "-p", "tpt-media-web", "--target", "wasm32-unknown-unknown", "--release"],
   {
     cwd: root,
     stdio: "inherit",
@@ -33,7 +33,7 @@ const cargo = spawnSync(
   }
 );
 if (cargo.status !== 0) process.exit(cargo.status ?? 1);
-const from = join(root, "target", "wasm32-unknown-unknown", "release", "tpt_web.wasm");
-const to = join(here, "tpt_web.wasm");
+const from = join(root, "target", "wasm32-unknown-unknown", "release", "tpt_media_web.wasm");
+const to = join(here, "tpt_media_web.wasm");
 copyFileSync(from, to);
 console.log(`wrote ${to} (${statSync(to).size} bytes, memory cap ${capMiB} MiB)`);

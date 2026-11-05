@@ -240,7 +240,7 @@ Each step lands with: the zero-allocation assertion (budget 0, not
 - Additive trait change: existing `Decoder`/`Encoder` users compile
   unchanged.
 - Codecs that opt in gain a new trait impl. FFI (`tpt-media-sys`) and
-  `tpt-web` do not need changes in step 1.
+  `tpt-media-web` do not need changes in step 1.
 - The `Packet` struct does not change in step 1.
 
 ## Risks

@@ -14,7 +14,7 @@ not become a dependency of the main workspace.
 | --- | --- | --- |
 | `aura_decode` | `AuraDecoder::decode` | Appends a valid CRC-32 to each input, otherwise the fuzzer stops at the checksum gate. |
 | `cinder_decode` | `CinderDecoder::decode` | No packet checksum. |
-| `container_parse` | `tpt_container::parse_tpt` | Whole-file parse. |
+| `container_parse` | `tpt_media_format::parse_tpt` | Whole-file parse. |
 | `probe` | `tpt_media_probe::probe` | Whole-file probe. |
 
 ## Running

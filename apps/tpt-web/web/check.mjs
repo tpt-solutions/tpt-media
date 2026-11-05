@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { Status, TptError, TptModule } from "./tpt-decoder.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const wasm = await readFile(join(here, "tpt_web.wasm"));
+const wasm = await readFile(join(here, "tpt_media_web.wasm"));
 const demo = new Uint8Array(await readFile(join(here, "demo.tpt")));
 
 let failures = 0;
